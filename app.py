@@ -5,7 +5,7 @@ import csv
 import io
 import zipfile
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import streamlit as st
 import pandas as pd
@@ -52,7 +52,43 @@ def render_match_bar(score: float):
     except Exception:
         v = 0.0
     v = max(0.0, min(1.0, v))
-    st.progress(v, text=f"一致度：{int(v*100)}%")
+    st.progress(v, text=f"一致度：{int(v
+def count_nohit_logs(days: int = 7):
+    """該当なしログ件数を集計（今日 / 過去N日 / 累計）"""
+    files = list_log_files()
+    if not files:
+        return 0, 0, 0
+
+    today_str = datetime.now().strftime("%Y%m%d")
+    today_count = 0
+    total_count = 0
+    recent_count = 0
+
+    # 過去N日の日付セット
+    today = datetime.now().date()
+    recent_days = { (today - timedelta(days=i)).strftime("%Y%m%d") for i in range(days) }
+
+    for p in files:
+        name = p.name
+        # nohit_YYYYMMDD.csv
+        m = re.match(r"nohit_(\d{8})\.csv$", name)
+        day = m.group(1) if m else ""
+        try:
+            # CSVの行数（ヘッダ除外）
+            with p.open("r", encoding="utf-8") as f:
+                lines = f.readlines()
+            cnt = max(0, len(lines) - 1)
+        except Exception:
+            cnt = 0
+
+        total_count += cnt
+        if day == today_str:
+            today_count += cnt
+        if day in recent_days:
+            recent_count += cnt
+
+    return today_count, recent_count, total_count
+*100)}%")
 
 
 TOP_K = 3
@@ -126,6 +162,47 @@ with st.sidebar:
 3. 該当なしはテンプレを使って情シスへ連絡  
 """
     )
+
+    # ======================
+    # ログ（該当なし）状況＆ダウンロード
+    # ======================
+    st.markdown("### 📊 問い合わせログ状況（該当なし）")
+    t_cnt, w_cnt, total_cnt = count_nohit_logs(days=7)
+    cA, cB, cC = st.columns(3)
+    cA.metric("今日", t_cnt)
+    cB.metric("過去7日", w_cnt)
+    cC.metric("累計", total_cnt)
+
+    st.markdown("### 📥 ログ（該当なし）ダウンロード")
+    log_files = list_log_files()
+    if not log_files:
+        st.caption("まだログはありません。")
+    else:
+        latest = log_files[0]
+        try:
+            latest_bytes = latest.read_bytes()
+        except Exception:
+            latest_bytes = b""
+        st.download_button(
+            "⬇ 最新ログCSVをダウンロード",
+            data=latest_bytes,
+            file_name=latest.name,
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+        zip_bytes = make_logs_zip(log_files)
+        st.download_button(
+            "⬇ ログをZIPでまとめてDL",
+            data=zip_bytes,
+            file_name="nohit_logs.zip",
+            mime="application/zip",
+            use_container_width=True,
+        )
+
+        with st.expander("ログ一覧を見る"):
+            for p in log_files[:20]:
+                st.write(f"• {p.name}")
 
 
 # ======================
@@ -297,6 +374,7 @@ with st.expander("参照したFAQ（根拠）を見る"):
         st.markdown('<div class="refbox">該当なし（スコアが低いため問い合わせ誘導）</div>', unsafe_allow_html=True)
     else:
         for i, (row, score) in enumerate(used_hits, 1):
+            render_match_bar(score)
             q_html = str(row.get("question", "")).replace("\n", "<br>")
             a_html = str(row.get("answer", "")).replace("\n", "<br>")
             cat = str(row.get("category", ""))
@@ -346,6 +424,9 @@ if user_q:
 
     hits = retrieve_faq(user_q)
     best_score = hits[0][1] if hits else 0.0
+
+    if hits:
+        render_match_bar(best_score)
 
     if best_score < MIN_SCORE:
         used_hits = []
