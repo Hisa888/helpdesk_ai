@@ -97,10 +97,29 @@ MIN_SCORE = 0.15
 st.set_page_config(page_title="情シス問い合わせAI", layout="centered")
 st.title("🧑‍💻 情シス問い合わせAI")
 
+
 # ===== プロっぽい見た目（CSS）=====
 st.markdown(
     """
 <style>
+/* タイトル上部の余白を確保 */
+.block-container {
+    padding-top: 3rem !important;
+}
+
+/* h1の高さを確保 */
+h1 {
+    padding-top: 0.5rem;
+    line-height: 1.3 !important;
+}
+
+/* スマホ対応 */
+@media (max-width: 768px) {
+    .block-container {
+        padding-top: 2.5rem !important;
+    }
+}
+
 .block-container {padding-top: 2.0rem; padding-bottom: 10rem; max-width: 1100px;}
 .hero {padding: 18px 20px; border-radius: 14px; background: linear-gradient(135deg, #0ea5e9 0%, #22c55e 100%); color: white; margin-bottom: 18px;}
 .hero h1 {font-size: 34px; margin: 0 0 6px 0;}
