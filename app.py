@@ -91,6 +91,51 @@ def count_nohit_logs(days: int = 7):
     return today_count, recent_count, total_count
 
 
+def read_interactions(days: int = 7) -> pd.DataFrame:
+    """直近days日分のinteractionsログを結合して返す（無ければ空DF）"""
+    frames = []
+    for i in range(days):
+        d = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
+        p = LOG_DIR / f"interactions_{d}.csv"
+        if p.exists():
+            try:
+                frames.append(pd.read_csv(p, encoding="utf-8"))
+            except Exception:
+                try:
+                    frames.append(pd.read_csv(p, encoding="utf-8", engine="python", on_bad_lines="skip"))
+                except Exception:
+                    pass
+    if not frames:
+        return pd.DataFrame(columns=["timestamp", "question", "matched", "best_score", "category"])
+
+    df_all = pd.concat(frames, ignore_index=True)
+
+    # 型整形
+    if "matched" in df_all.columns:
+        df_all["matched"] = pd.to_numeric(df_all["matched"], errors="coerce").fillna(0).astype(int)
+    else:
+        df_all["matched"] = 0
+    if "best_score" in df_all.columns:
+        df_all["best_score"] = pd.to_numeric(df_all["best_score"], errors="coerce").fillna(0.0)
+    else:
+        df_all["best_score"] = 0.0
+    if "category" not in df_all.columns:
+        df_all["category"] = ""
+
+    return df_all
+
+def format_minutes_to_hours(minutes: float) -> str:
+    """分→表示用（xx分 / x.x時間）"""
+    try:
+        m = float(minutes)
+    except Exception:
+        m = 0.0
+    h = m / 60.0
+    if h < 1:
+        return f"{int(round(m))}分"
+    return f"{h:.1f}時間"
+
+
 TOP_K = 3
 MIN_SCORE = 0.15
 
@@ -386,50 +431,6 @@ def log_interaction(question: str, matched: bool, best_score: float, category: s
         pass
 
 
-def read_interactions(days: int = 7) -> pd.DataFrame:
-    """直近days日分のinteractionsログを結合して返す（無ければ空DF）"""
-    frames = []
-    for i in range(days):
-        d = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
-        p = LOG_DIR / f"interactions_{d}.csv"
-        if p.exists():
-            try:
-                frames.append(pd.read_csv(p, encoding="utf-8"))
-            except Exception:
-                try:
-                    frames.append(pd.read_csv(p, encoding="utf-8", engine="python", on_bad_lines="skip"))
-                except Exception:
-                    pass
-    if not frames:
-        return pd.DataFrame(columns=["timestamp", "question", "matched", "best_score", "category"])
-
-    df_all = pd.concat(frames, ignore_index=True)
-
-    # 型整形
-    if "matched" in df_all.columns:
-        df_all["matched"] = pd.to_numeric(df_all["matched"], errors="coerce").fillna(0).astype(int)
-    else:
-        df_all["matched"] = 0
-    if "best_score" in df_all.columns:
-        df_all["best_score"] = pd.to_numeric(df_all["best_score"], errors="coerce").fillna(0.0)
-    else:
-        df_all["best_score"] = 0.0
-    if "category" not in df_all.columns:
-        df_all["category"] = ""
-
-    return df_all
-
-
-def format_minutes_to_hours(minutes: float) -> str:
-    """分→表示用（xx分 / x.x時間）"""
-    try:
-        m = float(minutes)
-    except Exception:
-        m = 0.0
-    h = m / 60.0
-    if h < 1:
-        return f"{int(round(m))}分"
-    return f"{h:.1f}時間"
 
 # ======================
 # 管理者ログイン
