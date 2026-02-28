@@ -428,7 +428,7 @@ with st.sidebar:
             mime="application/pdf",
             use_container_width=True,
         )
-st.markdown("### 📥 ログ（該当なし）ダウンロード")
+    st.markdown("### 📥 ログ（該当なし）ダウンロード")
     log_files = list_log_files()
     if not log_files:
         st.caption("まだログはありません。")
