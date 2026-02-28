@@ -97,30 +97,11 @@ MIN_SCORE = 0.15
 st.set_page_config(page_title="情シス問い合わせAI", layout="centered")
 st.title("🧑‍💻 情シス問い合わせAI")
 
-
 # ===== プロっぽい見た目（CSS）=====
 st.markdown(
     """
 <style>
-/* タイトル上部の余白を確保 */
-.block-container {
-    padding-top: 3rem !important;
-}
-
-/* h1の高さを確保 */
-h1 {
-    padding-top: 0.5rem;
-    line-height: 1.3 !important;
-}
-
-/* スマホ対応 */
-@media (max-width: 768px) {
-    .block-container {
-        padding-top: 2.5rem !important;
-    }
-}
-
-.block-container {padding-top: 2.0rem; padding-bottom: 10rem; max-width: 1100px;}
+.block-container {padding-top: 2.0rem; padding-bottom: 3rem; max-width: 1100px;}
 .hero {padding: 18px 20px; border-radius: 14px; background: linear-gradient(135deg, #0ea5e9 0%, #22c55e 100%); color: white; margin-bottom: 18px;}
 .hero h1 {font-size: 34px; margin: 0 0 6px 0;}
 .hero p {margin: 0; font-size: 15px; opacity: 0.95;}
@@ -339,6 +320,61 @@ def log_nohit(question: str):
         pass
 
 
+def log_interaction(question: str, matched: bool, best_score: float, category: str):
+    """全質問のログ（マッチ/該当なし）を保存して削減時間の見える化に使う"""
+    if not question:
+        return
+    day = datetime.now().strftime("%Y%m%d")
+    path = LOG_DIR / f"interactions_{day}.csv"
+    try:
+        is_new = not path.exists()
+        with path.open("a", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            if is_new:
+                w.writerow(["timestamp", "question", "matched", "best_score", "category"])
+            w.writerow([datetime.now().isoformat(timespec="seconds"), question, int(bool(matched)), float(best_score), category or ""])
+    except Exception:
+        pass
+
+
+def read_interactions(days: int = 7):
+    """直近days日分のinteractionsログを読み込み、DataFrameで返す（無ければ空）"""
+    import pandas as _pd
+    frames = []
+    for i in range(days):
+        d = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
+        p = LOG_DIR / f"interactions_{d}.csv"
+        if p.exists():
+            try:
+                frames.append(_pd.read_csv(p, encoding="utf-8"))
+            except Exception:
+                try:
+                    frames.append(_pd.read_csv(p, encoding="utf-8", engine="python", on_bad_lines="skip"))
+                except Exception:
+                    pass
+    if not frames:
+        return _pd.DataFrame(columns=["timestamp","question","matched","best_score","category"])
+    df_all = _pd.concat(frames, ignore_index=True)
+    if "matched" in df_all.columns:
+        df_all["matched"] = df_all["matched"].fillna(0).astype(int)
+    if "best_score" in df_all.columns:
+        df_all["best_score"] = _pd.to_numeric(df_all["best_score"], errors="coerce").fillna(0.0)
+    if "category" not in df_all.columns:
+        df_all["category"] = ""
+    return df_all
+
+
+def format_minutes_to_hours(minutes: float) -> str:
+    try:
+        m = float(minutes)
+    except Exception:
+        m = 0.0
+    h = m / 60.0
+    if h < 1:
+        return f"{int(round(m))}分"
+    return f"{h:.1f}時間"
+
+
 # ======================
 # 管理者ログイン
 # ======================
@@ -432,10 +468,7 @@ if c3.button("🌐 VPNに接続できない"):
 # ======================
 # 入力 → 検索 → 回答
 # ======================
-# 先に chat_input を必ず描画（pending_q があっても入力欄が消えないようにする）
-chat_typed = st.chat_input("質問を入力してください")
-user_q = chat_typed or st.session_state.pending_q
-used_pending = (not chat_typed) and bool(st.session_state.pending_q)
+user_q = st.session_state.pending_q or st.chat_input("質問を入力してください")
 
 if user_q:
     st.session_state.pending_q = ""
@@ -469,12 +502,17 @@ if user_q:
 
     st.session_state.used_hits = used_hits
 
+    # 利用ログ（削減時間の見える化用）
+    top_cat = ""
+    if used_hits:
+        try:
+            top_cat = str(used_hits[0][0].get("category", ""))
+        except Exception:
+            top_cat = ""
+    log_interaction(user_q, matched=(best_score >= MIN_SCORE), best_score=best_score, category=top_cat)
+
     with st.chat_message("assistant"):
         answer_html = str(answer).replace("\n", "<br>")
         st.markdown(f'<div class="answerbox">{answer_html}</div>', unsafe_allow_html=True)
 
     st.session_state.messages.append({"role": "assistant", "content": str(answer)})
-
-    # おすすめ質問ボタンから自動送信した場合は、もう一度 rerun して入力欄を確実に表示
-    if used_pending:
-        st.rerun()
