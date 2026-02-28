@@ -4,11 +4,20 @@ import uuid
 import csv
 import io
 import zipfile
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+# ===== PDF生成（ReportLab）===== 
+REPORTLAB_AVAILABLE = False
+try:
+    from reportlab.pdfgen import canvas  # type: ignore
+    from reportlab.lib.pagesizes import A4  # type: ignore
+    from reportlab.lib.units import mm  # type: ignore
+    from reportlab.pdfbase import pdfmetrics  # type: ignore
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont  # type: ignore
+    REPORTLAB_AVAILABLE = True
+except ModuleNotFoundError:
+    # Streamlit Cloudでは requirements.txt に reportlab を追加してください
+    REPORTLAB_AVAILABLE = False
+
 
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -141,6 +150,9 @@ def format_minutes_to_hours(minutes: float) -> str:
         return f"{int(round(m))}分"
     return f"{h:.1f}時間"
 def register_jp_font():
+    if not REPORTLAB_AVAILABLE:
+        return "Helvetica"
+
     """ReportLabで日本語を表示できるフォントを登録"""
     try:
         pdfmetrics.registerFont(UnicodeCIDFont("HeiseiKakuGo-W5"))
@@ -157,6 +169,8 @@ def generate_effect_report_pdf(
     title: str = "導入効果レポート（情シス問い合わせAI）",
 ) -> bytes:
     """導入効果レポートPDFを生成してbytesで返す"""
+    if not REPORTLAB_AVAILABLE:
+        raise ModuleNotFoundError("reportlab is not installed")
     buf = io.BytesIO()
     font = register_jp_font()
     c = canvas.Canvas(buf, pagesize=A4)
@@ -401,33 +415,41 @@ with st.sidebar:
     # 効果レポートPDF出力（今月）
     # ======================
     st.markdown("### 📄 効果レポート（PDF）")
-    hourly_cost = st.number_input("想定人件費（円/時間）", min_value=0, max_value=20000, value=4000, step=500)
 
-    # 今月のログを集計（最大60日読み込み→今月分だけ抽出）
-    df_month_all = read_interactions(days=60)
-    if df_month_all is None or len(df_month_all) == 0:
-        st.caption("今月の利用ログがまだありません。質問すると自動で蓄積します。")
+    if not REPORTLAB_AVAILABLE:
+        st.warning("PDF出力には 'reportlab' が必要です。Streamlit Cloud の requirements.txt に 'reportlab' を追加して再デプロイしてください。")
+        st.code("reportlab", language="text")
     else:
-        try:
-            ts = pd.to_datetime(df_month_all["timestamp"], errors="coerce")
-            month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            df_month = df_month_all[ts >= month_start]
-        except Exception:
-            df_month = df_month_all
+        hourly_cost = st.number_input("想定人件費（円/時間）", min_value=0, max_value=20000, value=4000, step=500)
 
-        pdf_bytes = generate_effect_report_pdf(
-            df=df_month,
-            avg_min=float(avg_min),
-            deflect=float(deflect),
-            hourly_cost_yen=int(hourly_cost),
-        )
-        st.download_button(
-            "📄 今月の導入効果レポートをダウンロード",
-            data=pdf_bytes,
-            file_name=f"effect_report_{datetime.now().strftime('%Y%m')}.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-        )
+        # 今月のログを集計（最大60日読み込み→今月分だけ抽出）
+        df_month_all = read_interactions(days=60)
+        if df_month_all is None or len(df_month_all) == 0:
+            st.caption("今月の利用ログがまだありません。質問すると自動で蓄積します。")
+        else:
+            try:
+                ts = pd.to_datetime(df_month_all["timestamp"], errors="coerce")
+                month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                df_month = df_month_all[ts >= month_start]
+            except Exception:
+                df_month = df_month_all
+
+            try:
+                pdf_bytes = generate_effect_report_pdf(
+                    df=df_month,
+                    avg_min=float(avg_min),
+                    deflect=float(deflect),
+                    hourly_cost_yen=int(hourly_cost),
+                )
+                st.download_button(
+                    "📄 今月の導入効果レポートをダウンロード",
+                    data=pdf_bytes,
+                    file_name=f"effect_report_{datetime.now().strftime('%Y%m')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.error(f"PDF生成でエラー: {e}")
     st.markdown("### 📥 ログ（該当なし）ダウンロード")
     log_files = list_log_files()
     if not log_files:
