@@ -101,7 +101,7 @@ st.title("🧑‍💻 情シス問い合わせAI")
 st.markdown(
     """
 <style>
-.block-container {padding-top: 2.0rem; padding-bottom: 8rem !important; max-width: 1100px;}
+.block-container {padding-top: 2.0rem; padding-bottom: 10rem; max-width: 1100px;}
 .hero {padding: 18px 20px; border-radius: 14px; background: linear-gradient(135deg, #0ea5e9 0%, #22c55e 100%); color: white; margin-bottom: 18px;}
 .hero h1 {font-size: 34px; margin: 0 0 6px 0;}
 .hero p {margin: 0; font-size: 15px; opacity: 0.95;}
@@ -413,7 +413,10 @@ if c3.button("🌐 VPNに接続できない"):
 # ======================
 # 入力 → 検索 → 回答
 # ======================
-user_q = st.session_state.pending_q or st.chat_input("質問を入力してください")
+# 先に chat_input を必ず描画（pending_q があっても入力欄が消えないようにする）
+chat_typed = st.chat_input("質問を入力してください")
+user_q = chat_typed or st.session_state.pending_q
+used_pending = (not chat_typed) and bool(st.session_state.pending_q)
 
 if user_q:
     st.session_state.pending_q = ""
@@ -452,3 +455,7 @@ if user_q:
         st.markdown(f'<div class="answerbox">{answer_html}</div>', unsafe_allow_html=True)
 
     st.session_state.messages.append({"role": "assistant", "content": str(answer)})
+
+    # おすすめ質問ボタンから自動送信した場合は、もう一度 rerun して入力欄を確実に表示
+    if used_pending:
+        st.rerun()
