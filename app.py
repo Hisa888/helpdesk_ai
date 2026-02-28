@@ -37,6 +37,32 @@ FAQ_PATH = Path("faq.csv")
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
 
+# ======================
+# 営業用UI設定（secrets / 環境変数で上書き可）
+# ======================
+def _get_setting(key: str, default: str = "") -> str:
+    # secrets.toml → 環境変数 → デフォルト の順で参照
+    try:
+        v = st.secrets.get(key, None)  # type: ignore[attr-defined]
+    except Exception:
+        v = None
+    if v is None:
+        v = os.environ.get(key)
+    return str(v) if v is not None else default
+
+COMPANY_NAME = _get_setting("COMPANY_NAME", "株式会社〇〇（デモ）")
+LOGO_PATH = _get_setting("LOGO_PATH", "assets/logo.png")
+CONTACT_URL = _get_setting("CONTACT_URL", "")
+CONTACT_EMAIL = _get_setting("CONTACT_EMAIL", "")
+
+def build_contact_link() -> str:
+    if CONTACT_URL:
+        return CONTACT_URL
+    if CONTACT_EMAIL:
+        # 件名などは最低限。必要なら後で増やせます。
+        return f"mailto:{CONTACT_EMAIL}?subject=情シス問い合わせAI%20導入相談"
+    return ""
+
 
 def list_log_files():
     """logsフォルダ内のCSV（nohit_*.csv）を新しい順に返す"""
@@ -268,7 +294,7 @@ h1 {
 .refbox {border-left: 4px solid #0ea5e9; background: #f8fafc; padding: 10px 12px; border-radius: 10px;}
 .answerbox {border-left: 4px solid #22c55e; background: #f0fdf4; padding: 12px 14px; border-radius: 12px; line-height: 1.6;}
 
-.kpi-grid {display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 14px 0 18px 0;}
+.kpi-grid {display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 14px 0 18px 0;}
 @media (max-width: 1100px){ .kpi-grid {grid-template-columns: repeat(2, minmax(0, 1fr));} }
 .kpi {background:#ffffff; border:1px solid #e5e7eb; border-radius:16px; padding:14px 14px; box-shadow: 0 8px 26px rgba(0,0,0,0.06);}
 .kpi .label {font-size:12px; color:#6b7280; margin-bottom:6px;}
@@ -282,6 +308,24 @@ h1 {
 """,
     unsafe_allow_html=True,
 )
+
+# ===== 会社名 / ロゴ（左上）=====
+contact_link = build_contact_link()
+logo_path_obj = Path(LOGO_PATH)
+col_logo, col_name, col_btn = st.columns([1, 6, 3])
+with col_logo:
+    if LOGO_PATH and logo_path_obj.exists():
+        st.image(str(logo_path_obj), width=52)
+    else:
+        st.markdown("### 🏢")
+with col_name:
+    st.markdown(f"### {COMPANY_NAME}")
+    st.caption("情シス問い合わせAI（営業デモ）")
+with col_btn:
+    if contact_link:
+        st.link_button("📩 導入相談", contact_link, use_container_width=True)
+    else:
+        st.button("📩 導入相談（リンク未設定）", disabled=True, use_container_width=True)
 
 # ===== ヒーローヘッダー =====
 st.markdown(
@@ -321,6 +365,14 @@ try:
         _today = _df7[_df7["timestamp"].astype(str).str.startswith(_today_prefix)]
         _total_today = int(len(_today))
 
+        # 営業用：削減時間（推定）KPI（サイドバー入力と連動）
+        _avg_min_kpi = float(st.session_state.get("avg_min", 5))
+        _deflect_kpi = float(st.session_state.get("deflect", 0.7))
+        _hourly_cost_kpi = int(st.session_state.get("hourly_cost", 4000))
+        _saved_min7 = _matched7 * _avg_min_kpi * _deflect_kpi
+        _saved_h7 = _saved_min7 / 60.0
+        _saved_yen7 = int(round(_saved_h7 * _hourly_cost_kpi)) if _hourly_cost_kpi else 0
+
         # 営業用：KPIカード（中央に大きく）
         st.markdown('<div class="section-title">📊 直近の利用状況</div>', unsafe_allow_html=True)
         st.markdown(
@@ -340,6 +392,11 @@ try:
     <div class="label">直近7日 自動対応件数</div>
     <div class="value">{_matched7}</div>
     <div class="sub">自己解決に寄与</div>
+  </div>
+  <div class="kpi">
+    <div class="label">推定削減（直近7日）</div>
+    <div class="value">{_saved_h7:.1f}h</div>
+    <div class="sub">約{_saved_yen7:,}円（{_hourly_cost_kpi:,}円/時間）</div>
   </div>
   <div class="kpi">
     <div class="label">今日の問い合わせ</div>
@@ -399,8 +456,10 @@ with st.sidebar:
     # 削減時間シミュレーター（営業用）
     # ======================
     st.markdown("### ⏱ 削減時間シミュレーター")
-    avg_min = st.slider("1件あたりの平均対応時間（分）", 1, 20, 5, help="情シスが1件対応する平均時間の目安")
-    deflect = st.slider("AIで解決できる割合（推定）", 30, 100, 70, help="AI回答で自己解決に至る割合の推定") / 100.0
+    avg_min = st.slider("1件あたりの平均対応時間（分）", 1, 20, int(st.session_state.get("avg_min", 5)), help="情シスが1件対応する平均時間の目安", key="avg_min")
+    deflect_pct = st.slider("AIで解決できる割合（推定）", 30, 100, int(st.session_state.get("deflect_pct", 70)), help="AI回答で自己解決に至る割合の推定", key="deflect_pct")
+    deflect = deflect_pct / 100.0
+    st.session_state["deflect"] = deflect
 
     df_int = read_interactions(days=7)
     if df_int is None or len(df_int) == 0:
@@ -463,7 +522,8 @@ with st.sidebar:
         st.warning("PDF出力には 'reportlab' が必要です。Streamlit Cloud の requirements.txt に 'reportlab' を追加して再デプロイしてください。")
         st.code("reportlab", language="text")
     else:
-        hourly_cost = st.number_input("想定人件費（円/時間）", min_value=0, max_value=20000, value=4000, step=500)
+        hourly_cost = st.number_input("想定人件費（円/時間）", min_value=0, max_value=20000, value=int(st.session_state.get("hourly_cost", 4000)), step=500, key="hourly_cost")
+        st.session_state["hourly_cost"] = int(hourly_cost)
 
         # 今月のログを集計（最大60日読み込み→今月分だけ抽出）
         df_month_all = read_interactions(days=60)
