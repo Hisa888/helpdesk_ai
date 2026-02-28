@@ -2,6 +2,7 @@ import os
 import re
 import uuid
 import csv
+import zipfile
 from pathlib import Path
 from datetime import datetime
 
@@ -107,6 +108,41 @@ with st.sidebar:
     )
 
 
+
+    # ======================
+    # ログ（該当なし）ダウンロード
+    # ======================
+    st.markdown("### 📥 ログ（該当なし）")
+    log_files = list_log_files()
+    if not log_files:
+        st.caption("まだログはありません。")
+    else:
+        latest = log_files[0]
+        try:
+            latest_bytes = latest.read_bytes()
+        except Exception:
+            latest_bytes = b""
+
+        st.download_button(
+            "⬇ 最新ログCSVをダウンロード",
+            data=latest_bytes,
+            file_name=latest.name,
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+        zip_bytes = make_logs_zip(log_files)
+        st.download_button(
+            "⬇ ログをZIPでまとめてDL",
+            data=zip_bytes,
+            file_name="nohit_logs.zip",
+            mime="application/zip",
+            use_container_width=True,
+        )
+
+        with st.expander("ログ一覧を見る"):
+            for p in log_files[:20]:
+                st.write(f"• {p.name}")
 # ======================
 # FAQロード（落ちやすい箇所を全てガード）
 # ======================
@@ -222,6 +258,37 @@ def log_nohit(question: str):
         pass
 
 
+def list_log_files():
+    """logsフォルダ内のCSV（nohit_*.csv）を新しい順に返す"""
+    try:
+        files = sorted(LOG_DIR.glob("nohit_*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+        return files
+    except Exception:
+        return []
+
+
+def make_logs_zip(files):
+    """指定されたCSVをZIP化してbytesで返す"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for p in files:
+            try:
+                zf.write(p, arcname=p.name)
+            except Exception:
+                pass
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def render_match_bar(score: float):
+    """一致度（0-1）をバーで表示"""
+    try:
+        v = float(score)
+    except Exception:
+        v = 0.0
+    v = max(0.0, min(1.0, v))
+    st.progress(v, text=f"一致度：{int(v*100)}%")
+
 # ======================
 # 管理者ログイン
 # ======================
@@ -276,6 +343,7 @@ with st.expander("参照したFAQ（根拠）を見る"):
         st.markdown('<div class="refbox">該当なし（スコアが低いため問い合わせ誘導）</div>', unsafe_allow_html=True)
     else:
         for i, (row, score) in enumerate(used_hits, 1):
+            render_match_bar(score)
             q_html = str(row.get("question", "")).replace("\n", "<br>")
             a_html = str(row.get("answer", "")).replace("\n", "<br>")
             cat = str(row.get("category", ""))
@@ -325,6 +393,10 @@ if user_q:
 
     hits = retrieve_faq(user_q)
     best_score = hits[0][1] if hits else 0.0
+
+    # 一致度バー（上位FAQがある場合のみ）
+    if hits:
+        render_match_bar(best_score)
 
     if best_score < MIN_SCORE:
         used_hits = []
