@@ -215,12 +215,14 @@ if user_q:
         ])
 
     with st.chat_message("assistant"):
+        formatted_text = user_text.replace("\n", "<br>")
+
         st.markdown(f"""
-        <div class="card">
-        <h3>🤖 回答</h3>
-        <div>{answer.replace("\n","<br>")}</div>
+        <div>
+        {formatted_text}
         </div>
         """, unsafe_allow_html=True)
-        # st.markdown(answer)
+
+        st.markdown(answer)
 
     st.session_state.messages.append({"role": "assistant", "content": answer})
