@@ -192,6 +192,35 @@ with st.sidebar:
     cB.metric("過去7日", w_cnt)
     cC.metric("累計", total_cnt)
 
+
+    # ======================
+    # 削減時間シミュレーター（営業用）
+    # ======================
+    st.markdown("### ⏱ 削減時間シミュレーター")
+    avg_min = st.slider("1件あたりの平均対応時間（分）", 1, 20, 5, help="情シスが1件対応する平均時間の目安")
+    deflect = st.slider("AIで解決できる割合（推定）", 30, 100, 70, help="AI回答で自己解決に至る割合の推定") / 100.0
+
+    df_int = read_interactions(days=7)
+    if df_int is None or len(df_int) == 0:
+        st.caption("まだ利用ログがありません（質問すると自動で蓄積します）。")
+    else:
+        matched_7d = int(df_int["matched"].sum()) if "matched" in df_int.columns else 0
+        total_7d = int(len(df_int))
+        nohit_7d = total_7d - matched_7d
+        saved_min_7d = matched_7d * float(avg_min) * float(deflect)
+        st.metric("推定削減（過去7日）", format_minutes_to_hours(saved_min_7d))
+        st.caption(f"内訳：自動対応 {matched_7d} 件 / 該当なし {nohit_7d} 件（合計 {total_7d} 件）")
+
+        # 今日分（timestamp先頭が YYYY-MM-DD の想定）
+        try:
+            today_prefix = datetime.now().strftime("%Y-%m-%d")
+            df_today = df_int[df_int["timestamp"].astype(str).str.startswith(today_prefix)]
+            matched_today = int(df_today["matched"].sum()) if len(df_today) else 0
+            saved_min_today = matched_today * float(avg_min) * float(deflect)
+            st.metric("推定削減（今日）", format_minutes_to_hours(saved_min_today))
+        except Exception:
+            pass
+
     st.markdown("### 📥 ログ（該当なし）ダウンロード")
     log_files = list_log_files()
     if not log_files:
@@ -339,6 +368,69 @@ def log_nohit(question: str):
         pass
 
 
+
+def log_interaction(question: str, matched: bool, best_score: float, category: str):
+    """全ての質問をログ化（削減時間の見える化用）: logs/interactions_YYYYMMDD.csv"""
+    if not question:
+        return
+    day = datetime.now().strftime("%Y%m%d")
+    path = LOG_DIR / f"interactions_{day}.csv"
+    try:
+        is_new = not path.exists()
+        with path.open("a", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            if is_new:
+                w.writerow(["timestamp", "question", "matched", "best_score", "category"])
+            w.writerow([datetime.now().isoformat(timespec="seconds"), question, int(bool(matched)), float(best_score), category or ""])
+    except Exception:
+        pass
+
+
+def read_interactions(days: int = 7) -> pd.DataFrame:
+    """直近days日分のinteractionsログを結合して返す（無ければ空DF）"""
+    frames = []
+    for i in range(days):
+        d = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
+        p = LOG_DIR / f"interactions_{d}.csv"
+        if p.exists():
+            try:
+                frames.append(pd.read_csv(p, encoding="utf-8"))
+            except Exception:
+                try:
+                    frames.append(pd.read_csv(p, encoding="utf-8", engine="python", on_bad_lines="skip"))
+                except Exception:
+                    pass
+    if not frames:
+        return pd.DataFrame(columns=["timestamp", "question", "matched", "best_score", "category"])
+
+    df_all = pd.concat(frames, ignore_index=True)
+
+    # 型整形
+    if "matched" in df_all.columns:
+        df_all["matched"] = pd.to_numeric(df_all["matched"], errors="coerce").fillna(0).astype(int)
+    else:
+        df_all["matched"] = 0
+    if "best_score" in df_all.columns:
+        df_all["best_score"] = pd.to_numeric(df_all["best_score"], errors="coerce").fillna(0.0)
+    else:
+        df_all["best_score"] = 0.0
+    if "category" not in df_all.columns:
+        df_all["category"] = ""
+
+    return df_all
+
+
+def format_minutes_to_hours(minutes: float) -> str:
+    """分→表示用（xx分 / x.x時間）"""
+    try:
+        m = float(minutes)
+    except Exception:
+        m = 0.0
+    h = m / 60.0
+    if h < 1:
+        return f"{int(round(m))}分"
+    return f"{h:.1f}時間"
+
 # ======================
 # 管理者ログイン
 # ======================
@@ -468,6 +560,15 @@ if user_q:
             answer = "現在AIの回答機能でエラーが発生しています。しばらくしてから再度お試しください。"
 
     st.session_state.used_hits = used_hits
+
+    # 利用ログ（削減時間の見える化用）
+    top_cat = ""
+    if used_hits:
+        try:
+            top_cat = str(used_hits[0][0].get("category", ""))
+        except Exception:
+            top_cat = ""
+    log_interaction(user_q, matched=(best_score >= MIN_SCORE), best_score=best_score, category=top_cat)
 
     with st.chat_message("assistant"):
         answer_html = str(answer).replace("\n", "<br>")
