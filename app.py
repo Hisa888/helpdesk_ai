@@ -231,8 +231,7 @@ def generate_effect_report_pdf(
 TOP_K = 3
 MIN_SCORE = 0.15
 
-st.set_page_config(page_title="情シス問い合わせAI", layout="centered")
-st.title("🧑‍💻 情シス問い合わせAI")
+st.set_page_config(page_title="情シス問い合わせAI", layout="wide")
 
 
 # ===== プロっぽい見た目（CSS）=====
@@ -268,6 +267,17 @@ h1 {
 .small {font-size: 12px; color:#6b7280;}
 .refbox {border-left: 4px solid #0ea5e9; background: #f8fafc; padding: 10px 12px; border-radius: 10px;}
 .answerbox {border-left: 4px solid #22c55e; background: #f0fdf4; padding: 12px 14px; border-radius: 12px; line-height: 1.6;}
+
+.kpi-grid {display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 14px 0 18px 0;}
+@media (max-width: 1100px){ .kpi-grid {grid-template-columns: repeat(2, minmax(0, 1fr));} }
+.kpi {background:#ffffff; border:1px solid #e5e7eb; border-radius:16px; padding:14px 14px; box-shadow: 0 8px 26px rgba(0,0,0,0.06);}
+.kpi .label {font-size:12px; color:#6b7280; margin-bottom:6px;}
+.kpi .value {font-size:28px; font-weight:800; letter-spacing: -0.02em; margin:0;}
+.kpi .sub {font-size:12px; color:#6b7280; margin-top:6px;}
+.section-title {font-size:18px; font-weight:800; margin: 8px 0 10px 0;}
+.cta-row {display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;}
+.cta {background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.25); padding: 10px 12px; border-radius: 12px; font-size: 13px;}
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -279,6 +289,13 @@ st.markdown(
 <div class="hero">
   <h1>情シス問い合わせAI</h1>
   <p>FAQ根拠付きで回答し、問い合わせ対応を削減する社内ヘルプデスクAI（RAG + LLM）</p>
+
+  <div class="cta-row">
+    <span class="cta">🎯 導入効果：問い合わせ削減 / 品質平準化 / ナレッジ蓄積</span>
+    <span class="cta">🧩 既存FAQ（CSV）で即導入</span>
+    <span class="cta">📄 効果レポートPDF出力</span>
+  </div>
+
   <div class="badges">
     <span class="badge">✅ FAQ参照（根拠表示）</span>
     <span class="badge">⚡ Groq高速推論</span>
@@ -292,6 +309,7 @@ st.markdown(
 
 # ==== サイドバー ========
 
+
 # ===== KPI（直近7日）=====
 try:
     _df7 = read_interactions(days=7)
@@ -303,10 +321,35 @@ try:
         _today = _df7[_df7["timestamp"].astype(str).str.startswith(_today_prefix)]
         _total_today = int(len(_today))
 
-        k1, k2, k3 = st.columns(3)
-        k1.metric("直近7日 問い合わせ", _total7)
-        k2.metric("直近7日 自動対応率", f"{_rate7:.1f}%")
-        k3.metric("今日の問い合わせ", _total_today)
+        # 営業用：KPIカード（中央に大きく）
+        st.markdown('<div class="section-title">📊 直近の利用状況</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'''
+<div class="kpi-grid">
+  <div class="kpi">
+    <div class="label">直近7日 問い合わせ</div>
+    <div class="value">{_total7}</div>
+    <div class="sub">ログベース</div>
+  </div>
+  <div class="kpi">
+    <div class="label">直近7日 自動対応率</div>
+    <div class="value">{_rate7:.1f}%</div>
+    <div class="sub">FAQヒット率</div>
+  </div>
+  <div class="kpi">
+    <div class="label">直近7日 自動対応件数</div>
+    <div class="value">{_matched7}</div>
+    <div class="sub">自己解決に寄与</div>
+  </div>
+  <div class="kpi">
+    <div class="label">今日の問い合わせ</div>
+    <div class="value">{_total_today}</div>
+    <div class="sub">当日分</div>
+  </div>
+</div>
+''',
+            unsafe_allow_html=True,
+        )
     else:
         st.caption("（利用ログがまだありません。質問するとKPIが表示されます）")
 except Exception:
