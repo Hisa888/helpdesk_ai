@@ -1,5 +1,2 @@
-﻿[server]
+[server]
 fileWatcherType = "none"
-
-[client]
-toolbarMode = "minimal"
