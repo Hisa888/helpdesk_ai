@@ -4,6 +4,12 @@ import uuid
 import csv
 import io
 import zipfile
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -134,6 +140,78 @@ def format_minutes_to_hours(minutes: float) -> str:
     if h < 1:
         return f"{int(round(m))}分"
     return f"{h:.1f}時間"
+def register_jp_font():
+    """ReportLabで日本語を表示できるフォントを登録"""
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont("HeiseiKakuGo-W5"))
+        return "HeiseiKakuGo-W5"
+    except Exception:
+        return "Helvetica"
+
+
+def generate_effect_report_pdf(
+    df: pd.DataFrame,
+    avg_min: float,
+    deflect: float,
+    hourly_cost_yen: int,
+    title: str = "導入効果レポート（情シス問い合わせAI）",
+) -> bytes:
+    """導入効果レポートPDFを生成してbytesで返す"""
+    buf = io.BytesIO()
+    font = register_jp_font()
+    c = canvas.Canvas(buf, pagesize=A4)
+    width, height = A4
+
+    # ヘッダー
+    c.setFont(font, 16)
+    c.drawString(20 * mm, height - 20 * mm, title)
+    c.setFont(font, 10)
+    c.drawString(20 * mm, height - 27 * mm, f"作成日時: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+
+    # KPI計算
+    total = int(len(df))
+    matched = int(df["matched"].sum()) if total and "matched" in df.columns else 0
+    auto_rate = (matched / total * 100.0) if total else 0.0
+    saved_min = matched * float(avg_min) * float(deflect)
+    saved_hours = saved_min / 60.0
+    saved_yen = int(round(saved_hours * int(hourly_cost_yen))) if hourly_cost_yen else 0
+
+    # 本文
+    y = height - 45 * mm
+    c.setFont(font, 12)
+    c.drawString(20 * mm, y, "サマリー（今月）")
+    y -= 8 * mm
+
+    c.setFont(font, 11)
+    lines = [
+        f"・問い合わせ件数：{total} 件",
+        f"・自動対応率：{auto_rate:.1f} %",
+        f"・削減時間（推定）：{saved_hours:.1f} 時間（{int(round(saved_min))} 分）",
+        f"・想定人件費削減：{saved_yen:,} 円（{hourly_cost_yen:,} 円/時間で試算）",
+        f"・前提：1件あたり平均対応時間 {avg_min:.0f} 分、AIで解決できる割合 {deflect*100:.0f} %",
+    ]
+    for line in lines:
+        c.drawString(22 * mm, y, line)
+        y -= 7 * mm
+
+    y -= 5 * mm
+    c.setFont(font, 12)
+    c.drawString(20 * mm, y, "補足")
+    y -= 8 * mm
+    c.setFont(font, 10)
+    notes = [
+        "・本レポートは、アプリが自動記録する利用ログ（interactions）から集計しています。",
+        "・自動対応はFAQヒット（matched=1）を基準に計算しています。",
+        "・削減時間／削減額は推定値です（実運用に合わせて係数調整できます）。",
+    ]
+    for line in notes:
+        c.drawString(22 * mm, y, line)
+        y -= 6 * mm
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
 
 
 TOP_K = 3
@@ -199,6 +277,28 @@ st.markdown(
 )
 
 # ==== サイドバー ========
+
+# ===== KPI（直近7日）=====
+try:
+    _df7 = read_interactions(days=7)
+    if _df7 is not None and len(_df7) > 0:
+        _total7 = int(len(_df7))
+        _matched7 = int(_df7["matched"].sum()) if "matched" in _df7.columns else 0
+        _rate7 = (_matched7 / _total7 * 100.0) if _total7 else 0.0
+        _today_prefix = datetime.now().strftime("%Y-%m-%d")
+        _today = _df7[_df7["timestamp"].astype(str).str.startswith(_today_prefix)]
+        _total_today = int(len(_today))
+
+        k1, k2, k3 = st.columns(3)
+        k1.metric("直近7日 問い合わせ", _total7)
+        k2.metric("直近7日 自動対応率", f"{_rate7:.1f}%")
+        k3.metric("今日の問い合わせ", _total_today)
+    else:
+        st.caption("（利用ログがまだありません。質問するとKPIが表示されます）")
+except Exception:
+    pass
+
+
 with st.sidebar:
     st.markdown("### 📌 このAIでできること")
     st.markdown(
@@ -266,7 +366,69 @@ with st.sidebar:
         except Exception:
             pass
 
-    st.markdown("### 📥 ログ（該当なし）ダウンロード")
+    
+    # ======================
+    # 見える化（グラフ）
+    # ======================
+    if df_int is not None and len(df_int) > 0:
+        st.markdown("### 📈 見える化（直近7日）")
+
+        df_plot = df_int.copy()
+        df_plot["date"] = pd.to_datetime(df_plot["timestamp"], errors="coerce").dt.date
+        daily = (
+            df_plot.groupby("date", dropna=True)
+            .agg(total=("question", "count"), matched=("matched", "sum"))
+            .reset_index()
+            .sort_values("date")
+        )
+        daily["auto_rate"] = (daily["matched"] / daily["total"]).replace([pd.NA, float("inf")], 0.0) * 100.0
+        daily["saved_min"] = daily["matched"] * float(avg_min) * float(deflect)
+        daily["saved_min_cum"] = daily["saved_min"].cumsum()
+
+        # 1) 問い合わせ件数
+        st.caption("📈 7日間の問い合わせ件数推移")
+        st.line_chart(daily.set_index("date")[["total"]])
+
+        # 2) 自動対応率
+        st.caption("🧠 AI自動対応率の推移（FAQヒット率）")
+        st.line_chart(daily.set_index("date")[["auto_rate"]])
+
+        # 3) 削減時間（累計）
+        st.caption("⏱ 削減時間の累計（推定）")
+        st.line_chart(daily.set_index("date")[["saved_min_cum"]])
+
+    # ======================
+    # 効果レポートPDF出力（今月）
+    # ======================
+    st.markdown("### 📄 効果レポート（PDF）")
+    hourly_cost = st.number_input("想定人件費（円/時間）", min_value=0, max_value=20000, value=4000, step=500)
+
+    # 今月のログを集計（最大60日読み込み→今月分だけ抽出）
+    df_month_all = read_interactions(days=60)
+    if df_month_all is None or len(df_month_all) == 0:
+        st.caption("今月の利用ログがまだありません。質問すると自動で蓄積します。")
+    else:
+        try:
+            ts = pd.to_datetime(df_month_all["timestamp"], errors="coerce")
+            month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            df_month = df_month_all[ts >= month_start]
+        except Exception:
+            df_month = df_month_all
+
+        pdf_bytes = generate_effect_report_pdf(
+            df=df_month,
+            avg_min=float(avg_min),
+            deflect=float(deflect),
+            hourly_cost_yen=int(hourly_cost),
+        )
+        st.download_button(
+            "📄 今月の導入効果レポートをダウンロード",
+            data=pdf_bytes,
+            file_name=f"effect_report_{datetime.now().strftime('%Y%m')}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+st.markdown("### 📥 ログ（該当なし）ダウンロード")
     log_files = list_log_files()
     if not log_files:
         st.caption("まだログはありません。")
