@@ -26,6 +26,86 @@ MIN_SCORE = 0.15
 st.set_page_config(page_title="情シス問い合わせAI", layout="centered")
 st.title("🧑‍💻 情シス問い合わせAI")
 
+# ===== プロっぽい見た目（CSS）=====
+st.markdown("""
+<style>
+/* 全体幅 */
+.block-container {padding-top: 2.0rem; padding-bottom: 3rem; max-width: 1100px;}
+/* タイトル周り */
+.hero {
+  padding: 18px 20px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #0ea5e9 0%, #22c55e 100%);
+  color: white;
+  margin-bottom: 18px;
+}
+.hero h1 {font-size: 34px; margin: 0 0 6px 0;}
+.hero p {margin: 0; font-size: 15px; opacity: 0.95;}
+.badges {margin-top: 12px; display:flex; gap:8px; flex-wrap:wrap;}
+.badge {
+  background: rgba(255,255,255,0.18);
+  border: 1px solid rgba(255,255,255,0.25);
+  padding: 6px 10px; border-radius: 999px; font-size: 12px;
+}
+/* カード */
+.card {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 14px 14px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.06);
+}
+.card h3 {margin: 0 0 8px 0; font-size: 16px;}
+.small {font-size: 12px; color:#6b7280;}
+/* 参照FAQの枠 */
+.refbox {
+  border-left: 4px solid #0ea5e9;
+  background: #f8fafc;
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ===== ヒーローヘッダー =====
+st.markdown("""
+<div class="hero">
+  <h1>情シス問い合わせAI</h1>
+  <p>FAQ根拠付きで回答し、問い合わせ対応を削減する社内ヘルプデスクAI（RAG + LLM）</p>
+  <div class="badges">
+    <span class="badge">✅ FAQ参照（根拠表示）</span>
+    <span class="badge">⚡ Groq高速推論</span>
+    <span class="badge">📝 ログ / 該当なし蓄積</span>
+    <span class="badge">🔐 管理者でFAQ育成</span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+
+# ====サイドバー ========
+with st.sidebar:
+    st.markdown("### 📌 このAIでできること")
+    st.markdown("""
+- FAQから最も近い回答を提示（根拠表示）
+- 低一致は「該当なし」へ蓄積 → 管理者がFAQ化
+- 問い合わせ文の統一（必要情報を自動ガイド）
+""")
+
+    st.markdown("### 📈 想定効果（例）")
+    st.markdown("""
+- 繰り返し質問の削減
+- 対応品質の平準化
+- 新人でも同じ回答ができる
+""")
+
+    st.markdown("### 🧭 使い方")
+    st.markdown("""
+1. 質問を入力  
+2. 回答＋参照FAQを確認  
+3. 該当なしは管理者がFAQ化  
+""")
+    
+
 # ======================
 # FAQロード
 # ======================
@@ -97,6 +177,24 @@ for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
 
+# ======================
+# 「参照FAQ」も見た目を整える
+# ======================
+with st.expander("参照したFAQ（根拠）を見る"):
+    if not used_hits:
+        st.markdown('<div class="refbox">該当なし（スコアが低いため問い合わせ誘導）</div>', unsafe_allow_html=True)
+    else:
+        for i, (row, score) in enumerate(used_hits, 1):
+            st.markdown(f"""
+<div class="refbox">
+<b>FAQ{i}</b>（score={score:.3f} / category={row.get('category','')}）<br>
+<b>Q:</b> {row['question']}<br>
+<b>A:</b> {row['answer']}
+</div>
+""", unsafe_allow_html=True)
+            st.write("")
+
+
 user_q = st.chat_input("質問を入力してください")
 
 if user_q:
@@ -117,6 +215,12 @@ if user_q:
         ])
 
     with st.chat_message("assistant"):
-        st.markdown(answer)
+        st.markdown(f"""
+        <div class="card">
+        <h3>🤖 回答</h3>
+        <div>{answer.replace("\n","<br>")}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        # st.markdown(answer)
 
     st.session_state.messages.append({"role": "assistant", "content": answer})
