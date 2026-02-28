@@ -30,6 +30,20 @@ st.title("🧑‍💻 情シス問い合わせAI")
 st.markdown(
     """
 <style>
+
+div.stButton > button {
+  border-radius: 999px;
+  border: 1px solid #e2e8f0;
+  background-color: #f8fafc;
+  font-size: 14px;
+  transition: all 0.2s ease-in-out;
+}
+
+div.stButton > button:hover {
+  background-color: #e0f2fe;
+  border-color: #0ea5e9;
+  transform: translateY(-1px);
+}
 .block-container {padding-top: 2.0rem; padding-bottom: 3rem; max-width: 1100px;}
 .hero {padding: 18px 20px; border-radius: 14px; background: linear-gradient(135deg, #0ea5e9 0%, #22c55e 100%); color: white; margin-bottom: 18px;}
 .hero h1 {font-size: 34px; margin: 0 0 6px 0;}
