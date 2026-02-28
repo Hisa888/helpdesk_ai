@@ -52,7 +52,8 @@ def render_match_bar(score: float):
     except Exception:
         v = 0.0
     v = max(0.0, min(1.0, v))
-    st.progress(v, text=f"一致度：{int(v
+    st.progress(v, text=f"一致度：{int(v*100)}%")
+
 def count_nohit_logs(days: int = 7):
     """該当なしログ件数を集計（今日 / 過去N日 / 累計）"""
     files = list_log_files()
@@ -88,7 +89,6 @@ def count_nohit_logs(days: int = 7):
             recent_count += cnt
 
     return today_count, recent_count, total_count
-*100)}%")
 
 
 TOP_K = 3
