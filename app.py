@@ -101,7 +101,7 @@ st.title("🧑‍💻 情シス問い合わせAI")
 st.markdown(
     """
 <style>
-.block-container {padding-top: 2.0rem; padding-bottom: 3rem; max-width: 1100px;}
+.block-container {padding-top: 2.0rem; padding-bottom: 8rem !important; max-width: 1100px;}
 .hero {padding: 18px 20px; border-radius: 14px; background: linear-gradient(135deg, #0ea5e9 0%, #22c55e 100%); color: white; margin-bottom: 18px;}
 .hero h1 {font-size: 34px; margin: 0 0 6px 0;}
 .hero p {margin: 0; font-size: 15px; opacity: 0.95;}
