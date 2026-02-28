@@ -616,6 +616,155 @@ def log_interaction(question: str, matched: bool, best_score: float, category: s
 
 
 
+
+import json
+
+def normalize_question(q: str) -> str:
+    q = (q or "").strip().lower()
+    q = re.sub(r"\s+", " ", q)
+    # 日本語も含めて記号類をざっくり除去
+    q = re.sub(r"[\u3000\s\t\r\n]+", " ", q)
+    q = re.sub(r"[!！?？。、,.，:：;；\-_=+~`'\"()（）\[\]{}<>＜＞/\\|@#%^&*]", "", q)
+    return q.strip()
+
+
+def load_nohit_questions_from_logs(files, max_questions: int = 100) -> list[str]:
+    """nohit_*.csv から質問を収集（新しいログから優先）。"""
+    questions: list[str] = []
+    seen: set[str] = set()
+    for p in files:
+        try:
+            _df = pd.read_csv(p, encoding="utf-8", engine="python", on_bad_lines="skip")
+            if "question" not in _df.columns:
+                continue
+            for q in _df["question"].fillna("").astype(str).tolist():
+                nq = normalize_question(q)
+                if not nq:
+                    continue
+                if nq in seen:
+                    continue
+                seen.add(nq)
+                questions.append(q.strip())
+                if len(questions) >= max_questions:
+                    return questions
+        except Exception:
+            continue
+    return questions
+
+
+def generate_faq_candidates(nohit_questions: list[str], n_items: int = 8) -> pd.DataFrame:
+    """該当なしログからFAQ案を生成してDataFrameで返す（category/question/answer）。"""
+    if not nohit_questions:
+        return pd.DataFrame(columns=["category", "question", "answer"])
+
+    # 入力が長すぎると落ちるので上限
+    sample = nohit_questions[:40]
+
+    prompt = f"""
+あなたは社内情シスのベテラン担当です。
+以下は『FAQに該当なし』として蓄積された、社員からの問い合わせ例です。
+
+【目的】
+この問い合わせ例から、社内で使えるFAQ（Q&A）を {n_items} 件作成してください。
+
+【要件】
+- 日本語のみ
+- 1件ごとに category / question / answer を作る
+- answer は手順を箇条書きで（3〜7行）
+- 個人情報や会社固有の秘密情報は作らない
+- できるだけ汎用的（どの会社でも通用）に
+- 出力は必ずJSONのみ（前後に説明文を入れない）
+
+【出力JSON形式】
+[
+  {{"category":"VPN", "question":"...", "answer":"- ...\n- ..."}},
+  ...
+]
+
+【問い合わせ例】
+""" + "\n".join([f"- {q}" for q in sample]) + "\n"
+
+    out = llm_chat(
+        [
+            {"role": "system", "content": "あなたは情シスのFAQ作成者です。"},
+            {"role": "user", "content": prompt},
+        ]
+    )
+
+    try:
+        data = json.loads(out)
+        if not isinstance(data, list):
+            raise ValueError("JSON is not a list")
+    except Exception:
+        # JSONが崩れたときは、最低限落とさず空で返す
+        return pd.DataFrame(columns=["category", "question", "answer"])
+
+    rows = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        cat = str(item.get("category", "")).strip()
+        q = str(item.get("question", "")).strip()
+        a = str(item.get("answer", "")).strip()
+        if not q or not a:
+            continue
+        rows.append({"category": cat, "question": q, "answer": a})
+
+    return pd.DataFrame(rows, columns=["category", "question", "answer"])
+
+
+def append_faq_csv(faq_path: Path, new_df: pd.DataFrame) -> int:
+    """faq.csv に追記。重複（question）をざっくり除外して追記件数を返す。"""
+    if new_df is None or len(new_df) == 0:
+        return 0
+
+    # 必須列を揃える
+    for col in ["question", "answer", "category"]:
+        if col not in new_df.columns:
+            new_df[col] = ""
+
+    new_df = new_df[["question", "answer", "category"]].copy()
+    new_df["question"] = new_df["question"].fillna("").astype(str).str.strip()
+    new_df["answer"] = new_df["answer"].fillna("").astype(str).str.strip()
+    new_df["category"] = new_df["category"].fillna("").astype(str).str.strip()
+    new_df = new_df[(new_df["question"] != "") & (new_df["answer"] != "")]
+    if len(new_df) == 0:
+        return 0
+
+    # 既存読み込み
+    if faq_path.exists():
+        try:
+            exist = pd.read_csv(faq_path, encoding="utf-8", engine="python", on_bad_lines="skip")
+        except Exception:
+            exist = pd.DataFrame(columns=["question", "answer", "category"])
+    else:
+        exist = pd.DataFrame(columns=["question", "answer", "category"])
+
+    exist_q = set(normalize_question(x) for x in exist.get("question", pd.Series(dtype=str)).fillna("").astype(str).tolist())
+
+    rows = []
+    for _, r in new_df.iterrows():
+        nq = normalize_question(str(r.get("question", "")))
+        if not nq:
+            continue
+        if nq in exist_q:
+            continue
+        exist_q.add(nq)
+        rows.append([r["question"], r["answer"], r.get("category", "")])
+
+    if not rows:
+        return 0
+
+    is_new = not faq_path.exists()
+    with faq_path.open("a", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        if is_new:
+            w.writerow(["question", "answer", "category"])
+        w.writerows(rows)
+
+    return len(rows)
+
+
 # ======================
 # 管理者ログイン
 # ======================
@@ -639,7 +788,59 @@ with st.sidebar:
             st.session_state.is_admin = False
             st.rerun()
 
+        # ===== FAQ自動生成（該当なしログ → FAQ案）=====
+        st.markdown("---")
+        with st.expander("🧠 FAQ自動生成（該当なしログ → FAQ案）", expanded=False):
+            st.caption("『該当なし』ログからFAQを自動生成し、faq.csvへ追記できます。")
 
+            log_files = list_log_files()
+            if not log_files:
+                st.info("まだ nohit_*.csv がありません。まず質問して『該当なし』を発生させてください。")
+            else:
+                labels = [f.name for f in log_files[:15]]
+                pick = st.selectbox("参照するログファイル", labels, index=0)
+                picked_path = next((p for p in log_files if p.name == pick), log_files[0])
+
+                max_q = st.slider("生成に使う質問数（重複除外後）", 10, 200, 60, step=10)
+                n_items = st.slider("生成するFAQ件数", 3, 20, 8)
+
+                if st.button("🤖 FAQ案を自動生成", type="primary"):
+                    with st.spinner("FAQ案を生成中..."):
+                        qs = load_nohit_questions_from_logs([picked_path], max_questions=max_q)
+                        try:
+                            gen_df = generate_faq_candidates(qs, n_items=n_items)
+                        except Exception:
+                            gen_df = pd.DataFrame(columns=["category", "question", "answer"])
+                        st.session_state.generated_faq_df = gen_df
+
+                gen_df = st.session_state.get("generated_faq_df")
+                if isinstance(gen_df, pd.DataFrame) and len(gen_df) > 0:
+                    st.markdown("### ✅ 生成結果（編集して保存できます）")
+                    edited = st.data_editor(
+                        gen_df,
+                        num_rows="dynamic",
+                        use_container_width=True,
+                        key="faq_editor",
+                    )
+
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        if st.button("💾 faq.csv に追記"):
+                            added = append_faq_csv(FAQ_PATH, edited.rename(columns={"category": "category"}))
+                            if added > 0:
+                                st.success(f"faq.csv に {added} 件追記しました。")
+                                # 反映のため再読み込み
+                                st.session_state.generated_faq_df = pd.DataFrame()
+                                st.rerun()
+                            else:
+                                st.warning("追記できる新規FAQがありません（重複/空欄の可能性）。")
+
+                    with col_b:
+                        if st.button("🧹 生成結果をクリア"):
+                            st.session_state.generated_faq_df = pd.DataFrame()
+                            st.rerun()
+                elif isinstance(gen_df, pd.DataFrame) and len(gen_df) == 0 and st.session_state.get("generated_faq_df") is not None:
+                    st.warning("FAQ案が生成できませんでした。ログの内容が少ないか、出力形式が崩れています。")
 # ======================
 # セッション初期化
 # ======================
