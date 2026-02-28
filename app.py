@@ -339,7 +339,25 @@ if user_q:
     # 3) 根拠表示用 used_hits / 回答の確定
     if best_score < MIN_SCORE:
         used_hits = []
-        answer = "FAQに該当がありません。情シスへお問い合わせください。"
+        if best_score < MIN_SCORE:
+            used_hits = []
+
+            answer = """
+        FAQに該当がありませんでした。
+
+        情シスへお問い合わせの際は、以下の情報を添えてください：
+
+        ・何ができないか（具体的な操作）
+        ・エラー画面のスクリーンショット
+        ・発生時刻
+        ・利用場所（社内 / 社外）
+        ・ネットワーク（Wi-Fi / VPN）
+        ・端末（Windows / Mac）
+        ・影響範囲（自分のみ / 他の人も）
+
+        ※これらを共有いただくと対応が早くなります。
+        """
+            
         log_nohit(user_q)
     else:
         used_hits = hits
