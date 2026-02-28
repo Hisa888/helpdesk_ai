@@ -523,7 +523,7 @@ with st.sidebar:
         st.code("reportlab", language="text")
     else:
         hourly_cost = st.number_input("想定人件費（円/時間）", min_value=0, max_value=20000, value=int(st.session_state.get("hourly_cost", 4000)), step=500, key="hourly_cost")
-        st.session_state["hourly_cost"] = int(hourly_cost)
+        # st.session_state["hourly_cost"] = int(hourly_cost)
 
         # 今月のログを集計（最大60日読み込み→今月分だけ抽出）
         df_month_all = read_interactions(days=60)
