@@ -10,12 +10,12 @@ def save_log(log_path: Path, user_q: str, answer: str, used_hits):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     parts = []
-    for i, (row, score) in enumerate(used_hits[:3], 1):
-        cat = str(row.get("category", ""))
-        q = str(row.get("question", "")).replace("\n", " ").strip()
-        parts.append(f"FAQ{i}:{score:.3f}:{cat}:{q[:60]}")
+    for i, (row, score) in enumerate((used_hits or [])[:3], 1):
+        cat = str(getattr(row, "get", lambda k, d=None: d)("category", ""))
+        q = str(getattr(row, "get", lambda k, d=None: d)("question", "")).replace("\n", " ").strip()
+        parts.append(f"FAQ{i}:{float(score):.3f}:{cat}:{q[:60]}")
     used_faq = " | ".join(parts) if parts else ""
-    best_score = f"{used_hits[0][1]:.3f}" if used_hits else ""
+    best_score = f"{float(used_hits[0][1]):.3f}" if used_hits else ""
 
     header = ["timestamp", "user_question", "answer", "best_score", "used_faq"]
     exists = log_path.exists()
@@ -79,8 +79,8 @@ def append_faq_row(faq_path: Path, category: str, owner: str, question: str, ans
     new_row = {
         "category": category or "",
         "owner": owner or "",
-        "question": question.strip(),
-        "answer": answer.strip(),
+        "question": (question or "").strip(),
+        "answer": (answer or "").strip(),
     }
     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
     df.to_csv(faq_path, index=False, encoding="utf-8-sig")
