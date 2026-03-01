@@ -217,19 +217,25 @@ def _pdf_draw_flow(c, margin, y):
         c.line(x2, y2, right[0], right[1])
         c.restoreState()
 
-    def _box(x, y, bw, bh, title, body, accent=COLOR_PRIMARY, fill=HexColor("#FFFFFF")):
+    def _box(x, y, bw, bh, title, body, accent=COLOR_PRIMARY, fill=None):
         """y は上端。ReportLabは下原点なので矩形は y-bh"""
+    if fill is None:
+        try:
+            fill = HexColor("#FFFFFF")
+        except Exception:
+            fill = None
         c.saveState()
-        c.setFillColor(fill)
+        if fill is not None:
+            c.setFillColor(fill)
         c.setStrokeColor(accent)
         c.setLineWidth(1.6)
-        c.roundRect(x, y - bh, bw, bh, 8, stroke=1, fill=1)
+        c.roundRect(x, y - bh, bw, bh, 8, stroke=1, fill=1 if fill is not None else 0)
 
         pad = 6 * mm
         # title bar
         bar_h = 8 * mm
         c.setFillColor(accent)
-        c.roundRect(x, y - bar_h, bw, bar_h, 8, stroke=0, fill=1)
+        c.roundRect(x, y - bar_h, bw, bar_h, 8, stroke=0, fill=1 if fill is not None else 0)
 
         c.setFillColor(HexColor("#FFFFFF"))
         c.setFont(FONT_BOLD, 11)
@@ -291,7 +297,7 @@ def _pdf_draw_flow(c, margin, y):
         c.setFillColor(color)
         c.setStrokeColor(COLOR_BORDER)
         c.setLineWidth(1)
-        c.roundRect(x0, y_top - h, w, h, 10, stroke=1, fill=1)
+        c.roundRect(x0, y_top - h, w, h, 10, stroke=1, fill=1 if fill is not None else 0)
         c.setFillColor(COLOR_TEXT)
         c.setFont(FONT_BOLD, 10.5)
         c.drawString(x0 + 6 * mm, y_top - 7.5 * mm, label)
