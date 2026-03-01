@@ -11,6 +11,7 @@ try:
     from reportlab.pdfgen import canvas  # type: ignore
     from reportlab.lib.pagesizes import A4  # type: ignore
     from reportlab.lib.units import mm  # type: ignore
+    from reportlab.lib.colors import HexColor  # type: ignore
     from reportlab.pdfbase import pdfmetrics  # type: ignore
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont  # type: ignore
     REPORTLAB_AVAILABLE = True
