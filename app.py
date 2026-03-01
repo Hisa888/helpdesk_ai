@@ -138,201 +138,290 @@ def _pdf_draw_title(c, title: str, subtitle: str | None = None):
     c.line(20 * mm, h - 36 * mm, w - 20 * mm, h - 36 * mm)
 
 
-def _pdf_draw_flow(c, x0, y0):
-    """運用フロー図（提案資料向け・プロ仕様）"""
-    from reportlab.lib.colors import HexColor
+def _pdf_draw_flow(c, margin, y):
+    """
+    営業資料レベルの図解（スイムレーン + 主要6ステップ）
+    - 文字が枠からはみ出ないように自動改行
+    - 余計な説明文は図の外（上/下）に寄せる
+    """
+    from reportlab.pdfbase import pdfmetrics
     import math
 
-    page_w, page_h = A4
+    PAGE_W, PAGE_H = A4
+    x0 = margin
+    w = PAGE_W - margin * 2
 
-    # ===== helpers =====
-    def arrow(x1, y1, x2, y2, color="#0F172A", dashed=False):
+    # -------------------------
+    # helpers
+    # -------------------------
+    def _w(txt, font, size):
+        try:
+            return pdfmetrics.stringWidth(txt, font, size)
+        except Exception:
+            return len(txt) * size * 0.5
+
+    def _wrap_lines(text, max_w, font, size):
+        if not text:
+            return []
+        text = str(text).replace("\r\n", "\n").replace("\r", "\n")
+        out = []
+        for para in text.split("\n"):
+            para = para.strip()
+            if not para:
+                out.append("")
+                continue
+            words = para.split(" ")
+            line = ""
+            for word in words:
+                cand = (line + " " + word).strip()
+                if _w(cand, font, size) <= max_w:
+                    line = cand
+                else:
+                    if line:
+                        out.append(line)
+                    # 1単語が長い場合は強制分割
+                    if _w(word, font, size) > max_w:
+                        tmp = ""
+                        for ch in word:
+                            cand2 = tmp + ch
+                            if _w(cand2, font, size) <= max_w:
+                                tmp = cand2
+                            else:
+                                out.append(tmp)
+                                tmp = ch
+                        if tmp:
+                            line = tmp
+                        else:
+                            line = ""
+                    else:
+                        line = word
+            if line:
+                out.append(line)
+        return out
+
+    def _arrow(x1, y1, x2, y2, dashed=False):
         c.saveState()
-        c.setStrokeColor(HexColor(color))
-        c.setLineWidth(1.2)
+        c.setStrokeColor(COLOR_TEXT)
+        c.setLineWidth(1)
         if dashed:
             c.setDash(4, 3)
         c.line(x1, y1, x2, y2)
         # arrow head
         ang = math.atan2(y2 - y1, x2 - x1)
-        ah = 7
-        a1 = ang + math.pi * 0.85
-        a2 = ang - math.pi * 0.85
-        c.line(x2, y2, x2 + ah * math.cos(a1), y2 + ah * math.sin(a1))
-        c.line(x2, y2, x2 + ah * math.cos(a2), y2 + ah * math.sin(a2))
+        head = 5 * mm
+        left = (x2 - head * math.cos(ang - math.pi / 7), y2 - head * math.sin(ang - math.pi / 7))
+        right = (x2 - head * math.cos(ang + math.pi / 7), y2 - head * math.sin(ang + math.pi / 7))
+        c.setFillColor(COLOR_TEXT)
+        c.setStrokeColor(COLOR_TEXT)
+        c.line(x2, y2, left[0], left[1])
+        c.line(x2, y2, right[0], right[1])
         c.restoreState()
 
-    def label(x, y, text, size=9, color="#334155"):
+    def _box(x, y, bw, bh, title, body, accent=COLOR_PRIMARY, fill=HexColor("#FFFFFF")):
+        """y は上端。ReportLabは下原点なので矩形は y-bh"""
         c.saveState()
-        c.setFillColor(HexColor(color))
-        c.setFont("HeiseiKakuGo-W5", size)
-        c.drawString(x, y, text)
+        c.setFillColor(fill)
+        c.setStrokeColor(accent)
+        c.setLineWidth(1.6)
+        c.roundRect(x, y - bh, bw, bh, 8, stroke=1, fill=1)
+
+        pad = 6 * mm
+        # title bar
+        bar_h = 8 * mm
+        c.setFillColor(accent)
+        c.roundRect(x, y - bar_h, bw, bar_h, 8, stroke=0, fill=1)
+
+        c.setFillColor(HexColor("#FFFFFF"))
+        c.setFont(FONT_BOLD, 11)
+        c.drawString(x + pad, y - bar_h + 2.2 * mm, str(title))
+
+        # body (auto wrap)
+        c.setFillColor(COLOR_TEXT)
+        body_font = FONT
+        body_size = 9.2
+        max_w = bw - pad * 2
+        lines = _wrap_lines(body, max_w, body_font, body_size)
+
+        # fit to height by shrinking font if needed
+        avail_h = bh - bar_h - 5 * mm
+        line_h = body_size * 1.25
+        if lines:
+            need_h = len(lines) * line_h
+            if need_h > avail_h:
+                scale = max(0.75, avail_h / need_h)
+                body_size = max(8.0, body_size * scale)
+                line_h = body_size * 1.25
+                lines = _wrap_lines(body, max_w, body_font, body_size)
+
+        c.setFont(body_font, body_size)
+        ty = y - bar_h - 4 * mm
+        for ln in lines[:20]:
+            c.drawString(x + pad, ty, ln)
+            ty -= line_h
+            if ty < (y - bh + 4 * mm):
+                break
+
         c.restoreState()
 
-    def box(x, y, w, h, title, body=None, fill="#FFFFFF", stroke="#0F172A", accent=None):
-        """y is bottom-left."""
+    def _diamond(cx, cy, dw, dh, text):
         c.saveState()
-        c.setStrokeColor(HexColor(stroke))
-        c.setLineWidth(1.2)
-        c.setFillColor(HexColor(fill))
-        c.roundRect(x, y, w, h, 10, stroke=1, fill=1)
+        c.setStrokeColor(COLOR_TEXT)
+        c.setFillColor(HexColor("#FFFFFF"))
+        c.setLineWidth(1.4)
+        p = c.beginPath()
+        p.moveTo(cx, cy + dh / 2)
+        p.lineTo(cx + dw / 2, cy)
+        p.lineTo(cx, cy - dh / 2)
+        p.lineTo(cx - dw / 2, cy)
+        p.close()
+        c.drawPath(p, stroke=1, fill=1)
 
-        # accent bar
-        if accent:
-            c.setFillColor(HexColor(accent))
-            c.roundRect(x, y + h - 8, w, 8, 10, stroke=0, fill=1)
-
-        # title
-        c.setFillColor(HexColor("#0F172A"))
-        c.setFont("HeiseiKakuGo-W5", 11)
-        c.drawString(x + 10, y + h - 18, title)
-
-        # body
-        if body:
-            c.setFillColor(HexColor("#0F172A"))
-            c.setFont("HeiseiKakuGo-W5", 9)
-            lines = _wrap_lines_for_pdf(body, "HeiseiKakuGo-W5", 9, w - 20)
-            yy = y + h - 32
-            for ln in lines[:6]:
-                c.drawString(x + 10, yy, ln)
-                yy -= 11
-
+        c.setFillColor(COLOR_TEXT)
+        c.setFont(FONT_BOLD, 10)
+        lines = _wrap_lines(text, dw - 10 * mm, FONT_BOLD, 10)
+        lh = 10 * 1.2
+        ty = cy + (len(lines) - 1) * lh / 2
+        for ln in lines:
+            c.drawCentredString(cx, ty, ln)
+            ty -= lh
         c.restoreState()
 
-    def diamond(xc, yc, w, h, text, fill="#FFFFFF", stroke="#0F172A", accent="#E2E8F0"):
-        """center-based diamond"""
-        x0d, y0d = xc - w/2, yc - h/2
-        pts = [(xc, yc + h/2), (xc + w/2, yc), (xc, yc - h/2), (xc - w/2, yc)]
+    def _lane(y_top, h, label, color=HexColor("#F6F8FB")):
         c.saveState()
-        c.setStrokeColor(HexColor(stroke))
-        c.setLineWidth(1.2)
-        c.setFillColor(HexColor(fill))
-        path = c.beginPath()
-        path.moveTo(pts[0][0], pts[0][1])
-        for px, py in pts[1:]:
-            path.lineTo(px, py)
-        path.close()
-        c.drawPath(path, stroke=1, fill=1)
-        # subtle accent
-        c.setFillColor(HexColor(accent))
-        c.circle(xc, yc, 2.2, stroke=0, fill=1)
-
-        c.setFillColor(HexColor("#0F172A"))
-        c.setFont("HeiseiKakuGo-W5", 10)
-        lines = _wrap_lines_for_pdf(text, "HeiseiKakuGo-W5", 10, w - 18)
-        yy = yc + 10
-        for ln in lines[:3]:
-            c.drawCentredString(xc, yy, ln)
-            yy -= 12
+        c.setFillColor(color)
+        c.setStrokeColor(COLOR_BORDER)
+        c.setLineWidth(1)
+        c.roundRect(x0, y_top - h, w, h, 10, stroke=1, fill=1)
+        c.setFillColor(COLOR_TEXT)
+        c.setFont(FONT_BOLD, 10.5)
+        c.drawString(x0 + 6 * mm, y_top - 7.5 * mm, label)
         c.restoreState()
 
-    # ===== layout =====
-    # flow area
-    margin = 18 * mm
-    xL = margin
-    xR = page_w - margin
-    area_w = xR - xL
-    top = y0
-
-    # grid
-    col_w = area_w / 3.0
-    row_h = 24 * mm
-
-    # nodes
-    wA, hA = col_w * 0.92, 22 * mm
-    wB, hB = col_w * 0.92, 24 * mm
-    wC, hC = col_w * 0.92, 22 * mm
-
-    # positions (bottom-left)
-    x1 = xL + col_w*0.04
-    x2 = xL + col_w + col_w*0.04
-    x3 = xL + 2*col_w + col_w*0.04
-
-    y1 = top - hA
-    y2 = y1 - 18 * mm - hB
-    y3 = y2 - 18 * mm - hC
-
-    # 1) intake
-    box(
-        x2, y1, wA, hA,
-        "① 受付（ユーザー質問）",
-        body="チャット入力／おすすめ質問ボタン\\n※入力→送信で問い合わせ開始",
-        fill="#FFFFFF", accent="#38BDF8"
-    )
-
-    # 2) retrieval + score
-    box(
-        x2, y2, wB, hB,
-        "② FAQ検索（TF-IDF）",
-        body="faq.csv から類似FAQを検索\\n一致度（スコア）と根拠FAQを表示",
-        fill="#FFFFFF", accent="#22C55E"
-    )
-
-    # decision diamond
-    dcx = x2 + wB/2
-    dcy = y2 - 14 * mm
-    diamond(dcx, dcy, 44*mm, 22*mm, "一致度が\\n閾値以上？")
-
-    # high match: LLM answer
-    box(
-        x3, y2, wB, hB,
-        "④ 高一致：自動回答",
-        body="Groq/LLMで回答生成\\n参照したFAQ（根拠）を提示",
-        fill="#F0FDF4", stroke="#16A34A", accent="#16A34A"
-    )
-
-    # low match: template
-    box(
-        x1, y3, wC, hC,
-        "③ 低一致：問い合わせテンプレ",
-        body="必要情報の入力ガイド\\n（操作・スクショ・発生時刻など）",
-        fill="#FFF7ED", stroke="#EA580C", accent="#FB923C"
-    )
-
-    # nohit log
-    box(
-        x2, y3, wC, hC,
-        "⑤ 該当なしログ蓄積",
-        body="該当なしをログに記録\\n（集計・CSVダウンロード）",
-        fill="#FFFFFF", accent="#A78BFA"
-    )
-
-    # admin improvement loop
-    box(
-        x3, y3, wC, hC,
-        "⑥ 管理者がFAQ化（改善）",
-        body="該当なしログを確認\\nfaq.csv に追加→次回から自動回答",
-        fill="#EEF2FF", stroke="#4F46E5", accent="#4F46E5"
-    )
-
-    # ===== connectors =====
-    # vertical from intake to search
-    arrow(x2 + wA/2, y1, x2 + wA/2, y2 + hB + 4, color="#0F172A")
-    # from search to decision
-    arrow(dcx, y2, dcx, dcy + 11, color="#0F172A")
-    # yes to right
-    arrow(dcx + 22*mm, dcy, x3, y2 + hB/2, color="#16A34A")
-    label(dcx + 12*mm, dcy + 4, "はい", size=9, color="#16A34A")
-    # no to left-bottom
-    arrow(dcx - 22*mm, dcy - 2, x1 + wC/2, y3 + hC + 6, color="#EA580C")
-    label(dcx - 22*mm - 10, dcy + 2, "いいえ", size=9, color="#EA580C")
-
-    # from template to nohit log
-    arrow(x1 + wC, y3 + hC/2, x2, y3 + hC/2, color="#0F172A")
-    # from nohit log to admin
-    arrow(x2 + wC, y3 + hC/2, x3, y3 + hC/2, color="#0F172A")
-    # learning loop back (dashed)
-    arrow(x3 + wC/2, y3 + hC, x2 + wB/2, y2 + hB + 10, color="#4F46E5", dashed=True)
-    label(x2 + wB/2 + 6, y2 + hB + 12, "改善ループ（FAQを育てる）", size=8, color="#4F46E5")
-
-    # footer note
+    # -------------------------
+    # layout
+    # -------------------------
+    top = y
+    title_gap = 10 * mm
     c.saveState()
-    c.setFillColor(HexColor("#475569"))
-    c.setFont("HeiseiKakuGo-W5", 8)
-    c.drawString(xL, y3 - 12*mm, "ポイント：『該当なし』を貯めてFAQ化するほど、自動回答率が上がります。")
+    c.setFont(FONT_BOLD, 14)
+    c.setFillColor(COLOR_TEXT)
+    c.drawString(x0, top, "問い合わせ対応の運用フロー（営業資料向け図解）")
+    c.setFont(FONT, 9.5)
+    c.setFillColor(COLOR_MUTED)
+    c.drawString(x0, top - 6 * mm, "ポイント：『該当なし』ログをFAQ化していくほど、自動回答率が上がります（育つヘルプデスク）。")
     c.restoreState()
 
-    return y3 - 18 * mm
+    y0 = top - title_gap - 6 * mm
+
+    lane_h = 32 * mm
+    gap = 6 * mm
+
+    lane_user_top = y0
+    lane_sys_top = lane_user_top - lane_h - gap
+    lane_admin_top = lane_sys_top - lane_h - gap
+
+    _lane(lane_user_top, lane_h, "ユーザー（現場）")
+    _lane(lane_sys_top, lane_h, "システム（本アプリ）", color=HexColor("#F3FBF8"))
+    _lane(lane_admin_top, lane_h, "管理者（情シス/運用）", color=HexColor("#F6F5FF"))
+
+    # column positions
+    col_gap = 8 * mm
+    col_w = (w - col_gap * 2) / 3
+    bx_h = 24 * mm
+
+    col1_x = x0
+    col2_x = x0 + col_w + col_gap
+    col3_x = x0 + (col_w + col_gap) * 2
+
+    # boxes
+    _box(col1_x + 6 * mm, lane_user_top - 5 * mm, col_w - 12 * mm, bx_h,
+         "① 受付（ユーザー質問）",
+         "チャット入力／おすすめ質問ボタン\n→ 送信")
+
+    _box(col1_x + 6 * mm, lane_sys_top - 5 * mm, col_w - 12 * mm, bx_h,
+         "② FAQ検索（TF‑IDF）",
+         "faq.csv から類似FAQを検索\n一致度（スコア）と根拠FAQを表示",
+         accent=COLOR_PRIMARY, fill=HexColor("#FFFFFF"))
+
+    # decision diamond (center column, system lane)
+    d_cx = col2_x + col_w / 2
+    d_cy = lane_sys_top - lane_h / 2 - 1 * mm
+    _diamond(d_cx, d_cy, 34 * mm, 18 * mm, "一致度が\n閾値以上？")
+
+    _box(col3_x + 6 * mm, lane_sys_top - 5 * mm, col_w - 12 * mm, bx_h,
+         "④ 高一致：自動回答",
+         "Groq/LLMで回答生成\n参照したFAQ（根拠）も提示",
+         accent=COLOR_OK, fill=HexColor("#F3FFF9"))
+
+    _box(col2_x + 6 * mm, lane_user_top - 5 * mm, col_w - 12 * mm, bx_h,
+         "③ 低一致：問い合わせテンプレ",
+         "必要情報の入力ガイド\n（操作／スクショ／発生時刻など）",
+         accent=COLOR_WARN, fill=HexColor("#FFF8F2"))
+
+    _box(col2_x + 6 * mm, lane_admin_top - 5 * mm, col_w - 12 * mm, bx_h,
+         "⑤ 該当なしログ蓄積",
+         "『該当なし』をログに記録\n集計・CSVダウンロード",
+         accent=COLOR_ACCENT, fill=HexColor("#F5F3FF"))
+
+    _box(col3_x + 6 * mm, lane_admin_top - 5 * mm, col_w - 12 * mm, bx_h,
+         "⑥ 管理者がFAQ化（改善）",
+         "ログを確認→ faq.csv に追記\n次回から自動回答できる範囲が増える",
+         accent=COLOR_PRIMARY, fill=HexColor("#EEF7FF"))
+
+    # -------------------------
+    # connectors
+    # -------------------------
+    # ① -> ②
+    _arrow(col1_x + col_w / 2, lane_user_top - lane_h + 3 * mm,
+           col1_x + col_w / 2, lane_sys_top - 7 * mm)
+
+    # ② -> diamond
+    _arrow(col1_x + col_w - 6 * mm, lane_sys_top - lane_h / 2,
+           d_cx - 17 * mm, d_cy)
+
+    # diamond yes -> ④
+    _arrow(d_cx + 17 * mm, d_cy,
+           col3_x + 6 * mm, lane_sys_top - lane_h / 2)
+
+    c.saveState()
+    c.setFont(FONT_BOLD, 9.5)
+    c.setFillColor(COLOR_OK)
+    c.drawString(d_cx + 19 * mm, d_cy + 8 * mm, "はい")
+    c.setFillColor(COLOR_WARN)
+    c.drawString(d_cx - 30 * mm, d_cy + 8 * mm, "いいえ")
+    c.restoreState()
+
+    # diamond no -> ③ (down then up a bit)
+    _arrow(d_cx - 17 * mm, d_cy,
+           col2_x + col_w / 2, lane_user_top - lane_h / 2)
+
+    # ③ -> ⑤
+    _arrow(col2_x + col_w / 2, lane_user_top - lane_h + 3 * mm,
+           col2_x + col_w / 2, lane_admin_top - 7 * mm)
+
+    # ⑤ -> ⑥
+    _arrow(col2_x + col_w - 6 * mm, lane_admin_top - lane_h / 2,
+           col3_x + 6 * mm, lane_admin_top - lane_h / 2)
+
+    # ⑥ -> ② feedback (dashed)
+    _arrow(col3_x + col_w / 2, lane_admin_top - lane_h + 4 * mm,
+           col1_x + col_w / 2, lane_sys_top - lane_h + 4 * mm,
+           dashed=True)
+    c.saveState()
+    c.setFont(FONT_BOLD, 9.2)
+    c.setFillColor(COLOR_PRIMARY)
+    c.drawString(col1_x + col_w / 2 + 2 * mm, lane_sys_top - lane_h + 6 * mm, "改善ループ（FAQを育てる）")
+    c.restoreState()
+
+    # bottom note
+    bottom = lane_admin_top - lane_h - 4 * mm
+    c.saveState()
+    c.setFont(FONT, 9.2)
+    c.setFillColor(COLOR_MUTED)
+    c.drawString(x0, bottom, "※運用のコツ：週1回『該当なしログ』を確認し、上位をFAQ化すると効果が出やすいです。")
+    c.restoreState()
+
+    return bottom - 8 * mm
 
 
 def generate_ops_manual_pdf() -> bytes:
