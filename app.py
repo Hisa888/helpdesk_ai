@@ -141,7 +141,9 @@ def _pdf_draw_flow(c, x0, y0):
     """簡易運用フロー図（箱 + 矢印）"""
     # box helper
     def box(x, y, w, h, label):
+        c.setStrokeColor(HexColor("#0F172A"))
         c.roundRect(x, y, w, h, 6, stroke=1, fill=0)
+        c.setFillColor(HexColor("#0F172A"))
         c.setFont("HeiseiKakuGo-W5", 10)
         # center-ish
         lines = _wrap_lines_for_pdf(label, "HeiseiKakuGo-W5", 10, w - 10)
