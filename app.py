@@ -493,8 +493,11 @@ def render_match_bar(score: float):
     v = max(0.0, min(1.0, v))
     st.progress(v, text=f"一致度：{int(v*100)}%")
 
+
 def count_nohit_logs(days: int = 7):
-    """該当なしログ件数を集計（今日 / 過去N日 / 累計）"""
+    """該当なしログ件数を集計（今日 / 過去N日 / 累計）
+    文字コードやCSV崩れに強い集計にする。
+    """
     files = list_log_files()
     if not files:
         return 0, 0, 0
@@ -504,20 +507,16 @@ def count_nohit_logs(days: int = 7):
     total_count = 0
     recent_count = 0
 
-    # 過去N日の日付セット
     today = datetime.now().date()
-    recent_days = { (today - timedelta(days=i)).strftime("%Y%m%d") for i in range(days) }
+    recent_days = {(today - timedelta(days=i)).strftime("%Y%m%d") for i in range(days)}
 
     for p in files:
         name = p.name
-        # nohit_YYYYMMDD.csv
         m = re.match(r"nohit_(\d{8})\.csv$", name)
         day = m.group(1) if m else ""
         try:
-            # CSVの行数（ヘッダ除外）
-            with p.open("r", encoding="utf-8") as f:
-                lines = f.readlines()
-            cnt = max(0, len(lines) - 1)
+            df_log = read_csv_flexible(Path(p))
+            cnt = int(len(df_log)) if df_log is not None else 0
         except Exception:
             cnt = 0
 
@@ -1082,20 +1081,159 @@ FAQに該当がありませんでした。
 """.strip()
 
 
-def log_nohit(question: str):
+
+def _ensure_nohit_schema(path: Path):
+    """既存nohit CSVが旧形式（timestamp,questionのみ）でも、新スキーマに移行する。"""
+    cols = ["timestamp", "question", "device", "location", "network", "error_text", "impact", "channel"]
+    if not path.exists():
+        return cols
+
+    try:
+        # 先頭行だけ見る（軽量）
+        with path.open("r", encoding="utf-8", errors="ignore") as f:
+            header = f.readline().strip()
+        header_cols = [h.strip() for h in header.split(",")] if header else []
+    except Exception:
+        header_cols = []
+
+    # すでに新スキーマなら何もしない
+    if set(cols).issubset(set(header_cols)):
+        return header_cols
+
+    # 移行：既存を読み取り→新ヘッダで書き直し
+    try:
+        old_df = read_csv_flexible(path)
+        if old_df is None:
+            old_df = pd.DataFrame()
+    except Exception:
+        old_df = pd.DataFrame()
+
+    if len(old_df) == 0:
+        # 空なら新ヘッダで作り直す
+        with path.open("w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(cols)
+        return cols
+
+    qcol = pick_question_column(old_df.columns) or ("question" if "question" in old_df.columns else None)
+    tcol = "timestamp" if "timestamp" in old_df.columns else None
+
+    rows = []
+    for _, r in old_df.iterrows():
+        ts = str(r.get(tcol, "")).strip() if tcol else ""
+        q = str(r.get(qcol, "")).strip() if qcol else ""
+        if not q:
+            continue
+        rows.append([ts, q, "", "", "", "", "", ""])
+
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(cols)
+        w.writerows(rows)
+
+    return cols
+
+
+def log_nohit(question: str, extra: dict | None = None) -> str:
+    """該当なしログを追記して、記録したtimestamp（秒）を返す。"""
     if not question:
-        return
+        return ""
+    extra = extra or {}
     day = datetime.now().strftime("%Y%m%d")
     path = LOG_DIR / f"nohit_{day}.csv"
+    cols = _ensure_nohit_schema(path)
+
+    ts = datetime.now().isoformat(timespec="seconds")
+    row = {
+        "timestamp": ts,
+        "question": question,
+        "device": extra.get("device", ""),
+        "location": extra.get("location", ""),
+        "network": extra.get("network", ""),
+        "error_text": extra.get("error_text", ""),
+        "impact": extra.get("impact", ""),
+        "channel": extra.get("channel", "web"),
+    }
+
     try:
         is_new = not path.exists()
         with path.open("a", encoding="utf-8", newline="") as f:
             w = csv.writer(f)
             if is_new:
-                w.writerow(["timestamp", "question"])
-            w.writerow([datetime.now().isoformat(timespec="seconds"), question])
+                w.writerow(cols)
+            w.writerow([row.get(c, "") for c in cols])
     except Exception:
         pass
+    return ts
+
+
+def update_nohit_record(day: str, timestamp: str, question: str, extra: dict) -> bool:
+    """同じday/timestamp/question の行があれば更新。無ければ追記。"""
+    if not day or not timestamp or not question:
+        return False
+    path = LOG_DIR / f"nohit_{day}.csv"
+    cols = _ensure_nohit_schema(path)
+
+    try:
+        df_log = read_csv_flexible(path)
+        if df_log is None:
+            df_log = pd.DataFrame(columns=cols)
+    except Exception:
+        df_log = pd.DataFrame(columns=cols)
+
+    # 必須列を揃える
+    for c in cols:
+        if c not in df_log.columns:
+            df_log[c] = ""
+
+    # 既存行を更新（最初の一致）
+    mask = (df_log["timestamp"].astype(str) == str(timestamp)) & (df_log["question"].astype(str) == str(question))
+    idxs = df_log.index[mask].tolist()
+    if idxs:
+        i = idxs[0]
+        for k, v in (extra or {}).items():
+            if k in df_log.columns:
+                df_log.at[i, k] = v
+        df_log.at[i, "channel"] = extra.get("channel", df_log.at[i, "channel"] or "web")
+    else:
+        # 無ければ追記
+        row = {c: "" for c in cols}
+        row["timestamp"] = timestamp
+        row["question"] = question
+        for k, v in (extra or {}).items():
+            if k in row:
+                row[k] = v
+        if not row.get("channel"):
+            row["channel"] = "web"
+        df_log = pd.concat([df_log, pd.DataFrame([row])], ignore_index=True)
+
+    # UTF-8で書き戻す（Excel対応ならutf-8-sigでもOK）
+    try:
+        with path.open("w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(cols)
+            for _, r in df_log[cols].iterrows():
+                w.writerow([str(r.get(c, "")) for c in cols])
+        return True
+    except Exception:
+        return False
+
+
+def seed_nohit_questions(n: int = 20) -> int:
+    """本番前のデモ用：情シス定番のnohit質問を今日のログに追加する。"""
+    seeds = [
+        "VPNにつながらない", "Outlookの送受信ができない", "Teamsにログインできない", "パスワードを忘れた",
+        "アカウントがロックされた", "共有フォルダにアクセスできない", "プリンタが印刷できない", "Wi-Fiが頻繁に切れる",
+        "PCが重い", "PCが固まる", "Excelが起動しない", "Excelがフリーズする", "OneDriveが同期しない",
+        "メール添付ファイルが開けない", "二段階認証が通らない", "カメラが映らない", "マイクが認識されない",
+        "ソフトのインストール申請方法が分からない", "Windows更新が終わらない", "画面が真っ黒になる",
+    ]
+    added = 0
+    for q in seeds[:n]:
+        ts = log_nohit(q, {"channel": "seed"})
+        if ts:
+            added += 1
+    return added
 
 
 
@@ -1346,6 +1484,15 @@ with st.sidebar:
                 max_q = st.slider("生成に使う質問数（重複除外後）", 10, 200, 60, step=10)
                 n_items = st.slider("生成するFAQ件数", 3, 20, 8)
 
+                col_seed1, col_seed2 = st.columns([2, 3])
+                with col_seed1:
+                    if st.button("🧪 デモ用に定番質問を追加（20件）"):
+                        added = seed_nohit_questions(20)
+                        st.success(f"nohitログに {added} 件追加しました。")
+                        st.rerun()
+                with col_seed2:
+                    st.caption("※ 本番前にFAQ生成を試すためのテストデータです（channel=seedで記録）。")
+
                 if st.button("🤖 FAQ案を自動生成", type="primary"):
                     with st.spinner("FAQ案を生成中..."):
                         qs = load_nohit_questions_from_logs([picked_path], max_questions=max_q)
@@ -1480,9 +1627,12 @@ if user_q:
     if best_score < MIN_SCORE:
         used_hits = []
         answer = nohit_template()
-        log_nohit(user_q)
+        ts_nohit = log_nohit(user_q)
+        st.session_state["last_nohit"] = {"day": datetime.now().strftime("%Y%m%d"), "timestamp": ts_nohit, "question": user_q}
+        was_nohit = True
     else:
         used_hits = hits
+        was_nohit = False
         prompt = build_prompt(user_q, hits)
         try:
             answer = llm_chat(
@@ -1508,6 +1658,40 @@ if user_q:
     with st.chat_message("assistant"):
         answer_html = str(answer).replace("\n", "<br>")
         st.markdown(f'<div class="answerbox">{answer_html}</div>', unsafe_allow_html=True)
+
+        if 'was_nohit' in locals() and was_nohit:
+            with st.expander("📝 追加情報を記録（任意）", expanded=True):
+                st.caption("該当なしのときだけ、状況を少しだけ補足するとFAQが育ちやすくなります。")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    device = st.selectbox("端末", ["", "Windows", "Mac", "iPhone/iPad", "Android", "不明"], index=0)
+                with c2:
+                    location = st.selectbox("利用場所", ["", "社内", "社外", "不明"], index=0)
+                with c3:
+                    network = st.selectbox("ネットワーク", ["", "Wi-Fi", "有線", "VPN", "モバイル回線", "不明"], index=0)
+
+                impact = st.selectbox("影響範囲", ["", "自分のみ", "他の人も", "不明"], index=0)
+                error_text = st.text_area("エラー内容（任意）", placeholder="例：0x80190001 / '資格情報が無効です' など")
+
+                if st.button("✅ この内容で記録", type="primary"):
+                    info = st.session_state.get("last_nohit", {})
+                    ok = update_nohit_record(
+                        day=str(info.get("day", "")),
+                        timestamp=str(info.get("timestamp", "")),
+                        question=str(info.get("question", "")),
+                        extra={
+                            "device": device,
+                            "location": location,
+                            "network": network,
+                            "impact": impact,
+                            "error_text": error_text,
+                            "channel": "web",
+                        },
+                    )
+                    if ok:
+                        st.success("追加情報をログに保存しました。ありがとうございます！")
+                    else:
+                        st.warning("保存に失敗しました（もう一度お試しください）。")
 
     st.session_state.messages.append({"role": "assistant", "content": str(answer)})
 
