@@ -1159,12 +1159,12 @@ def generate_faq_candidates(nohit_questions: list[str], n_items: int = 8) -> pd.
     if not nohit_questions:
         return pd.DataFrame(columns=["category", "question", "answer"])
 
-    # 入力が長すぎると落ちるので上限（件数はログ量に応じて可変）
+    # 入力が長すぎると落ちるので上限
     max_in = min(len(nohit_questions), 80)
     sample = nohit_questions[:max_in]
+    examples = "\n".join([f"- {q}" for q in sample])
 
-    prompt = f"""
-あなたは社内情シスのベテラン担当です。
+    prompt = f"""あなたは社内情シスのベテラン担当です。
 以下は『FAQに該当なし』として蓄積された、社員からの問い合わせ例です。
 
 【目的】
@@ -1181,15 +1181,13 @@ def generate_faq_candidates(nohit_questions: list[str], n_items: int = 8) -> pd.
 
 【出力JSON形式】
 [
-  {{"category":"VPN", "question":"...", "answer":"- ...
-- ..."}},
+  {{"category":"VPN", "question":"...", "answer":"- ...\n- ..."}},
   ...
 ]
 
 【問い合わせ例】
-""" + "
-".join([f"- {q}" for q in sample]) + "
-"
+{examples}
+"""
 
     out = llm_chat(
         [
@@ -1198,10 +1196,8 @@ def generate_faq_candidates(nohit_questions: list[str], n_items: int = 8) -> pd.
         ]
     )
 
-    # 文字列化（LLMがdict等を返しても落とさない）
     out_text = out if isinstance(out, str) else str(out)
 
-    # JSON抽出→パース（フェンス/余計な文言対策）
     json_text = extract_json_array(out_text) or out_text.strip()
 
     try:
@@ -1209,7 +1205,6 @@ def generate_faq_candidates(nohit_questions: list[str], n_items: int = 8) -> pd.
         if not isinstance(data, list):
             raise ValueError("JSON is not a list")
     except Exception:
-        # JSONが崩れたときは、最低限落とさず空で返す
         return pd.DataFrame(columns=["category", "question", "answer"])
 
     rows = []
@@ -1224,7 +1219,6 @@ def generate_faq_candidates(nohit_questions: list[str], n_items: int = 8) -> pd.
         rows.append({"category": cat, "question": q, "answer": a})
 
     return pd.DataFrame(rows, columns=["category", "question", "answer"])
-
 
 def append_faq_csv(faq_path: Path, new_df: pd.DataFrame) -> int:
     """faq.csv に追記。重複（question）をざっくり除外して追記件数を返す。"""
