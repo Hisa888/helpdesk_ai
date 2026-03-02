@@ -1668,13 +1668,14 @@ if st.session_state.get("pending_nohit_active"):
                     st.session_state["pending_nohit_active"] = False
                 else:
                     st.warning("保存に失敗しました（もう一度お試しください）。")
-user_q = chat_typed or st.session_state.pending_q
-used_pending = (not chat_typed) and bool(st.session_state.pending_q)
-
 # 先に chat_input を描画（画面下に固定されます）
 chat_typed = st.chat_input("質問を入力してください")
 
+# 入力が無いときは pending_q（おすすめボタン等）を使う
+user_q = (chat_typed or st.session_state.get("pending_q", ""))
 
+# 「おすすめ質問」など pending_q から来たかどうか
+used_pending = (not chat_typed) and bool(st.session_state.get("pending_q", ""))
 
 if user_q:
     st.session_state.pending_q = ""
