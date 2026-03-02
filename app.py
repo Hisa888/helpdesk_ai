@@ -5,6 +5,75 @@ import csv
 import io
 import zipfile
 
+# ===== CSV読み込みを頑丈にする（文字コード/区切り/カラム揺れ対策）=====
+def read_csv_flexible(path: Path) -> pd.DataFrame:
+    """CSVをできる限り失敗しないで読む（UTF-8/UTF-8-SIG/CP932等 + delimiter推定）。"""
+    # まずは生bytesを読む
+    raw = path.read_bytes()
+    # 文字コード候補
+    encs = ["utf-8", "utf-8-sig", "cp932", "shift_jis"]
+    last_err = None
+    text = None
+    for enc in encs:
+        try:
+            text = raw.decode(enc)
+            break
+        except Exception as e:
+            last_err = e
+            continue
+    if text is None:
+        # 最終手段：latin1で無理やり
+        text = raw.decode("latin1", errors="ignore")
+
+    # delimiter推定（csv.Snifferが失敗する場合もあるのでガード）
+    import csv as _csv
+    sample = text[:5000]
+    delim = ","
+    try:
+        dialect = _csv.Sniffer().sniff(sample, delimiters=[",", "\t", ";", "|"])
+        delim = dialect.delimiter
+    except Exception:
+        # 行にタブが多ければタブ、それ以外はカンマ
+        if sample.count("\t") > sample.count(","):
+            delim = "\t"
+
+    # pandasで読む（on_bad_linesはpandas2系で有効）
+    try:
+        return pd.read_csv(io.StringIO(text), sep=delim, engine="python", on_bad_lines="skip")
+    except Exception:
+        try:
+            return pd.read_csv(io.StringIO(text), sep=delim, engine="python")
+        except Exception:
+            # それでもダメなら空
+            return pd.DataFrame()
+
+def pick_question_column(cols) -> str | None:
+    """質問カラム名の揺れを吸収"""
+    cand = [
+        "question", "質問", "問い合わせ", "問合せ", "query", "user_question",
+        "content", "text"
+    ]
+    for c in cand:
+        if c in cols:
+            return c
+    # 大文字小文字無視
+    lower_map = {str(c).lower(): c for c in cols}
+    for c in cand:
+        if c.lower() in lower_map:
+            return lower_map[c.lower()]
+    return None
+
+def extract_json_array(text: str) -> str | None:
+    """LLM出力から最初のJSON配列（[...]）を抜き出す。"""
+    if not text:
+        return None
+    s = str(text).strip()
+    # ```json ... ``` を除去
+    s = re.sub(r"^```(?:json)?\s*|\s*```$", "", s.strip(), flags=re.IGNORECASE)
+    # 先頭から最初の [ ... ] を抽出（DOTALL）
+    m = re.search(r"\[[\s\S]*\]", s)
+    return m.group(0).strip() if m else None
+
 # ===== PDF生成（ReportLab）===== 
 REPORTLAB_AVAILABLE = False
 try:
@@ -1054,16 +1123,22 @@ def normalize_question(q: str) -> str:
     return q.strip()
 
 
+
 def load_nohit_questions_from_logs(files, max_questions: int = 100) -> list[str]:
-    """nohit_*.csv から質問を収集（新しいログから優先）。"""
+    """nohit_*.csv から質問を収集（新しいログから優先）。文字コード/カラム揺れに強く読む。"""
     questions: list[str] = []
     seen: set[str] = set()
     for p in files:
         try:
-            _df = pd.read_csv(p, encoding="utf-8", engine="python", on_bad_lines="skip")
-            if "question" not in _df.columns:
+            _df = read_csv_flexible(Path(p))
+            if _df is None or len(_df) == 0:
                 continue
-            for q in _df["question"].fillna("").astype(str).tolist():
+
+            qcol = pick_question_column(_df.columns)
+            if not qcol:
+                continue
+
+            for q in _df[qcol].fillna("").astype(str).tolist():
                 nq = normalize_question(q)
                 if not nq:
                     continue
@@ -1078,13 +1153,15 @@ def load_nohit_questions_from_logs(files, max_questions: int = 100) -> list[str]
     return questions
 
 
+
 def generate_faq_candidates(nohit_questions: list[str], n_items: int = 8) -> pd.DataFrame:
     """該当なしログからFAQ案を生成してDataFrameで返す（category/question/answer）。"""
     if not nohit_questions:
         return pd.DataFrame(columns=["category", "question", "answer"])
 
-    # 入力が長すぎると落ちるので上限
-    sample = nohit_questions[:40]
+    # 入力が長すぎると落ちるので上限（件数はログ量に応じて可変）
+    max_in = min(len(nohit_questions), 80)
+    sample = nohit_questions[:max_in]
 
     prompt = f"""
 あなたは社内情シスのベテラン担当です。
@@ -1100,25 +1177,35 @@ def generate_faq_candidates(nohit_questions: list[str], n_items: int = 8) -> pd.
 - 個人情報や会社固有の秘密情報は作らない
 - できるだけ汎用的（どの会社でも通用）に
 - 出力は必ずJSONのみ（前後に説明文を入れない）
+- コードブロック ``` は使わない
 
 【出力JSON形式】
 [
-  {{"category":"VPN", "question":"...", "answer":"- ...\n- ..."}},
+  {{"category":"VPN", "question":"...", "answer":"- ...
+- ..."}},
   ...
 ]
 
 【問い合わせ例】
-""" + "\n".join([f"- {q}" for q in sample]) + "\n"
+""" + "
+".join([f"- {q}" for q in sample]) + "
+"
 
     out = llm_chat(
         [
-            {"role": "system", "content": "あなたは情シスのFAQ作成者です。"},
+            {"role": "system", "content": "あなたは情シスのFAQ作成者です。出力はJSONのみ。"},
             {"role": "user", "content": prompt},
         ]
     )
 
+    # 文字列化（LLMがdict等を返しても落とさない）
+    out_text = out if isinstance(out, str) else str(out)
+
+    # JSON抽出→パース（フェンス/余計な文言対策）
+    json_text = extract_json_array(out_text) or out_text.strip()
+
     try:
-        data = json.loads(out)
+        data = json.loads(json_text)
         if not isinstance(data, list):
             raise ValueError("JSON is not a list")
     except Exception:
@@ -1262,11 +1349,18 @@ with st.sidebar:
                 if st.button("🤖 FAQ案を自動生成", type="primary"):
                     with st.spinner("FAQ案を生成中..."):
                         qs = load_nohit_questions_from_logs([picked_path], max_questions=max_q)
-                        try:
-                            gen_df = generate_faq_candidates(qs, n_items=n_items)
-                        except Exception:
-                            gen_df = pd.DataFrame(columns=["category", "question", "answer"])
-                        st.session_state.generated_faq_df = gen_df
+
+                        # 生成前に「有効質問数」を可視化（原因切り分け）
+                        st.info(f"ログから抽出できた有効質問数（重複除外後）：{len(qs)} 件")
+                        if len(qs) < 5:
+                            st.session_state.generated_faq_df = pd.DataFrame(columns=["category", "question", "answer"])
+                            st.warning("有効な質問が少なすぎてFAQを生成できません。ログのCSV形式（カラム名/文字コード/区切り）を確認してください。")
+                        else:
+                            try:
+                                gen_df = generate_faq_candidates(qs, n_items=n_items)
+                            except Exception:
+                                gen_df = pd.DataFrame(columns=["category", "question", "answer"])
+                            st.session_state.generated_faq_df = gen_df
 
                 gen_df = st.session_state.get("generated_faq_df")
                 if isinstance(gen_df, pd.DataFrame) and len(gen_df) > 0:
