@@ -1608,6 +1608,70 @@ if c3.button("🌐 VPNに接続できない"):
 # ======================
 # 先に chat_input を必ず描画（pending_q があっても入力欄が消えないようにする）
 chat_typed = st.chat_input("質問を入力してください")
+
+
+# ===== 該当なし（nohit）の追加情報フォーム：rerunしても消えない =====
+if st.session_state.get("pending_nohit_active"):
+    info = st.session_state.get("pending_nohit", {}) or {}
+    with st.expander("📝 追加情報を記録（任意）", expanded=True):
+        st.caption("該当なしのときだけ、状況を少しだけ補足するとFAQが育ちやすくなります。")
+        with st.form("nohit_extra_form", clear_on_submit=False):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                device = st.selectbox(
+                    "端末",
+                    ["", "Windows", "Mac", "iPhone/iPad", "Android", "不明"],
+                    index=0,
+                    key="nohit_device",
+                )
+            with c2:
+                location = st.selectbox(
+                    "利用場所",
+                    ["", "社内", "社外", "不明"],
+                    index=0,
+                    key="nohit_location",
+                )
+            with c3:
+                network = st.selectbox(
+                    "ネットワーク",
+                    ["", "Wi-Fi", "有線", "VPN", "モバイル回線", "不明"],
+                    index=0,
+                    key="nohit_network",
+                )
+
+            impact = st.selectbox(
+                "影響範囲",
+                ["", "自分のみ", "他の人も", "不明"],
+                index=0,
+                key="nohit_impact",
+            )
+            error_text = st.text_area(
+                "エラー内容（任意）",
+                placeholder="例：0x80190001 / '資格情報が無効です' など",
+                key="nohit_error_text",
+            )
+
+            submitted = st.form_submit_button("✅ この内容で記録")
+            if submitted:
+                ok = update_nohit_record(
+                    day=str(info.get("day", "")),
+                    timestamp=str(info.get("timestamp", "")),
+                    question=str(info.get("question", "")),
+                    extra={
+                        "device": device,
+                        "location": location,
+                        "network": network,
+                        "impact": impact,
+                        "error_text": error_text,
+                        "channel": "web",
+                    },
+                )
+                if ok:
+                    st.success("追加情報をログに保存しました。ありがとうございます！")
+                    # 次回rerunではフォームを消す
+                    st.session_state["pending_nohit_active"] = False
+                else:
+                    st.warning("保存に失敗しました（もう一度お試しください）。")
 user_q = chat_typed or st.session_state.pending_q
 used_pending = (not chat_typed) and bool(st.session_state.pending_q)
 
@@ -1660,38 +1724,10 @@ if user_q:
         st.markdown(f'<div class="answerbox">{answer_html}</div>', unsafe_allow_html=True)
 
         if 'was_nohit' in locals() and was_nohit:
-            with st.expander("📝 追加情報を記録（任意）", expanded=True):
-                st.caption("該当なしのときだけ、状況を少しだけ補足するとFAQが育ちやすくなります。")
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    device = st.selectbox("端末", ["", "Windows", "Mac", "iPhone/iPad", "Android", "不明"], index=0)
-                with c2:
-                    location = st.selectbox("利用場所", ["", "社内", "社外", "不明"], index=0)
-                with c3:
-                    network = st.selectbox("ネットワーク", ["", "Wi-Fi", "有線", "VPN", "モバイル回線", "不明"], index=0)
-
-                impact = st.selectbox("影響範囲", ["", "自分のみ", "他の人も", "不明"], index=0)
-                error_text = st.text_area("エラー内容（任意）", placeholder="例：0x80190001 / '資格情報が無効です' など")
-
-                if st.button("✅ この内容で記録", type="primary"):
-                    info = st.session_state.get("last_nohit", {})
-                    ok = update_nohit_record(
-                        day=str(info.get("day", "")),
-                        timestamp=str(info.get("timestamp", "")),
-                        question=str(info.get("question", "")),
-                        extra={
-                            "device": device,
-                            "location": location,
-                            "network": network,
-                            "impact": impact,
-                            "error_text": error_text,
-                            "channel": "web",
-                        },
-                    )
-                    if ok:
-                        st.success("追加情報をログに保存しました。ありがとうございます！")
-                    else:
-                        st.warning("保存に失敗しました（もう一度お試しください）。")
+            # 「該当なし」のとき、追加情報フォームを"次のrerunでも"表示できるように保持
+            st.session_state["pending_nohit_active"] = True
+            st.session_state["pending_nohit"] = st.session_state.get("last_nohit", {})
+            st.info("該当なしログに追加しました。必要なら下の『追加情報を記録』で状況を補足できます。")
 
     st.session_state.messages.append({"role": "assistant", "content": str(answer)})
 
