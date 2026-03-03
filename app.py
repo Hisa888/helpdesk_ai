@@ -1603,15 +1603,11 @@ if c3.button("🌐 VPNに接続できない"):
     st.rerun()
 
 
-# ======================
-# 入力 → 検索 → 回答
-# ======================
-# ===== 該当なし（nohit）の追加情報フォーム：rerunしても消えない =====
-if st.session_state.get("pending_nohit_active"):
-    # フォーム表示に入ったら、強制rerunフラグを解除（次の該当なしで再度使えるように）
-    st.session_state.pop("_nohit_force_form_shown", None)
-    info = st.session_state.get("pending_nohit", {}) or {}
-    with st.expander("📝 追加情報を記録（任意）", expanded=True):
+
+def render_nohit_extra_form(info: dict | None = None, expanded: bool = True):
+    """『該当なし』直後に表示する追加情報フォーム（端末/利用場所/ネットワーク等）。"""
+    info = info or (st.session_state.get("pending_nohit", {}) or {})
+    with st.expander("📝 追加情報を記録（任意）", expanded=expanded):
         st.caption("該当なしのときだけ、状況を少しだけ補足するとFAQが育ちやすくなります。")
         with st.form("nohit_extra_form", clear_on_submit=False):
             c1, c2, c3 = st.columns(3)
@@ -1666,11 +1662,19 @@ if st.session_state.get("pending_nohit_active"):
                 )
                 if ok:
                     st.success("追加情報をログに保存しました。ありがとうございます！")
-                    # 次回rerunではフォームを消す
+                    # 次回以降はフォームを閉じる（保持は消す）
                     st.session_state["pending_nohit_active"] = False
-                    st.session_state.pop("_nohit_force_form_shown", None)
                 else:
                     st.warning("保存に失敗しました（もう一度お試しください）。")
+
+
+# ======================
+# 入力 → 検索 → 回答
+# ======================
+# ===== 該当なし（nohit）の追加情報フォーム =====
+if st.session_state.get("pending_nohit_active"):
+    render_nohit_extra_form(expanded=True)
+
 # 先に chat_input を描画（画面下に固定されます）
 chat_typed = st.chat_input("質問を入力してください")
 
@@ -1733,10 +1737,8 @@ if user_q:
             st.session_state["pending_nohit_active"] = True
             st.session_state["pending_nohit"] = st.session_state.get("last_nohit", {})
             st.info("該当なしログに追加しました。必要なら下の『追加情報を記録』で状況を補足できます。")
-            # 直後にフォームを表示するため、1回だけ rerun する（入力送信直後でもフォームが見えるように）
-            if not st.session_state.get("_nohit_force_form_shown", False):
-                st.session_state["_nohit_force_form_shown"] = True
-                st.rerun()
+            # 送信直後（この実行）でも必ずフォームを表示
+            render_nohit_extra_form(info=st.session_state.get('pending_nohit', {}), expanded=True)
 
     st.session_state.messages.append({"role": "assistant", "content": str(answer)})
 
