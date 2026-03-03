@@ -1608,6 +1608,8 @@ if c3.button("🌐 VPNに接続できない"):
 # ======================
 # ===== 該当なし（nohit）の追加情報フォーム：rerunしても消えない =====
 if st.session_state.get("pending_nohit_active"):
+    # フォーム表示に入ったら、強制rerunフラグを解除（次の該当なしで再度使えるように）
+    st.session_state.pop("_nohit_force_form_shown", None)
     info = st.session_state.get("pending_nohit", {}) or {}
     with st.expander("📝 追加情報を記録（任意）", expanded=True):
         st.caption("該当なしのときだけ、状況を少しだけ補足するとFAQが育ちやすくなります。")
@@ -1666,6 +1668,7 @@ if st.session_state.get("pending_nohit_active"):
                     st.success("追加情報をログに保存しました。ありがとうございます！")
                     # 次回rerunではフォームを消す
                     st.session_state["pending_nohit_active"] = False
+                    st.session_state.pop("_nohit_force_form_shown", None)
                 else:
                     st.warning("保存に失敗しました（もう一度お試しください）。")
 # 先に chat_input を描画（画面下に固定されます）
@@ -1730,6 +1733,10 @@ if user_q:
             st.session_state["pending_nohit_active"] = True
             st.session_state["pending_nohit"] = st.session_state.get("last_nohit", {})
             st.info("該当なしログに追加しました。必要なら下の『追加情報を記録』で状況を補足できます。")
+            # 直後にフォームを表示するため、1回だけ rerun する（入力送信直後でもフォームが見えるように）
+            if not st.session_state.get("_nohit_force_form_shown", False):
+                st.session_state["_nohit_force_form_shown"] = True
+                st.rerun()
 
     st.session_state.messages.append({"role": "assistant", "content": str(answer)})
 
