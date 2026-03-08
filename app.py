@@ -161,6 +161,38 @@ def make_logs_zip(files):
     buf.seek(0)
     return buf.getvalue()
 
+
+def ensure_faq_schema(df: pd.DataFrame) -> pd.DataFrame:
+    """faq.csv の列ゆれを吸収して question/answer/category に正規化する。"""
+    if df is None:
+        return pd.DataFrame(columns=["question", "answer", "category"])
+
+    df = df.copy()
+    col_map = {}
+    for c in df.columns:
+        cl = str(c).strip().lower()
+        if cl in ["question", "質問", "問い合わせ", "問合せ", "query", "user_question"]:
+            col_map[c] = "question"
+        elif cl in ["answer", "回答", "response", "reply"]:
+            col_map[c] = "answer"
+        elif cl in ["category", "カテゴリ", "分類"]:
+            col_map[c] = "category"
+
+    if col_map:
+        df = df.rename(columns=col_map)
+
+    for col in ["question", "answer", "category"]:
+        if col not in df.columns:
+            df[col] = ""
+
+    df = df[["question", "answer", "category"]].copy()
+    df["question"] = df["question"].fillna("").astype(str).str.strip()
+    df["answer"] = df["answer"].fillna("").astype(str).str.strip()
+    df["category"] = df["category"].fillna("").astype(str).str.strip()
+    df = df[(df["question"] != "") & (df["answer"] != "")].reset_index(drop=True)
+    return df
+
+
 # =========================
 # 管理者向けPDF（操作説明書 / 提案資料）
 # =========================
@@ -1469,6 +1501,71 @@ with st.sidebar:
                     )
                 st.caption("※ どちらもアプリの現状に合わせて自動生成されます（必要に応じて文面はカスタマイズ可能）。")
 
+        with st.expander("📂 FAQ管理（ダウンロード / アップロード）", expanded=True):
+            st.caption("検証用に faq.csv をそのまま取得・差し替えできます。アップロード後はFAQ検索へ即反映します。")
+
+            faq_exists = FAQ_PATH.exists()
+            if faq_exists:
+                try:
+                    faq_bytes = FAQ_PATH.read_bytes()
+                except Exception:
+                    faq_bytes = b""
+
+                st.download_button(
+                    "⬇ 現在の faq.csv をダウンロード",
+                    data=faq_bytes,
+                    file_name="faq.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    key="download_faq_csv_admin",
+                )
+
+                try:
+                    faq_preview_df = ensure_faq_schema(read_csv_flexible(FAQ_PATH))
+                    st.caption(f"現在のFAQ件数: {len(faq_preview_df)} 件")
+                    if len(faq_preview_df) > 0:
+                        st.dataframe(faq_preview_df.head(10), use_container_width=True, hide_index=True)
+                except Exception:
+                    st.caption("faq.csv のプレビュー取得に失敗しました。")
+            else:
+                st.warning("faq.csv がまだ存在しません。下のアップロードから新規作成できます。")
+
+            uploaded_faq = st.file_uploader(
+                "faq.csv をアップロード（置き換え）",
+                type=["csv"],
+                accept_multiple_files=False,
+                key="faq_csv_uploader_admin",
+                help="question, answer, category 列を推奨。日本語列名（質問/回答/カテゴリ）でも取り込みます。",
+            )
+
+            if uploaded_faq is not None:
+                try:
+                    raw = uploaded_faq.getvalue()
+                    tmp_path = LOG_DIR / f"_tmp_{uuid.uuid4().hex}.csv"
+                    tmp_path.write_bytes(raw)
+                    incoming_df = ensure_faq_schema(read_csv_flexible(tmp_path))
+                    try:
+                        tmp_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+                    if len(incoming_df) == 0:
+                        st.error("アップロードされたCSVから有効なFAQを読み取れませんでした。question/answer 列を確認してください。")
+                    else:
+                        st.success(f"アップロード確認OK: {len(incoming_df)} 件のFAQを検出しました。")
+                        st.dataframe(incoming_df.head(10), use_container_width=True, hide_index=True)
+
+                        if st.button("📤 この内容で faq.csv を置き換える", type="primary", use_container_width=True, key="replace_faq_csv_admin"):
+                            incoming_df.to_csv(FAQ_PATH, index=False, encoding="utf-8")
+                            try:
+                                load_faq_index.clear()
+                            except Exception:
+                                pass
+                            st.success(f"faq.csv を更新しました（{len(incoming_df)} 件）。")
+                            st.rerun()
+                except Exception as e:
+                    st.error(f"FAQアップロード処理でエラー: {e}")
+
         st.markdown("---")
         with st.expander("🧠 FAQ自動生成（該当なしログ → FAQ案）", expanded=False):
             st.caption("『該当なし』ログからFAQを自動生成し、faq.csvへ追記できます。")
@@ -1525,6 +1622,10 @@ with st.sidebar:
                             added = append_faq_csv(FAQ_PATH, edited.rename(columns={"category": "category"}))
                             if added > 0:
                                 st.success(f"faq.csv に {added} 件追記しました。")
+                                try:
+                                    load_faq_index.clear()
+                                except Exception:
+                                    pass
                                 # 反映のため再読み込み
                                 st.session_state.generated_faq_df = pd.DataFrame()
                                 st.rerun()
