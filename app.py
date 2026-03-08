@@ -10,6 +10,7 @@ import uuid
 import csv
 import io
 import zipfile
+import base64
 
 # ===== CSV読み込みを頑丈にする（文字コード/区切り/カラム揺れ対策）=====
 def read_csv_flexible(path: Path) -> pd.DataFrame:
@@ -310,6 +311,8 @@ def save_faq_csv_full(faq_path: Path, df: pd.DataFrame) -> int:
     clean = normalize_faq_columns(df)
     faq_path.parent.mkdir(parents=True, exist_ok=True)
     clean.to_csv(faq_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_ALL)
+    if faq_path == FAQ_PATH:
+        persist_faq_now()
     return len(clean)
 
 # ===== PDF生成（ReportLab）===== 
@@ -341,9 +344,12 @@ from services.llm_router import chat as llm_chat
 # ======================
 # 基本設定
 # ======================
-FAQ_PATH = Path("faq.csv")
-LOG_DIR = Path("logs")
-LOG_DIR.mkdir(exist_ok=True)
+ROOT_DIR = Path(".")
+ROOT_FAQ_PATH = ROOT_DIR / "faq.csv"
+DATA_DIR = ROOT_DIR / "runtime_data"
+FAQ_PATH = DATA_DIR / "faq.csv"
+LOG_DIR = DATA_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # ======================
 # 営業用UI設定（secrets / 環境変数で上書き可）
@@ -370,6 +376,149 @@ def build_contact_link() -> str:
         # 件名などは最低限。必要なら後で増やせます。
         return f"mailto:{CONTACT_EMAIL}?subject=情シス問い合わせAI%20導入相談"
     return ""
+
+
+# ======================
+# 永続化設定（v13: GitHub連携対応）
+# ======================
+PERSIST_MODE = _get_setting("PERSIST_MODE", "local").strip().lower()
+GITHUB_TOKEN = _get_setting("GITHUB_TOKEN", "").strip()
+GITHUB_REPO = _get_setting("GITHUB_REPO", "").strip()  # owner/repo
+GITHUB_BRANCH = _get_setting("GITHUB_BRANCH", "main").strip() or "main"
+GITHUB_BASE_PATH = _get_setting("GITHUB_BASE_PATH", "streamlit_data").strip().strip("/")
+
+
+def github_persistence_enabled() -> bool:
+    return PERSIST_MODE == "github" and bool(GITHUB_TOKEN and GITHUB_REPO)
+
+
+def persistence_status_text() -> str:
+    if github_persistence_enabled():
+        return f"GitHub永続化: ON（{GITHUB_REPO}@{GITHUB_BRANCH} / {GITHUB_BASE_PATH}）"
+    return "ローカル保存のみ（Streamlit Cloud の Reboot で消える可能性があります）"
+
+
+def _remote_relpath(local_path: Path) -> str:
+    try:
+        rel = local_path.resolve().relative_to(DATA_DIR.resolve())
+    except Exception:
+        rel = Path(local_path.name)
+    return rel.as_posix()
+
+
+def _github_api_url(rel_path: str) -> str:
+    rel_path = rel_path.strip("/")
+    full_path = f"{GITHUB_BASE_PATH}/{rel_path}" if GITHUB_BASE_PATH else rel_path
+    return f"https://api.github.com/repos/{GITHUB_REPO}/contents/{full_path}"
+
+
+def _github_headers() -> dict:
+    return {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def github_download_file(rel_path: str, local_path: Path) -> bool:
+    if not github_persistence_enabled():
+        return False
+    try:
+        res = requests.get(_github_api_url(rel_path), headers=_github_headers(), params={"ref": GITHUB_BRANCH}, timeout=20)
+        if res.status_code != 200:
+            return False
+        data = res.json()
+        content = data.get("content", "")
+        encoding = data.get("encoding", "")
+        if encoding != "base64" or not content:
+            return False
+        raw = base64.b64decode(content)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        local_path.write_bytes(raw)
+        return True
+    except Exception:
+        return False
+
+
+def github_upload_file(local_path: Path, rel_path: str | None = None, commit_message: str | None = None) -> bool:
+    if not github_persistence_enabled() or not local_path.exists():
+        return False
+    rel_path = rel_path or _remote_relpath(local_path)
+    try:
+        existing_sha = None
+        get_res = requests.get(_github_api_url(rel_path), headers=_github_headers(), params={"ref": GITHUB_BRANCH}, timeout=20)
+        if get_res.status_code == 200:
+            existing_sha = get_res.json().get("sha")
+
+        raw = local_path.read_bytes()
+        payload = {
+            "message": commit_message or f"Update {rel_path} from Streamlit app",
+            "content": base64.b64encode(raw).decode("ascii"),
+            "branch": GITHUB_BRANCH,
+        }
+        if existing_sha:
+            payload["sha"] = existing_sha
+        put_res = requests.put(_github_api_url(rel_path), headers=_github_headers(), json=payload, timeout=25)
+        return put_res.status_code in (200, 201)
+    except Exception:
+        return False
+
+
+def github_list_dir(rel_dir: str) -> list[str]:
+    if not github_persistence_enabled():
+        return []
+    try:
+        res = requests.get(_github_api_url(rel_dir), headers=_github_headers(), params={"ref": GITHUB_BRANCH}, timeout=20)
+        if res.status_code != 200:
+            return []
+        data = res.json()
+        if not isinstance(data, list):
+            return []
+        return [str(item.get("path", "")) for item in data if item.get("type") == "file"]
+    except Exception:
+        return []
+
+
+def bootstrap_persistent_storage():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 初回はリポジトリ同梱のfaq.csvをruntimeへコピー
+    if not FAQ_PATH.exists() and ROOT_FAQ_PATH.exists():
+        try:
+            FAQ_PATH.write_bytes(ROOT_FAQ_PATH.read_bytes())
+        except Exception:
+            pass
+
+    # GitHub永続化が有効なら、リモートを優先して取得
+    if github_persistence_enabled():
+        github_download_file("faq.csv", FAQ_PATH)
+        for remote_path in github_list_dir("logs"):
+            if not remote_path.endswith('.csv'):
+                continue
+            name = Path(remote_path).name
+            github_download_file(f"logs/{name}", LOG_DIR / name)
+
+
+def persist_runtime_file(local_path: Path, label: str = "data") -> bool:
+    if not local_path.exists():
+        return False
+    if not github_persistence_enabled():
+        return True
+    rel_path = _remote_relpath(local_path)
+    msg = f"Update {label}: {rel_path}"
+    return github_upload_file(local_path, rel_path=rel_path, commit_message=msg)
+
+
+def persist_faq_now() -> bool:
+    return persist_runtime_file(FAQ_PATH, label="faq")
+
+
+def persist_log_now(path: Path) -> bool:
+    return persist_runtime_file(path, label="log")
+
+
+bootstrap_persistent_storage()
 
 
 def list_log_files():
@@ -1465,6 +1614,7 @@ def log_nohit(question: str, extra: dict | None = None) -> str:
             if is_new:
                 w.writerow(cols)
             w.writerow([row.get(c, "") for c in cols])
+        persist_log_now(path)
     except Exception:
         pass
     return ts
@@ -1517,6 +1667,7 @@ def update_nohit_record(day: str, timestamp: str, question: str, extra: dict) ->
             w.writerow(cols)
             for _, r in df_log[cols].iterrows():
                 w.writerow([str(r.get(c, "")) for c in cols])
+        persist_log_now(path)
         return True
     except Exception:
         return False
@@ -1553,6 +1704,7 @@ def log_interaction(question: str, matched: bool, best_score: float, category: s
             if is_new:
                 w.writerow(["timestamp", "question", "matched", "best_score", "category"])
             w.writerow([datetime.now().isoformat(timespec="seconds"), question, int(bool(matched)), float(best_score), category or ""])
+        persist_log_now(path)
     except Exception:
         pass
 
@@ -1716,6 +1868,7 @@ def append_faq_csv(faq_path: Path, new_df: pd.DataFrame) -> int:
             w.writerow(["question", "answer", "category"])
         w.writerows(rows)
 
+    persist_faq_now()
     return len(rows)
 
 
@@ -1741,6 +1894,37 @@ with st.sidebar:
         if st.button("ログアウト"):
             st.session_state.is_admin = False
             st.rerun()
+
+        with st.expander("💾 永続化ステータス（v13）", expanded=True):
+            st.caption(persistence_status_text())
+            st.code("""
+# Streamlit Cloud secrets.toml の例
+PERSIST_MODE = "github"
+GITHUB_REPO = "owner/repo"
+GITHUB_BRANCH = "main"
+GITHUB_BASE_PATH = "streamlit_data"
+GITHUB_TOKEN = "ghp_xxx"
+""".strip(), language="toml")
+            col_sync1, col_sync2 = st.columns(2)
+            with col_sync1:
+                if st.button("📥 GitHubからFAQ再読込", width="stretch", disabled=not github_persistence_enabled()):
+                    ok = github_download_file("faq.csv", FAQ_PATH)
+                    if ok:
+                        try:
+                            load_faq_index.clear()
+                        except Exception:
+                            pass
+                        st.success("GitHub上の faq.csv を再読込しました。")
+                        st.rerun()
+                    else:
+                        st.warning("GitHubからFAQを取得できませんでした。設定を確認してください。")
+            with col_sync2:
+                if st.button("📤 FAQをGitHubへ保存", width="stretch", disabled=not github_persistence_enabled()):
+                    ok = persist_faq_now()
+                    if ok:
+                        st.success("faq.csv を GitHub に保存しました。")
+                    else:
+                        st.warning("GitHubへの保存に失敗しました。設定を確認してください。")
 
         with st.expander("📂 FAQ管理（Excelダウンロード / アップロード）", expanded=True):
             st.caption("管理者は FAQ を Excel(.xlsx) で一括入出力できます。500件以上でもまとめて置き換え可能です。推奨列名は『質問 / 回答 / カテゴリ』です。")
@@ -1800,7 +1984,7 @@ with st.sidebar:
                                 msg = f"FAQを {saved} 件反映しました。現在登録中のFAQ件数も {len(reloaded_df)} 件です。"
                                 st.session_state["faq_replace_result"] = msg
                                 st.success(msg)
-                                st.info("FAQの反映が完了しました。再読み込みは不要です。")
+                                st.info("FAQの反映が完了しました。再読み込みは不要です。GitHub永続化ONなら自動で外部保存されます。")
                                 current_faq_df = reloaded_df
                 except Exception as e:
                     st.error(f"FAQファイルの取込でエラー: {e}")
