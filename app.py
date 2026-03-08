@@ -1048,7 +1048,7 @@ def generate_effect_report_pdf(
 
 
 TOP_K = 3
-MIN_SCORE = 0.15
+MIN_SCORE = 0.18
 
 st.set_page_config(page_title="情シス問い合わせAI", layout="wide")
 
@@ -1381,64 +1381,113 @@ with st.sidebar:
 # ======================
 # FAQロード（落ちやすい箇所を全てガード）
 # ======================
-@st.cache_resource(show_spinner=False)
+
+FULLWIDTH_TRANS = str.maketrans({
+    "０": "0", "１": "1", "２": "2", "３": "3", "４": "4",
+    "５": "5", "６": "6", "７": "7", "８": "8", "９": "9",
+    "ａ": "a", "ｂ": "b", "ｃ": "c", "ｄ": "d", "ｅ": "e", "ｆ": "f", "ｇ": "g",
+    "ｈ": "h", "ｉ": "i", "ｊ": "j", "ｋ": "k", "ｌ": "l", "ｍ": "m", "ｎ": "n",
+    "ｏ": "o", "ｐ": "p", "ｑ": "q", "ｒ": "r", "ｓ": "s", "ｔ": "t", "ｕ": "u",
+    "ｖ": "v", "ｗ": "w", "ｘ": "x", "ｙ": "y", "ｚ": "z",
+    "Ａ": "a", "Ｂ": "b", "Ｃ": "c", "Ｄ": "d", "Ｅ": "e", "Ｆ": "f", "Ｇ": "g",
+    "Ｈ": "h", "Ｉ": "i", "Ｊ": "j", "Ｋ": "k", "Ｌ": "l", "Ｍ": "m", "Ｎ": "n",
+    "Ｏ": "o", "Ｐ": "p", "Ｑ": "q", "Ｒ": "r", "Ｓ": "s", "Ｔ": "t", "Ｕ": "u",
+    "Ｖ": "v", "Ｗ": "w", "Ｘ": "x", "Ｙ": "y", "Ｚ": "z",
+})
+
+CANONICAL_PATTERNS = [
+    (r"デスクトップパソコン|デスクトップｐｃ|desktop\s*pc", "デスクトップpc"),
+    (r"ノートパソコン|ラップトップ", "ノートpc"),
+    (r"パーソナルコンピュータ|パソコン|ピーシー|ｐｃ|pc端末", "pc"),
+    (r"コンピューター", "コンピュータ"),
+    (r"無線lan|wi-?fi|wifi|ワイファイ", "wifi"),
+    (r"ｖｐｎ|ぶいぴーえぬ|vpn接続", "vpn"),
+    (r"サインイン", "ログイン"),
+    (r"サインアウト", "ログアウト"),
+    (r"パスコード|passcode", "パスワード"),
+    (r"pw", "パスワード"),
+    (r"立ち上がらない|起ち上がらない|立ちあがらない|起ちあがらない", "起動しない"),
+    (r"電源がつかない|電源が付かない|電源がはいらない", "電源が入らない"),
+    (r"ログイン出来ない|ログインできません", "ログインできない"),
+    (r"接続できない|接続できません|接続出来ない|接続出来ません|接続しない|接続されない|つながりません|繋がりません|繋がらない|繋げない|つなげない", "つながらない"),
+    (r"利用できない|使用できない", "使えない"),
+    (r"開けない", "起動しない"),
+    (r"印字できない|プリントできない", "印刷できない"),
+    (r"メール送れない", "メールが送信できない"),
+    (r"メール受け取れない", "メールが受信できない"),
+    (r"認証に失敗|認証エラー", "認証できない"),
+    (r"ロックされた|凍結された", "ロックされた"),
+]
+
+CONCEPT_ALIASES = {
+    "vpn": ["vpn", "リモートアクセス", "社外接続"],
+    "network": ["ネットワーク", "wifi", "lan", "通信", "internet", "インターネット"],
+    "login": ["ログイン", "サインイン", "認証", "アカウント"],
+    "password": ["パスワード", "password", "pw"],
+    "boot": ["起動", "立ち上が", "立上", "電源", "シャットダウン", "再起動"],
+    "mail": ["メール", "outlook", "受信", "送信"],
+    "print": ["印刷", "プリンタ", "printer", "print"],
+    "lock": ["ロック", "凍結", "無効", "停止"],
+    "error": ["エラー", "失敗", "不具合", "異常", "障害"],
+    "cannot": ["できない", "できません", "使えない", "つながらない", "入らない", "起動しない"],
+}
+
+
 def normalize_search_text(text: str) -> str:
-    """FAQ検索用のゆるい正規化。表記ゆれを吸収して一致率を上げる。"""
+    """FAQ検索用の正規化。表記ゆれ・同義表現を寄せて意味検索を強化する。"""
     s = str(text or "").strip().lower()
     if not s:
         return ""
 
-    # 全角英数字を半角へ寄せる
-    z2h = str.maketrans({
-        "０": "0", "１": "1", "２": "2", "３": "3", "４": "4",
-        "５": "5", "６": "6", "７": "7", "８": "8", "９": "9",
-        "ａ": "a", "ｂ": "b", "ｃ": "c", "ｄ": "d", "ｅ": "e", "ｆ": "f", "ｇ": "g",
-        "ｈ": "h", "ｉ": "i", "ｊ": "j", "ｋ": "k", "ｌ": "l", "ｍ": "m", "ｎ": "n",
-        "ｏ": "o", "ｐ": "p", "ｑ": "q", "ｒ": "r", "ｓ": "s", "ｔ": "t", "ｕ": "u",
-        "ｖ": "v", "ｗ": "w", "ｘ": "x", "ｙ": "y", "ｚ": "z",
-        "Ａ": "a", "Ｂ": "b", "Ｃ": "c", "Ｄ": "d", "Ｅ": "e", "Ｆ": "f", "Ｇ": "g",
-        "Ｈ": "h", "Ｉ": "i", "Ｊ": "j", "Ｋ": "k", "Ｌ": "l", "Ｍ": "m", "Ｎ": "n",
-        "Ｏ": "o", "Ｐ": "p", "Ｑ": "q", "Ｒ": "r", "Ｓ": "s", "Ｔ": "t", "Ｕ": "u",
-        "Ｖ": "v", "Ｗ": "w", "Ｘ": "x", "Ｙ": "y", "Ｚ": "z",
-    })
-    s = s.translate(z2h)
-
-    # よくある表記ゆれを揃える
-    replacements = [
-        (r"デスクトップパソコン", "デスクトップpc"),
-        (r"デスクトップパソコン", "デスクトップpc"),
-        (r"デスクトップpc", "デスクトップpc"),
-        (r"デスクトップｐｃ", "デスクトップpc"),
-        (r"パーソナルコンピュータ", "pc"),
-        (r"パソコン", "pc"),
-        (r"ピーシー", "pc"),
-        (r"ｐｃ", "pc"),
-        (r"pc端末", "pc"),
-        (r"コンピューター", "コンピュータ"),
-        (r"立ち上がらない", "起動しない"),
-        (r"起ち上がらない", "起動しない"),
-        (r"立ちあがらない", "起動しない"),
-        (r"起ちあがらない", "起動しない"),
-        (r"電源がつかない", "電源が入らない"),
-        (r"電源が付かない", "電源が入らない"),
-        (r"電源がはいらない", "電源が入らない"),
-        (r"ログイン出来ない", "ログインできない"),
-        (r"ログインできません", "ログインできない"),
-        (r"繋がらない", "つながらない"),
-    ]
-    for pattern, repl in replacements:
+    s = s.translate(FULLWIDTH_TRANS)
+    for pattern, repl in CANONICAL_PATTERNS:
         s = re.sub(pattern, repl, s)
 
-    # 記号ゆれを整理
-    s = re.sub(r'''[\/／・,、。．・:：;；\-ー_（）()\[\]{}『』「」"'`]+''', ' ', s)
+    s = re.sub(r"([^a-z0-9])pc([^a-z0-9])", r"\1 pc \2", f" {s} ")
+    s = re.sub(r"[\/／・,、。．・:：;；\-ー_（）()\[\]{}『』「」\"'`]+", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
+
+
+def extract_search_tokens(text: str) -> set[str]:
+    """日本語FAQ検索向けの軽量トークン抽出。"""
+    s = normalize_search_text(text)
+    if not s:
+        return set()
+
+    tokens = set()
+    for part in s.split():
+        part = part.strip()
+        if part:
+            tokens.add(part)
+
+    for tok in re.findall(r"[a-z0-9]+|[\u3040-\u30ff\u4e00-\u9fff]{2,}", s):
+        tokens.add(tok)
+
+    split_hints = ["できない", "つながらない", "起動しない", "ログイン", "パスワード", "電源", "印刷", "メール", "アカウント", "vpn", "wifi"]
+    for tok in list(tokens):
+        for hint in split_hints:
+            if hint in tok and tok != hint:
+                tokens.add(hint)
+                remain = tok.replace(hint, " ").strip()
+                if len(remain) >= 2:
+                    tokens.add(remain)
+
+    return {t for t in tokens if t}
+
+
+def extract_concepts(text: str) -> set[str]:
+    s = normalize_search_text(text)
+    found = set()
+    for concept, aliases in CONCEPT_ALIASES.items():
+        if any(alias in s for alias in aliases):
+            found.add(concept)
+    return found
 
 
 # 文字n-gramも混ぜて、日本語の部分一致に強くする
 WORD_VECTORIZER = TfidfVectorizer(ngram_range=(1, 2))
 CHAR_VECTORIZER = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
-
 
 def load_faq_index(faq_path: Path):
     if not faq_path.exists():
@@ -1462,6 +1511,8 @@ def load_faq_index(faq_path: Path):
     df["answer_norm"] = df["answer"].apply(normalize_search_text)
     df["qa_text"] = (df["question"] + " / " + df["answer"]).astype(str)
     df["qa_text_norm"] = (df["question_norm"] + " / " + df["answer_norm"]).astype(str)
+    df["search_tokens"] = df["qa_text_norm"].apply(extract_search_tokens)
+    df["search_concepts"] = df["qa_text_norm"].apply(extract_concepts)
 
     try:
         word_vectorizer = WORD_VECTORIZER
@@ -1495,12 +1546,31 @@ def retrieve_faq(query: str):
             return []
 
         # 単語一致と文字部分一致を合成して、表記ゆれに強くする
-        sims = (sims_word * 0.65) + (sims_char * 0.35)
+        sims = (sims_word * 0.52) + (sims_char * 0.48)
 
         # 完全一致に近い正規化結果は少し加点
-        exact_bonus = (df["question_norm"] == query_norm).astype(float).to_numpy() * 0.20
-        contains_bonus = df["question_norm"].apply(lambda x: 0.08 if query_norm and (query_norm in x or x in query_norm) else 0.0).to_numpy()
-        sims = sims + exact_bonus + contains_bonus
+        exact_bonus = (df["question_norm"] == query_norm).astype(float).to_numpy() * 0.22
+        contains_bonus = df["question_norm"].apply(
+            lambda x: 0.10 if query_norm and (query_norm in x or x in query_norm) else 0.0
+        ).to_numpy()
+
+        # トークン重複率で加点
+        q_tokens = extract_search_tokens(query_norm)
+        token_bonus = df["search_tokens"].apply(
+            lambda toks: (0.18 * len(q_tokens & set(toks)) / max(1, len(q_tokens))) if q_tokens else 0.0
+        ).to_numpy()
+
+        # 概念一致で加点（vpn / login / boot など）
+        q_concepts = extract_concepts(query_norm)
+        concept_bonus = df["search_concepts"].apply(
+            lambda cs: (0.22 * len(q_concepts & set(cs)) / max(1, len(q_concepts))) if q_concepts else 0.0
+        ).to_numpy()
+
+        prefix_bonus = df["question_norm"].apply(
+            lambda x: 0.06 if query_norm and str(x).startswith(query_norm[: min(8, len(query_norm))]) else 0.0
+        ).to_numpy()
+
+        sims = sims + exact_bonus + contains_bonus + token_bonus + concept_bonus + prefix_bonus
 
         idxs = sims.argsort()[::-1][:3]
         return [(df.iloc[i], float(sims[i])) for i in idxs if float(sims[i]) > 0]
