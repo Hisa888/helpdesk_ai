@@ -53,6 +53,45 @@ def read_csv_flexible(path: Path) -> pd.DataFrame:
             # それでもダメなら空
             return pd.DataFrame()
 
+def faq_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
+    """FAQ DataFrame を Excel(.xlsx) バイト列に変換する（管理者向けは日本語列名で出力）。"""
+    out = io.BytesIO()
+    export_df = ensure_faq_schema(df.copy()) if len(df) > 0 else pd.DataFrame(columns=["question", "answer", "category"])
+    export_df = export_df.rename(columns={
+        "question": "質問",
+        "answer": "回答",
+        "category": "カテゴリ",
+    })
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        export_df.to_excel(writer, index=False, sheet_name="FAQ")
+        ws = writer.sheets["FAQ"]
+        ws.freeze_panes = "A2"
+        try:
+            widths = {"A": 42, "B": 70, "C": 24}
+            for col, width in widths.items():
+                ws.column_dimensions[col].width = width
+        except Exception:
+            pass
+    out.seek(0)
+    return out.getvalue()
+
+def read_faq_uploaded_file(file_name: str, raw: bytes) -> pd.DataFrame:
+    """アップロードされた FAQ ファイル（xlsx/csv）を正規化して読む。"""
+    suffix = Path(file_name).suffix.lower()
+    if suffix in [".xlsx", ".xls"]:
+        df = pd.read_excel(io.BytesIO(raw))
+        return ensure_faq_schema(df)
+
+    tmp_path = LOG_DIR / f"_tmp_{uuid.uuid4().hex}.csv"
+    tmp_path.write_bytes(raw)
+    try:
+        return ensure_faq_schema(read_csv_flexible(tmp_path))
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
 def pick_question_column(cols) -> str | None:
     """質問カラム名の揺れを吸収"""
     cand = [
@@ -1501,67 +1540,64 @@ with st.sidebar:
                     )
                 st.caption("※ どちらもアプリの現状に合わせて自動生成されます（必要に応じて文面はカスタマイズ可能）。")
 
-        with st.expander("📂 FAQ管理（ダウンロード / アップロード）", expanded=True):
-            st.caption("検証用に faq.csv をそのまま取得・差し替えできます。アップロード後はFAQ検索へ即反映します。")
+        with st.expander("📂 FAQ管理（Excelダウンロード / アップロード）", expanded=True):
+            st.caption("検証用にFAQを Excel(.xlsx) で取得・差し替えできます。Excelは営業デモ向けに 日本語列名（質問 / 回答 / カテゴリ）で出力します。アップロード後は内部の faq.csv に反映し、FAQ検索へ即反映します。")
 
             faq_exists = FAQ_PATH.exists()
+            faq_preview_df = pd.DataFrame(columns=["question", "answer", "category"])
             if faq_exists:
                 try:
-                    faq_bytes = FAQ_PATH.read_bytes()
+                    faq_preview_df = ensure_faq_schema(read_csv_flexible(FAQ_PATH))
+                    faq_excel_bytes = faq_df_to_excel_bytes(faq_preview_df)
                 except Exception:
-                    faq_bytes = b""
+                    faq_excel_bytes = b""
 
                 st.download_button(
-                    "⬇ 現在の faq.csv をダウンロード",
-                    data=faq_bytes,
-                    file_name="faq.csv",
-                    mime="text/csv",
+                    "⬇ 現在のFAQをExcelでダウンロード",
+                    data=faq_excel_bytes,
+                    file_name="faq.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
-                    key="download_faq_csv_admin",
+                    key="download_faq_xlsx_admin",
                 )
+                st.info("Excelテンプレート列名: 質問 / 回答 / カテゴリ")
 
                 try:
-                    faq_preview_df = ensure_faq_schema(read_csv_flexible(FAQ_PATH))
                     st.caption(f"現在のFAQ件数: {len(faq_preview_df)} 件")
                     if len(faq_preview_df) > 0:
-                        st.dataframe(faq_preview_df.head(10), use_container_width=True, hide_index=True)
+                        preview_jp = faq_preview_df.head(10).rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"})
+                        st.dataframe(preview_jp, use_container_width=True, hide_index=True)
                 except Exception:
-                    st.caption("faq.csv のプレビュー取得に失敗しました。")
+                    st.caption("FAQ のプレビュー取得に失敗しました。")
             else:
-                st.warning("faq.csv がまだ存在しません。下のアップロードから新規作成できます。")
+                st.warning("faq.csv がまだ存在しません。下のExcelアップロードから新規作成できます。")
 
             uploaded_faq = st.file_uploader(
-                "faq.csv をアップロード（置き換え）",
-                type=["csv"],
+                "FAQファイルをアップロード（Excelで置き換え）",
+                type=["xlsx", "xls", "csv"],
                 accept_multiple_files=False,
-                key="faq_csv_uploader_admin",
-                help="question, answer, category 列を推奨。日本語列名（質問/回答/カテゴリ）でも取り込みます。",
+                key="faq_xlsx_uploader_admin",
+                help="推奨形式は Excel(.xlsx) です。日本語列名（質問 / 回答 / カテゴリ）を標準にしつつ、question / answer / category でも取り込みます。",
             )
 
             if uploaded_faq is not None:
                 try:
                     raw = uploaded_faq.getvalue()
-                    tmp_path = LOG_DIR / f"_tmp_{uuid.uuid4().hex}.csv"
-                    tmp_path.write_bytes(raw)
-                    incoming_df = ensure_faq_schema(read_csv_flexible(tmp_path))
-                    try:
-                        tmp_path.unlink(missing_ok=True)
-                    except Exception:
-                        pass
+                    incoming_df = read_faq_uploaded_file(uploaded_faq.name, raw)
 
                     if len(incoming_df) == 0:
-                        st.error("アップロードされたCSVから有効なFAQを読み取れませんでした。question/answer 列を確認してください。")
+                        st.error("アップロードされたファイルから有効なFAQを読み取れませんでした。question/answer 列を確認してください。")
                     else:
                         st.success(f"アップロード確認OK: {len(incoming_df)} 件のFAQを検出しました。")
-                        st.dataframe(incoming_df.head(10), use_container_width=True, hide_index=True)
+                        st.dataframe(incoming_df.head(10).rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"}), use_container_width=True, hide_index=True)
 
-                        if st.button("📤 この内容で faq.csv を置き換える", type="primary", use_container_width=True, key="replace_faq_csv_admin"):
+                        if st.button("📤 この内容でFAQを反映する", type="primary", use_container_width=True, key="replace_faq_xlsx_admin"):
                             incoming_df.to_csv(FAQ_PATH, index=False, encoding="utf-8")
                             try:
                                 load_faq_index.clear()
                             except Exception:
                                 pass
-                            st.success(f"faq.csv を更新しました（{len(incoming_df)} 件）。")
+                            st.success(f"FAQを更新しました（{len(incoming_df)} 件）。内部保存は faq.csv、管理用入出力は Excel(.xlsx) です。")
                             st.rerun()
                 except Exception as e:
                     st.error(f"FAQアップロード処理でエラー: {e}")
