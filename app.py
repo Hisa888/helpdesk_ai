@@ -537,6 +537,7 @@ def persist_log_now(path: Path) -> bool:
 
 SEARCH_SETTINGS_PATH = DATA_DIR / "search_settings.json"
 
+
 def default_search_settings() -> dict:
     return {
         "answer_threshold": DEFAULT_SEARCH_THRESHOLD,
