@@ -2,3 +2,4 @@ timestamp,question,device,location,network,error_text,impact,channel
 2026-03-08T06:46:44,VPNにつながりません,nan,nan,nan,nan,nan,web
 2026-03-08T07:14:27,申請書のパターンについて教えてください。,nan,nan,nan,nan,nan,web
 2026-03-08T07:20:09,マウスが動かなくなりました。どうしたら良いですか？,Windows,社内,有線,マウスが右クリックができないようです。,自分のみ,web
+2026-03-08T09:12:43,ネットにつながりにくい,,,,,,web
