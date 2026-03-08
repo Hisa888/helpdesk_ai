@@ -53,33 +53,233 @@ def read_csv_flexible(path: Path) -> pd.DataFrame:
             # それでもダメなら空
             return pd.DataFrame()
 
-def faq_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
-    """FAQ DataFrame を Excel(.xlsx) バイト列に変換する（管理者向けは日本語列名で出力）。"""
+def _col_letters(n: int) -> str:
+    s = ""
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        s = chr(65 + rem) + s
+    return s
+
+
+def _xlsx_escape(text: str) -> str:
+    return (str(text)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
+def _build_minimal_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "FAQ") -> bytes:
+    """外部ライブラリなしで開ける最小構成の .xlsx を生成する。"""
+    export_df = df.fillna("").astype(str)
+    rows = [list(export_df.columns)] + export_df.values.tolist()
+
+    shared_strings = []
+    shared_map = {}
+
+    def sst_index(value: str) -> int:
+        value = "" if value is None else str(value)
+        if value not in shared_map:
+            shared_map[value] = len(shared_strings)
+            shared_strings.append(value)
+        return shared_map[value]
+
+    row_xml = []
+    for r_idx, row in enumerate(rows, start=1):
+        cells = []
+        for c_idx, value in enumerate(row, start=1):
+            ref = f"{_col_letters(c_idx)}{r_idx}"
+            idx = sst_index(value)
+            cells.append(f'<c r="{ref}" t="s"><v>{idx}</v></c>')
+        row_xml.append(f'<row r="{r_idx}">' + ''.join(cells) + '</row>')
+
+    sheet_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
+        '<sheetFormatPr defaultRowHeight="15"/>'
+        '<cols>'
+        '<col min="1" max="1" width="42" customWidth="1"/>'
+        '<col min="2" max="2" width="70" customWidth="1"/>'
+        '<col min="3" max="3" width="24" customWidth="1"/>'
+        '</cols>'
+        '<sheetData>' + ''.join(row_xml) + '</sheetData>'
+        '</worksheet>'
+    )
+
+    sst_items = ''.join(f'<si><t xml:space="preserve">{_xlsx_escape(s)}</t></si>' for s in shared_strings)
+    shared_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{len(shared_strings)}" uniqueCount="{len(shared_strings)}">{sst_items}</sst>'
+    )
+
+    workbook_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        f'<sheets><sheet name="{_xlsx_escape(sheet_name)}" sheetId="1" r:id="rId1"/></sheets>'
+        '</workbook>'
+    )
+
+    workbook_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>'
+        '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        '</Relationships>'
+    )
+
+    root_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>'
+        '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>'
+        '</Relationships>'
+    )
+
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+        '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+        '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+        '</Types>'
+    )
+
+    styles_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>'
+        '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
+        '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+        '<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>'
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+        '</styleSheet>'
+    )
+
+    app_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" '
+        'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+        '<Application>Microsoft Excel</Application>'
+        '</Properties>'
+    )
+
+    core_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
+        'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+        'xmlns:dcterms="http://purl.org/dc/terms/" '
+        'xmlns:dcmitype="http://purl.org/dc/dcmitype/" '
+        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        '<dc:creator>OpenAI</dc:creator>'
+        '<cp:lastModifiedBy>OpenAI</cp:lastModifiedBy>'
+        '</cp:coreProperties>'
+    )
+
     out = io.BytesIO()
+    with zipfile.ZipFile(out, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('[Content_Types].xml', content_types)
+        zf.writestr('_rels/.rels', root_rels)
+        zf.writestr('docProps/app.xml', app_xml)
+        zf.writestr('docProps/core.xml', core_xml)
+        zf.writestr('xl/workbook.xml', workbook_xml)
+        zf.writestr('xl/_rels/workbook.xml.rels', workbook_rels)
+        zf.writestr('xl/styles.xml', styles_xml)
+        zf.writestr('xl/sharedStrings.xml', shared_xml)
+        zf.writestr('xl/worksheets/sheet1.xml', sheet_xml)
+    out.seek(0)
+    return out.getvalue()
+
+
+def _read_minimal_xlsx(raw: bytes) -> pd.DataFrame:
+    import xml.etree.ElementTree as ET
+    ns_main = {'a': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        shared_strings = []
+        if 'xl/sharedStrings.xml' in zf.namelist():
+            root = ET.fromstring(zf.read('xl/sharedStrings.xml'))
+            for si in root.findall('a:si', ns_main):
+                texts = []
+                for t in si.iterfind('.//a:t', ns_main):
+                    texts.append(t.text or '')
+                shared_strings.append(''.join(texts))
+
+        sheet_name = 'xl/worksheets/sheet1.xml'
+        root = ET.fromstring(zf.read(sheet_name))
+        rows = []
+        for row in root.findall('.//a:sheetData/a:row', ns_main):
+            vals = []
+            current_col = 1
+            for cell in row.findall('a:c', ns_main):
+                ref = cell.attrib.get('r', '')
+                letters = ''.join(ch for ch in ref if ch.isalpha())
+                col = 0
+                for ch in letters:
+                    col = col * 26 + (ord(ch.upper()) - 64)
+                while current_col < max(col, 1):
+                    vals.append('')
+                    current_col += 1
+                t = cell.attrib.get('t', '')
+                v = cell.find('a:v', ns_main)
+                value = '' if v is None or v.text is None else v.text
+                if t == 's':
+                    try:
+                        value = shared_strings[int(value)]
+                    except Exception:
+                        value = ''
+                vals.append(value)
+                current_col += 1
+            rows.append(vals)
+
+    if not rows:
+        return pd.DataFrame()
+    max_len = max(len(r) for r in rows)
+    rows = [r + [''] * (max_len - len(r)) for r in rows]
+    header = [str(x).strip() for x in rows[0]]
+    data = rows[1:] if len(rows) > 1 else []
+    return pd.DataFrame(data, columns=header)
+
+
+def faq_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
+    """FAQ DataFrame を Excel(.xlsx) バイト列に変換する（必ず開ける形式で出力）。"""
     export_df = ensure_faq_schema(df.copy()) if len(df) > 0 else pd.DataFrame(columns=["question", "answer", "category"])
     export_df = export_df.rename(columns={
         "question": "質問",
         "answer": "回答",
         "category": "カテゴリ",
     })
-    with pd.ExcelWriter(out, engine="openpyxl") as writer:
-        export_df.to_excel(writer, index=False, sheet_name="FAQ")
-        ws = writer.sheets["FAQ"]
-        ws.freeze_panes = "A2"
-        try:
+    try:
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine="openpyxl") as writer:
+            export_df.to_excel(writer, index=False, sheet_name="FAQ")
+            ws = writer.sheets["FAQ"]
+            ws.freeze_panes = "A2"
             widths = {"A": 42, "B": 70, "C": 24}
             for col, width in widths.items():
                 ws.column_dimensions[col].width = width
-        except Exception:
-            pass
-    out.seek(0)
-    return out.getvalue()
+        out.seek(0)
+        return out.getvalue()
+    except Exception:
+        return _build_minimal_xlsx_bytes(export_df, sheet_name="FAQ")
+
 
 def read_faq_uploaded_file(file_name: str, raw: bytes) -> pd.DataFrame:
     """アップロードされた FAQ ファイル（xlsx/csv）を正規化して読む。"""
     suffix = Path(file_name).suffix.lower()
     if suffix in [".xlsx", ".xls"]:
-        df = pd.read_excel(io.BytesIO(raw))
+        try:
+            df = pd.read_excel(io.BytesIO(raw))
+        except Exception:
+            df = _read_minimal_xlsx(raw)
         return ensure_faq_schema(df)
 
     tmp_path = LOG_DIR / f"_tmp_{uuid.uuid4().hex}.csv"
