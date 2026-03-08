@@ -1218,53 +1218,128 @@ with st.sidebar:
 # FAQロード（落ちやすい箇所を全てガード）
 # ======================
 @st.cache_resource(show_spinner=False)
+def normalize_search_text(text: str) -> str:
+    """FAQ検索用のゆるい正規化。表記ゆれを吸収して一致率を上げる。"""
+    s = str(text or "").strip().lower()
+    if not s:
+        return ""
+
+    # 全角英数字を半角へ寄せる
+    z2h = str.maketrans({
+        "０": "0", "１": "1", "２": "2", "３": "3", "４": "4",
+        "５": "5", "６": "6", "７": "7", "８": "8", "９": "9",
+        "ａ": "a", "ｂ": "b", "ｃ": "c", "ｄ": "d", "ｅ": "e", "ｆ": "f", "ｇ": "g",
+        "ｈ": "h", "ｉ": "i", "ｊ": "j", "ｋ": "k", "ｌ": "l", "ｍ": "m", "ｎ": "n",
+        "ｏ": "o", "ｐ": "p", "ｑ": "q", "ｒ": "r", "ｓ": "s", "ｔ": "t", "ｕ": "u",
+        "ｖ": "v", "ｗ": "w", "ｘ": "x", "ｙ": "y", "ｚ": "z",
+        "Ａ": "a", "Ｂ": "b", "Ｃ": "c", "Ｄ": "d", "Ｅ": "e", "Ｆ": "f", "Ｇ": "g",
+        "Ｈ": "h", "Ｉ": "i", "Ｊ": "j", "Ｋ": "k", "Ｌ": "l", "Ｍ": "m", "Ｎ": "n",
+        "Ｏ": "o", "Ｐ": "p", "Ｑ": "q", "Ｒ": "r", "Ｓ": "s", "Ｔ": "t", "Ｕ": "u",
+        "Ｖ": "v", "Ｗ": "w", "Ｘ": "x", "Ｙ": "y", "Ｚ": "z",
+    })
+    s = s.translate(z2h)
+
+    # よくある表記ゆれを揃える
+    replacements = [
+        (r"デスクトップパソコン", "デスクトップpc"),
+        (r"デスクトップパソコン", "デスクトップpc"),
+        (r"デスクトップpc", "デスクトップpc"),
+        (r"デスクトップｐｃ", "デスクトップpc"),
+        (r"パーソナルコンピュータ", "pc"),
+        (r"パソコン", "pc"),
+        (r"ピーシー", "pc"),
+        (r"ｐｃ", "pc"),
+        (r"pc端末", "pc"),
+        (r"コンピューター", "コンピュータ"),
+        (r"立ち上がらない", "起動しない"),
+        (r"起ち上がらない", "起動しない"),
+        (r"立ちあがらない", "起動しない"),
+        (r"起ちあがらない", "起動しない"),
+        (r"電源がつかない", "電源が入らない"),
+        (r"電源が付かない", "電源が入らない"),
+        (r"電源がはいらない", "電源が入らない"),
+        (r"ログイン出来ない", "ログインできない"),
+        (r"ログインできません", "ログインできない"),
+        (r"繋がらない", "つながらない"),
+    ]
+    for pattern, repl in replacements:
+        s = re.sub(pattern, repl, s)
+
+    # 記号ゆれを整理
+    s = re.sub(r'''[\/／・,、。．・:：;；\-ー_（）()\[\]{}『』「」"'`]+''', ' ', s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+# 文字n-gramも混ぜて、日本語の部分一致に強くする
+WORD_VECTORIZER = TfidfVectorizer(ngram_range=(1, 2))
+CHAR_VECTORIZER = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
+
+
 def load_faq_index(faq_path: Path):
     if not faq_path.exists():
         empty = pd.DataFrame(columns=["question", "answer", "category"])
-        return empty, None, None
+        return empty, None, None, None, None
 
     try:
         df = normalize_faq_columns(read_csv_flexible(faq_path))
     except Exception:
         empty = pd.DataFrame(columns=["question", "answer", "category"])
-        return empty, None, None
+        return empty, None, None, None, None
 
     df["question"] = df["question"].fillna("").astype(str)
     df["answer"] = df["answer"].fillna("").astype(str)
     df["category"] = df["category"].fillna("").astype(str)
 
     if len(df) == 0:
-        return df, None, None
+        return df, None, None, None, None
 
+    df["question_norm"] = df["question"].apply(normalize_search_text)
+    df["answer_norm"] = df["answer"].apply(normalize_search_text)
     df["qa_text"] = (df["question"] + " / " + df["answer"]).astype(str)
+    df["qa_text_norm"] = (df["question_norm"] + " / " + df["answer_norm"]).astype(str)
 
     try:
-        vectorizer = TfidfVectorizer(ngram_range=(1, 2))
-        X = vectorizer.fit_transform(df["qa_text"])
+        word_vectorizer = WORD_VECTORIZER
+        char_vectorizer = CHAR_VECTORIZER
+        X_word = word_vectorizer.fit_transform(df["qa_text_norm"])
+        X_char = char_vectorizer.fit_transform(df["qa_text_norm"])
     except Exception:
-        return df, None, None
+        return df, None, None, None, None
 
-    return df, vectorizer, X
+    return df, word_vectorizer, X_word, char_vectorizer, X_char
 
 
-df, vectorizer, X = load_faq_index(FAQ_PATH)
+df, vectorizer, X, char_vectorizer, X_char = load_faq_index(FAQ_PATH)
 
-if df is None or len(df) == 0 or vectorizer is None or X is None:
+if df is None or len(df) == 0 or vectorizer is None or X is None or char_vectorizer is None or X_char is None:
     st.warning("faq.csv が未配置/空/不正のため、FAQ検索は無効です。まず faq.csv を配置してください。")
 
 
 def retrieve_faq(query: str):
     if not query:
         return []
-    if vectorizer is None or X is None or df is None or len(df) == 0:
+    if vectorizer is None or X is None or char_vectorizer is None or X_char is None or df is None or len(df) == 0:
         return []
     try:
-        qv = vectorizer.transform([query])
-        sims = cosine_similarity(qv, X).flatten()
-        if sims.size == 0:
+        query_norm = normalize_search_text(query)
+        qv_word = vectorizer.transform([query_norm])
+        qv_char = char_vectorizer.transform([query_norm])
+        sims_word = cosine_similarity(qv_word, X).flatten()
+        sims_char = cosine_similarity(qv_char, X_char).flatten()
+        if sims_word.size == 0 or sims_char.size == 0:
             return []
+
+        # 単語一致と文字部分一致を合成して、表記ゆれに強くする
+        sims = (sims_word * 0.65) + (sims_char * 0.35)
+
+        # 完全一致に近い正規化結果は少し加点
+        exact_bonus = (df["question_norm"] == query_norm).astype(float).to_numpy() * 0.20
+        contains_bonus = df["question_norm"].apply(lambda x: 0.08 if query_norm and (query_norm in x or x in query_norm) else 0.0).to_numpy()
+        sims = sims + exact_bonus + contains_bonus
+
         idxs = sims.argsort()[::-1][:3]
-        return [(df.iloc[i], float(sims[i])) for i in idxs]
+        return [(df.iloc[i], float(sims[i])) for i in idxs if float(sims[i]) > 0]
     except Exception:
         return []
 
