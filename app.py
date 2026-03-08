@@ -1722,8 +1722,11 @@ with st.sidebar:
                             if int(saved) != int(len(reloaded_df)):
                                 st.error(f"保存件数と再読込件数が一致しません。保存: {saved} 件 / 再読込: {len(reloaded_df)} 件")
                             else:
-                                st.session_state["faq_replace_result"] = f"FAQを {saved} 件反映しました。現在登録中のFAQ件数も {len(reloaded_df)} 件です。"
-                                st.rerun()
+                                msg = f"FAQを {saved} 件反映しました。現在登録中のFAQ件数も {len(reloaded_df)} 件です。"
+                                st.session_state["faq_replace_result"] = msg
+                                st.success(msg)
+                                st.info("FAQの反映が完了しました。再読み込みは不要です。")
+                                current_faq_df = reloaded_df
                 except Exception as e:
                     st.error(f"FAQファイルの取込でエラー: {e}")
 
