@@ -533,7 +533,75 @@ def persist_log_now(path: Path) -> bool:
     return persist_runtime_file(path, label="log")
 
 
+
+
+SEARCH_SETTINGS_PATH = DATA_DIR / "search_settings.json"
+
+def default_search_settings() -> dict:
+    return {
+        "answer_threshold": DEFAULT_SEARCH_THRESHOLD,
+        "suggest_threshold": DEFAULT_SUGGEST_THRESHOLD,
+    }
+
+def _sanitize_search_settings(data: dict | None) -> dict:
+    base = default_search_settings()
+    src = data or {}
+    try:
+        answer = float(src.get("answer_threshold", base["answer_threshold"]))
+    except Exception:
+        answer = base["answer_threshold"]
+    try:
+        suggest = float(src.get("suggest_threshold", base["suggest_threshold"]))
+    except Exception:
+        suggest = base["suggest_threshold"]
+    answer = max(0.10, min(1.20, answer))
+    suggest = max(0.05, min(1.20, suggest))
+    if suggest > answer:
+        suggest = max(0.05, round(answer - 0.05, 2))
+    return {"answer_threshold": round(answer, 2), "suggest_threshold": round(suggest, 2)}
+
+def load_search_settings() -> dict:
+    if SEARCH_SETTINGS_PATH.exists():
+        try:
+            data = json.loads(SEARCH_SETTINGS_PATH.read_text(encoding="utf-8"))
+            return _sanitize_search_settings(data if isinstance(data, dict) else {})
+        except Exception:
+            return default_search_settings()
+    return default_search_settings()
+
+def save_search_settings(answer_threshold: float, suggest_threshold: float) -> tuple[bool, dict]:
+    settings = _sanitize_search_settings({
+        "answer_threshold": answer_threshold,
+        "suggest_threshold": suggest_threshold,
+    })
+    try:
+        SEARCH_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SEARCH_SETTINGS_PATH.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+        ok = persist_runtime_file(SEARCH_SETTINGS_PATH, label="search_settings")
+        return ok, settings
+    except Exception:
+        return False, settings
+
 bootstrap_persistent_storage()
+if github_persistence_enabled():
+    github_download_file("search_settings.json", SEARCH_SETTINGS_PATH)
+SEARCH_SETTINGS = load_search_settings()
+
+
+def current_search_threshold() -> float:
+    try:
+        return float(st.session_state.get("search_threshold", SEARCH_SETTINGS.get("answer_threshold", DEFAULT_SEARCH_THRESHOLD)))
+    except Exception:
+        return DEFAULT_SEARCH_THRESHOLD
+
+def current_suggest_threshold() -> float:
+    try:
+        answer = current_search_threshold()
+        suggest = float(st.session_state.get("suggest_threshold", SEARCH_SETTINGS.get("suggest_threshold", DEFAULT_SUGGEST_THRESHOLD)))
+        return min(suggest, max(0.05, answer - 0.05))
+    except Exception:
+        return DEFAULT_SUGGEST_THRESHOLD
+
 
 
 def list_log_files():
@@ -1048,7 +1116,8 @@ def generate_effect_report_pdf(
 
 
 TOP_K = 3
-MIN_SCORE = 0.18
+DEFAULT_SEARCH_THRESHOLD = 0.42
+DEFAULT_SUGGEST_THRESHOLD = 0.26
 
 st.set_page_config(page_title="情シス問い合わせAI", layout="wide")
 
@@ -2011,6 +2080,57 @@ GITHUB_TOKEN = "ghp_xxx"
                     else:
                         st.warning("GitHubへの保存に失敗しました。設定を確認してください。")
 
+        with st.expander("🎯 検索精度設定（v14）", expanded=True):
+            st.caption("しきい値を管理者が調整できます。高いほど厳密一致寄り、低いほど似た質問も拾いやすくなります。")
+            st.info(f"現在値：自動回答 {current_search_threshold():.2f} / 候補表示 {current_suggest_threshold():.2f}")
+
+            admin_answer_threshold = st.slider(
+                "自動回答しきい値",
+                min_value=0.10,
+                max_value=1.20,
+                value=float(st.session_state.get("search_threshold", DEFAULT_SEARCH_THRESHOLD)),
+                step=0.01,
+                key="admin_answer_threshold_slider",
+                help="この値以上なら通常回答します。",
+            )
+            max_suggest_value = max(0.05, round(admin_answer_threshold - 0.05, 2))
+            suggest_default = min(float(st.session_state.get("suggest_threshold", DEFAULT_SUGGEST_THRESHOLD)), max_suggest_value)
+            admin_suggest_threshold = st.slider(
+                "候補表示しきい値",
+                min_value=0.05,
+                max_value=max_suggest_value,
+                value=suggest_default,
+                step=0.01,
+                key="admin_suggest_threshold_slider",
+                help="この値以上かつ自動回答しきい値未満なら『近いFAQ候補』として表示します。",
+            )
+
+            st.markdown("""- 自動回答以上: 通常回答
+- 候補表示以上: 近いFAQ候補を表示
+- 候補表示未満: 該当なしとして追加情報フォームへ""")
+
+            col_th1, col_th2 = st.columns(2)
+            with col_th1:
+                if st.button("💾 検索設定を保存", width="stretch"):
+                    ok, settings = save_search_settings(admin_answer_threshold, admin_suggest_threshold)
+                    st.session_state.search_threshold = settings["answer_threshold"]
+                    st.session_state.suggest_threshold = settings["suggest_threshold"]
+                    if ok:
+                        st.success(f"保存しました。自動回答={settings['answer_threshold']:.2f} / 候補表示={settings['suggest_threshold']:.2f}")
+                    else:
+                        st.warning("ローカル保存またはGitHub保存に失敗した可能性があります。設定値自体はこのセッションに反映しています。")
+                    st.rerun()
+            with col_th2:
+                if st.button("↩ 初期値に戻す", width="stretch"):
+                    ok, settings = save_search_settings(DEFAULT_SEARCH_THRESHOLD, DEFAULT_SUGGEST_THRESHOLD)
+                    st.session_state.search_threshold = settings["answer_threshold"]
+                    st.session_state.suggest_threshold = settings["suggest_threshold"]
+                    if ok:
+                        st.success("検索設定を初期値に戻しました。")
+                    else:
+                        st.warning("初期値に戻しましたが、外部保存に失敗した可能性があります。")
+                    st.rerun()
+
         with st.expander("📂 FAQ管理（Excelダウンロード / アップロード）", expanded=True):
             st.caption("管理者は FAQ を Excel(.xlsx) で一括入出力できます。500件以上でもまとめて置き換え可能です。推奨列名は『質問 / 回答 / カテゴリ』です。")
 
@@ -2184,6 +2304,12 @@ if "messages" not in st.session_state:
 if "pending_q" not in st.session_state:
     st.session_state.pending_q = ""
 
+if "search_threshold" not in st.session_state:
+    st.session_state.search_threshold = float(SEARCH_SETTINGS.get("answer_threshold", DEFAULT_SEARCH_THRESHOLD))
+
+if "suggest_threshold" not in st.session_state:
+    st.session_state.suggest_threshold = float(SEARCH_SETTINGS.get("suggest_threshold", DEFAULT_SUGGEST_THRESHOLD))
+
 
 # ======================
 # チャット履歴表示
@@ -2237,6 +2363,26 @@ if c3.button("🌐 VPNに接続できない"):
     st.session_state.pending_q = "VPNに接続できません"
     st.rerun()
 
+
+
+def build_suggest_answer(user_q: str, hits) -> str:
+    if not hits:
+        return nohit_template()
+    row, score = hits[0]
+    q = str(row.get("question", "")).strip()
+    a = str(row.get("answer", "")).strip()
+    cat = str(row.get("category", "")).strip()
+    parts = [
+        "入力内容に近いFAQ候補が見つかりました。完全一致ではありませんが、まずはこちらを確認してください。",
+    ]
+    if q:
+        parts.append(f"【候補FAQ】{q}")
+    if cat:
+        parts.append(f"【カテゴリ】{cat}")
+    if a:
+        parts.append(f"【回答】\n{a}")
+    parts.append("解決しない場合は、下の『追加情報を記録』から状況を補足してください。")
+    return "\n\n".join(parts)
 
 
 def render_nohit_extra_form(info: dict | None = None, expanded: bool = True):
@@ -2332,15 +2478,25 @@ if user_q:
     if hits:
         render_match_bar(best_score)
 
-    if best_score < MIN_SCORE:
+    answer_threshold = current_search_threshold()
+    suggest_threshold = current_suggest_threshold()
+
+    if best_score < suggest_threshold:
         used_hits = []
         answer = nohit_template()
         ts_nohit = log_nohit(user_q)
         st.session_state["last_nohit"] = {"day": datetime.now().strftime("%Y%m%d"), "timestamp": ts_nohit, "question": user_q}
         was_nohit = True
+        was_suggest = False
+    elif best_score < answer_threshold:
+        used_hits = hits[:1]
+        answer = build_suggest_answer(user_q, used_hits)
+        was_nohit = False
+        was_suggest = True
     else:
         used_hits = hits
         was_nohit = False
+        was_suggest = False
         prompt = build_prompt(user_q, hits)
         try:
             answer = llm_chat(
@@ -2361,7 +2517,7 @@ if user_q:
             top_cat = str(used_hits[0][0].get("category", ""))
         except Exception:
             top_cat = ""
-    log_interaction(user_q, matched=(best_score >= MIN_SCORE), best_score=best_score, category=top_cat)
+    log_interaction(user_q, matched=(best_score >= answer_threshold), best_score=best_score, category=top_cat)
 
     with st.chat_message("assistant"):
         answer_html = str(answer).replace("\n", "<br>")
@@ -2372,7 +2528,9 @@ if user_q:
             st.session_state["pending_nohit_active"] = True
             st.session_state["pending_nohit"] = st.session_state.get("last_nohit", {})
             st.info("該当なしログに追加しました。必要なら下の『追加情報を記録』で状況を補足できます。")
-            # 送信直後（この実行）でも必ずフォームを表示
+        elif 'was_suggest' in locals() and was_suggest:
+            st.info(f"近いFAQ候補を表示しています（スコア: {best_score:.2f} / 自動回答しきい値: {answer_threshold:.2f}）。")
+            st.caption("管理者はサイドバーの『検索精度設定』から判定基準を調整できます。")
 
     st.session_state.messages.append({"role": "assistant", "content": str(answer)})
 
