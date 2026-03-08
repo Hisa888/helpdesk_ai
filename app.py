@@ -3,6 +3,7 @@ import pandas as pd
 import io
 import re
 import json
+import requests
 
 import os
 import re
@@ -442,6 +443,7 @@ def github_download_file(rel_path: str, local_path: Path) -> bool:
 
 def github_upload_file(local_path: Path, rel_path: str | None = None, commit_message: str | None = None) -> bool:
     if not github_persistence_enabled() or not local_path.exists():
+        st.error("GitHub保存の前提条件を満たしていません。PERSIST_MODE / GITHUB_TOKEN / GITHUB_REPO / 対象ファイルを確認してください。")
         return False
     rel_path = rel_path or _remote_relpath(local_path)
     try:
@@ -449,6 +451,11 @@ def github_upload_file(local_path: Path, rel_path: str | None = None, commit_mes
         get_res = requests.get(_github_api_url(rel_path), headers=_github_headers(), params={"ref": GITHUB_BRANCH}, timeout=20)
         if get_res.status_code == 200:
             existing_sha = get_res.json().get("sha")
+        elif get_res.status_code not in (200, 404):
+            st.error(f"GitHub API error (GET): {get_res.status_code}")
+            st.code(get_res.text)
+            st.caption(f"保存先: {GITHUB_REPO}@{GITHUB_BRANCH} / {GITHUB_BASE_PATH}/{rel_path}")
+            return False
 
         raw = local_path.read_bytes()
         payload = {
@@ -459,8 +466,16 @@ def github_upload_file(local_path: Path, rel_path: str | None = None, commit_mes
         if existing_sha:
             payload["sha"] = existing_sha
         put_res = requests.put(_github_api_url(rel_path), headers=_github_headers(), json=payload, timeout=25)
-        return put_res.status_code in (200, 201)
-    except Exception:
+        if put_res.status_code not in (200, 201):
+            st.error(f"GitHub API error (PUT): {put_res.status_code}")
+            st.code(put_res.text)
+            st.caption(f"保存先: {GITHUB_REPO}@{GITHUB_BRANCH} / {GITHUB_BASE_PATH}/{rel_path}")
+            return False
+        return True
+    except Exception as e:
+        st.error("GitHub保存エラー")
+        st.exception(e)
+        st.caption(f"保存先: {GITHUB_REPO}@{GITHUB_BRANCH} / {GITHUB_BASE_PATH}/{rel_path}")
         return False
 
 
