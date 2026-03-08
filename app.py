@@ -2029,9 +2029,12 @@ if user_q:
             st.session_state["pending_nohit"] = st.session_state.get("last_nohit", {})
             st.info("該当なしログに追加しました。必要なら下の『追加情報を記録』で状況を補足できます。")
             # 送信直後（この実行）でも必ずフォームを表示
-            render_nohit_extra_form(info=st.session_state.get('pending_nohit', {}), expanded=True)
 
     st.session_state.messages.append({"role": "assistant", "content": str(answer)})
+
+    # nohit はフォーム表示のために再描画
+    if "was_nohit" in locals() and was_nohit:
+        st.rerun()
 
     # おすすめ質問ボタンから自動送信した場合は、もう一度 rerun して入力欄を確実に表示
     if used_pending:
