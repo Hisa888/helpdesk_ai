@@ -535,6 +535,10 @@ def persist_log_now(path: Path) -> bool:
 
 
 
+
+DEFAULT_SEARCH_THRESHOLD = 0.42
+DEFAULT_SUGGEST_THRESHOLD = 0.26
+
 SEARCH_SETTINGS_PATH = DATA_DIR / "search_settings.json"
 
 
@@ -1117,9 +1121,6 @@ def generate_effect_report_pdf(
 
 
 TOP_K = 3
-DEFAULT_SEARCH_THRESHOLD = 0.42
-DEFAULT_SUGGEST_THRESHOLD = 0.26
-
 st.set_page_config(page_title="情シス問い合わせAI", layout="wide")
 
 
