@@ -991,9 +991,9 @@ with col_name:
     st.caption("情シス問い合わせAI（営業デモ）")
 with col_btn:
     if contact_link:
-        st.link_button("📩 導入相談", contact_link, use_container_width=True)
+        st.link_button("📩 導入相談", contact_link, width="stretch")
     else:
-        st.button("📩 導入相談（リンク未設定）", disabled=True, use_container_width=True)
+        st.button("📩 導入相談（リンク未設定）", disabled=True, width="stretch")
 
 # ===== ヒーローヘッダー =====
 st.markdown(
@@ -1217,7 +1217,7 @@ with st.sidebar:
                     data=pdf_bytes,
                     file_name=f"effect_report_{datetime.now().strftime('%Y%m')}.pdf",
                     mime="application/pdf",
-                    use_container_width=True,
+                    width="stretch",
                 )
             except Exception as e:
                 st.error(f"PDF生成でエラー: {e}")
@@ -1236,7 +1236,7 @@ with st.sidebar:
             data=latest_bytes,
             file_name=latest.name,
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
 
         zip_bytes = make_logs_zip(log_files)
@@ -1245,7 +1245,7 @@ with st.sidebar:
             data=zip_bytes,
             file_name="nohit_logs.zip",
             mime="application/zip",
-            use_container_width=True,
+            width="stretch",
         )
 
         with st.expander("ログ一覧を見る"):
@@ -1727,7 +1727,7 @@ with st.sidebar:
                         data=ops_pdf,
                         file_name="操作説明書_情シス問い合わせAI.pdf",
                         mime="application/pdf",
-                        use_container_width=True,
+                        width="stretch",
                     )
                 with col_b:
                     proposal_pdf = generate_sales_proposal_pdf()
@@ -1736,7 +1736,7 @@ with st.sidebar:
                         data=proposal_pdf,
                         file_name="提案資料_情シス問い合わせAI.pdf",
                         mime="application/pdf",
-                        use_container_width=True,
+                        width="stretch",
                     )
                 st.caption("※ どちらもアプリの現状に合わせて自動生成されます（必要に応じて文面はカスタマイズ可能）。")
 
@@ -1757,7 +1757,7 @@ with st.sidebar:
                     data=faq_excel_bytes,
                     file_name="faq.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
+                    width="stretch",
                     key="download_faq_xlsx_admin",
                 )
                 st.info("Excelテンプレート列名: 質問 / 回答 / カテゴリ")
@@ -1766,7 +1766,7 @@ with st.sidebar:
                     st.caption(f"現在のFAQ件数: {len(faq_preview_df)} 件")
                     if len(faq_preview_df) > 0:
                         preview_jp = faq_preview_df.head(10).rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"})
-                        st.dataframe(preview_jp, use_container_width=True, hide_index=True)
+                        st.dataframe(preview_jp, width="stretch", hide_index=True)
                 except Exception:
                     st.caption("FAQ のプレビュー取得に失敗しました。")
             else:
@@ -1789,9 +1789,9 @@ with st.sidebar:
                         st.error("アップロードされたファイルから有効なFAQを読み取れませんでした。question/answer 列を確認してください。")
                     else:
                         st.success(f"アップロード確認OK: {len(incoming_df)} 件のFAQを検出しました。")
-                        st.dataframe(incoming_df.head(10).rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"}), use_container_width=True, hide_index=True)
+                        st.dataframe(incoming_df.head(10).rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"}), width="stretch", hide_index=True)
 
-                        if st.button("📤 この内容でFAQを反映する", type="primary", use_container_width=True, key="replace_faq_xlsx_admin"):
+                        if st.button("📤 この内容でFAQを反映する", type="primary", width="stretch", key="replace_faq_xlsx_admin"):
                             incoming_df.to_csv(FAQ_PATH, index=False, encoding="utf-8")
                             try:
                                 load_faq_index.clear()
@@ -1848,7 +1848,7 @@ with st.sidebar:
                     edited = st.data_editor(
                         gen_df,
                         num_rows="dynamic",
-                        use_container_width=True,
+                        width="stretch",
                         key="faq_editor",
                     )
 
