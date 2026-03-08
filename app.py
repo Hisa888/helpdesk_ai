@@ -1670,6 +1670,10 @@ with st.sidebar:
         with st.expander("📂 FAQ管理（Excelダウンロード / アップロード）", expanded=True):
             st.caption("管理者は FAQ を Excel(.xlsx) で一括入出力できます。500件以上でもまとめて置き換え可能です。推奨列名は『質問 / 回答 / カテゴリ』です。")
 
+            if st.session_state.get("faq_replace_result"):
+                st.success(st.session_state["faq_replace_result"])
+                st.session_state.pop("faq_replace_result", None)
+
             current_faq_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
             excel_bytes = faq_df_to_excel_bytes(current_faq_df)
             st.download_button(
@@ -1698,9 +1702,28 @@ with st.sidebar:
                         st.caption(f"先頭20件を表示中です。保存対象は全 {len(incoming_df)} 件です。")
 
                     if st.button("📥 この内容でFAQを反映する", type="primary", key="replace_faq_excel_admin", width="stretch"):
-                        saved = save_faq_csv_full(FAQ_PATH, incoming_df)
-                        st.success(f"FAQを {saved} 件反映しました。faq.csv を丸ごと更新し、次回検索から全件利用されます。")
-                        st.rerun()
+                        with st.spinner("FAQを保存しています..."):
+                            saved = save_faq_csv_full(FAQ_PATH, incoming_df)
+                            reloaded_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
+
+                            try:
+                                load_faq_index.clear()
+                            except Exception:
+                                pass
+                            try:
+                                st.cache_resource.clear()
+                            except Exception:
+                                pass
+                            try:
+                                st.cache_data.clear()
+                            except Exception:
+                                pass
+
+                            if int(saved) != int(len(reloaded_df)):
+                                st.error(f"保存件数と再読込件数が一致しません。保存: {saved} 件 / 再読込: {len(reloaded_df)} 件")
+                            else:
+                                st.session_state["faq_replace_result"] = f"FAQを {saved} 件反映しました。現在登録中のFAQ件数も {len(reloaded_df)} 件です。"
+                                st.rerun()
                 except Exception as e:
                     st.error(f"FAQファイルの取込でエラー: {e}")
 
