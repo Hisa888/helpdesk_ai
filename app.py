@@ -103,12 +103,12 @@ def normalize_faq_columns(df: pd.DataFrame) -> pd.DataFrame:
             out[col] = ""
     out = out[["question", "answer", "category"]].copy()
     for col in ["question", "answer", "category"]:
-        out[col] = out[col].fillna("").astype(str).str.replace("
-", "
-", regex=False).str.strip()
-    out = out[(out["question"] != "") & (out["answer"] != "")].reset_index(drop=True)
-    return out
+        if col in out.columns:
+            out[col] = out[col].fillna("").astype(str).str.replace("\n", " ").str.replace("\r", " ")
 
+    out = out[(out["question"] != "") & (out["answer"] != "")].reset_index(drop=True)
+
+    return out
 
 def _xlsx_escape(text: str) -> str:
     return (str(text)
