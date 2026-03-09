@@ -1,19 +1,12 @@
-{
-  "company_branding": true,
-  "contact_button": true,
-  "hero_header": true,
-  "kpi_cards": true,
-  "sidebar_overview": true,
-  "sidebar_expected_effect": true,
-  "sidebar_usage": true,
-  "sidebar_nohit_stats": true,
-  "sidebar_simulator": true,
-  "sidebar_charts": true,
-  "sidebar_effect_report_pdf": true,
-  "sidebar_log_download": true,
-  "reference_faq": true,
-  "suggested_questions": true,
-  "nohit_extra_form": true,
-  "admin_material_pdfs": true,
-  "admin_faq_auto_generation": true
-}
+streamlit==1.55.0
+pandas==2.3.3
+scikit-learn==1.8.0
+requests==2.32.5
+reportlab==4.4.10
+numpy==2.4.2
+scipy==1.17.1
+python-dateutil==2.9.0.post0
+pytz==2026.1.post1
+tzdata==2025.3
+joblib==1.5.3
+threadpoolctl==3.6.0
