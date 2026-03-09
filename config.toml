@@ -1,0 +1,12 @@
+import streamlit as st
+
+def render_sidebar():
+    st.sidebar.title("メニュー")
+    with st.sidebar:
+        password = st.text_input("管理者パスワード", type="password")
+        if st.button("管理者ログイン", width="stretch"):
+            if password == "admin":
+                st.session_state.admin_mode = True
+                st.success("管理者モードに入りました。")
+            else:
+                st.error("パスワードが違います。")
