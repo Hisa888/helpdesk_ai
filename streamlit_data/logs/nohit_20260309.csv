@@ -1,3 +1,3 @@
 timestamp,question,device,location,network,error_text,impact,channel
-2026-03-09T00:53:58,エクセルが固まった,,,,,,web
-2026-03-09T01:14:47,Edgeが表示されません,,,,,,web
+2026-03-09T00:53:58,エクセルが固まった,nan,nan,nan,nan,nan,web
+2026-03-09T01:14:47,Edgeが表示されません,Windows,社内,Wi-Fi,TEST,自分のみ,web
