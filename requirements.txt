@@ -1,6 +1,19 @@
-streamlit
-pandas
-scikit-learn
-requests
-groq
-reportlab
+{
+  "company_branding": true,
+  "contact_button": true,
+  "hero_header": true,
+  "kpi_cards": true,
+  "sidebar_overview": true,
+  "sidebar_expected_effect": true,
+  "sidebar_usage": true,
+  "sidebar_nohit_stats": true,
+  "sidebar_simulator": true,
+  "sidebar_charts": true,
+  "sidebar_effect_report_pdf": true,
+  "sidebar_log_download": true,
+  "reference_faq": true,
+  "suggested_questions": true,
+  "nohit_extra_form": true,
+  "admin_material_pdfs": true,
+  "admin_faq_auto_generation": true
+}

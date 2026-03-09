@@ -1,42 +1,31 @@
-import streamlit as st
-
-from core.config import init_app
-from core.feature_flags import ff
-from faq.faq_loader import load_faq
-from ai.search_engine import search_faq
-from ai.ai_answer import generate_ai_answer
-
-from ui.header import render_header
-from ui.sidebar import render_sidebar
-from ui.chat_ui import render_chat
-
-from logs.log_manager import save_nohit_log
-from admin.admin_panel import render_admin_panel
-
-init_app()
-
-faq_df = load_faq()
-
-render_header()
-render_sidebar()
-
-question = render_chat()
-
-if question:
-
-    result = search_faq(question, faq_df)
-
-    if result["score"] > 0.4:
-
-        answer = generate_ai_answer(question, result["faq"])
-
-        st.success(answer)
-
-    else:
-
-        st.warning("該当するFAQが見つかりませんでした")
-
-        save_nohit_log(question)
-
-if st.session_state.get("admin_mode"):
-    render_admin_panel()
+﻿question,answer,category
+パスワードを忘れました,"・パスワードリセット画面を開きます
+・会社メールアドレスを入力します
+・届いた案内に従って再設定します",アカウント
+アカウントがロックされました,"・数分待ってから再試行します
+・連続失敗が続く場合は情シスへ連絡します
+・本人確認後に解除します",アカウント
+PCの電源が入りません,"・電源ケーブル接続を確認します
+・電源ボタンを10秒長押しします
+・改善しない場合は端末番号を添えて連絡します",PC
+メールが送信できません,"・宛先アドレスを確認します
+・添付ファイル容量を確認します
+・送信エラー内容を添えて情シスへ連絡します",メール
+VPN接続できません,"・ネットワーク接続を確認します
+・VPNクライアントを再起動します
+・認証情報が正しいか確認します",ネットワーク
+社内サイトが開きません,"・VPN接続状態を確認します
+・ブラウザを再読み込みします
+・他の社内サイトが開けるか確認します",ネットワーク
+Outlookが起動しません,"・PCを再起動します
+・Outlookをセーフモードで起動します
+・改善しない場合は情シスへ連絡します",メール
+プリンターで印刷できません,"・プリンターの電源と用紙を確認します
+・既定プリンター設定を確認します
+・印刷待ちジョブを削除して再実行します",プリンター
+共有フォルダに入れません,"・VPN接続を確認します
+・フォルダ権限の有無を確認します
+・対象パスを添えて情シスへ連絡します",ファイル共有
+Microsoft Teamsにログインできません,"・会社アカウントでサインインしているか確認します
+・多要素認証の承認状況を確認します
+・ブラウザ版でも再試行します",Teams
