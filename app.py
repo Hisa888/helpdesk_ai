@@ -1,3 +1,8 @@
+
+import streamlit as st
+st.write("起動確認OK")
+
+
 from pathlib import Path
 import pandas as pd
 import io
@@ -80,6 +85,238 @@ def extract_json_array(text: str) -> str | None:
     m = re.search(r"\[[\s\S]*\]", s)
     return m.group(0).strip() if m else None
 
+
+
+def normalize_faq_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """列名揺れを吸収して question/answer/category に正規化する。"""
+    if df is None or len(df) == 0:
+        return pd.DataFrame(columns=["question", "answer", "category"])
+    out = df.copy()
+    rename_map = {}
+    for c in out.columns:
+        original = str(c).strip()
+        key = original.lower()
+        if original in ["質問", "問い合わせ", "問合せ"] or key in ["question", "query"]:
+            rename_map[c] = "question"
+        elif original in ["回答"] or key in ["answer", "answer_text", "reply"]:
+            rename_map[c] = "answer"
+        elif original in ["カテゴリ", "分類"] or key in ["category"]:
+            rename_map[c] = "category"
+    out = out.rename(columns=rename_map)
+    for col in ["question", "answer", "category"]:
+        if col not in out.columns:
+            out[col] = ""
+    out = out[["question", "answer", "category"]].copy()
+    for col in ["question", "answer", "category"]:
+        if col in out.columns:
+            out[col] = out[col].fillna("").astype(str).str.replace("\n", " ").str.replace("\r", " ")
+
+    out = out[(out["question"] != "") & (out["answer"] != "")].reset_index(drop=True)
+
+    return out
+
+def _xlsx_escape(text: str) -> str:
+    return (str(text)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', '&quot;'))
+
+
+def _build_minimal_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "FAQ") -> bytes:
+    from io import BytesIO
+    rows = [list(df.columns)] + df.fillna("").astype(str).values.tolist()
+    shared_strings = []
+    sst_index = {}
+    def get_sst_idx(value: str) -> int:
+        value = str(value)
+        if value not in sst_index:
+            sst_index[value] = len(shared_strings)
+            shared_strings.append(value)
+        return sst_index[value]
+    sheet_rows = []
+    for r_idx, row in enumerate(rows, start=1):
+        cells = []
+        for c_idx, value in enumerate(row, start=1):
+            col = ""
+            n = c_idx
+            while n:
+                n, rem = divmod(n - 1, 26)
+                col = chr(65 + rem) + col
+            ref = f"{col}{r_idx}"
+            s_idx = get_sst_idx(value)
+            cells.append(f'<c r="{ref}" t="s"><v>{s_idx}</v></c>')
+        sheet_rows.append(f'<row r="{r_idx}">' + "".join(cells) + '</row>')
+    sheet_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<sheetData>' + ''.join(sheet_rows) + '</sheetData>'
+        '</worksheet>'
+    )
+    sst_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{len(shared_strings)}" uniqueCount="{len(shared_strings)}">'
+        + ''.join(f'<si><t xml:space="preserve">{_xlsx_escape(s)}</t></si>' for s in shared_strings) +
+        '</sst>'
+    )
+    workbook_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        f'<sheets><sheet name="{_xlsx_escape(sheet_name)}" sheetId="1" r:id="rId1"/></sheets>'
+        '</workbook>'
+    )
+    workbook_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>'
+        '</Relationships>'
+    )
+    root_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>'
+        '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>'
+        '</Relationships>'
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+        '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'
+        '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+        '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+        '</Types>'
+    )
+    styles_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>'
+        '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
+        '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+        '<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>'
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+        '</styleSheet>'
+    )
+    core_xml = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
+                'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" '
+                'xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+                '<dc:title>FAQ</dc:title><dc:creator>ChatGPT</dc:creator></cp:coreProperties>')
+    app_xml = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+               '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" '
+               'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+               '<Application>Microsoft Excel</Application></Properties>')
+    bio = BytesIO()
+    with zipfile.ZipFile(bio, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('[Content_Types].xml', content_types)
+        zf.writestr('_rels/.rels', root_rels)
+        zf.writestr('docProps/core.xml', core_xml)
+        zf.writestr('docProps/app.xml', app_xml)
+        zf.writestr('xl/workbook.xml', workbook_xml)
+        zf.writestr('xl/_rels/workbook.xml.rels', workbook_rels)
+        zf.writestr('xl/styles.xml', styles_xml)
+        zf.writestr('xl/sharedStrings.xml', sst_xml)
+        zf.writestr('xl/worksheets/sheet1.xml', sheet_xml)
+    return bio.getvalue()
+
+
+def faq_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
+    export_df = normalize_faq_columns(df).rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"})
+    return _build_minimal_xlsx_bytes(export_df, sheet_name="FAQ")
+
+
+def _read_xlsx_bytes(raw: bytes) -> pd.DataFrame:
+    import xml.etree.ElementTree as ET
+    from io import BytesIO
+    ns = {
+        "a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+        "pr": "http://schemas.openxmlformats.org/package/2006/relationships",
+    }
+    with zipfile.ZipFile(BytesIO(raw)) as zf:
+        shared = []
+        if 'xl/sharedStrings.xml' in zf.namelist():
+            root = ET.fromstring(zf.read('xl/sharedStrings.xml'))
+            for si in root.findall('a:si', ns):
+                texts = [t.text or '' for t in si.findall('.//a:t', ns)]
+                shared.append(''.join(texts))
+        sheet_path = 'xl/worksheets/sheet1.xml'
+        if 'xl/workbook.xml' in zf.namelist() and 'xl/_rels/workbook.xml.rels' in zf.namelist():
+            wb = ET.fromstring(zf.read('xl/workbook.xml'))
+            rels = ET.fromstring(zf.read('xl/_rels/workbook.xml.rels'))
+            rid_to_target = {rel.attrib.get('Id'): rel.attrib.get('Target') for rel in rels.findall('pr:Relationship', ns)}
+            first_sheet = wb.find('{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheets/{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheet')
+            if first_sheet is not None:
+                rid = first_sheet.attrib.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+                target = rid_to_target.get(rid)
+                if target:
+                    if not target.startswith('worksheets/'):
+                        target = target.split('xl/')[-1]
+                    sheet_path = 'xl/' + target
+        sheet = ET.fromstring(zf.read(sheet_path))
+        rows = []
+        for row in sheet.findall('a:sheetData/a:row', ns):
+            row_map = {}
+            max_col = 0
+            for c in row.findall('a:c', ns):
+                ref = c.attrib.get('r', '')
+                col_letters = ''.join(ch for ch in ref if ch.isalpha())
+                col_idx = 0
+                for ch in col_letters:
+                    col_idx = col_idx * 26 + (ord(ch.upper()) - 64)
+                max_col = max(max_col, col_idx)
+                t = c.attrib.get('t')
+                value = ''
+                if t == 's':
+                    v = c.find('a:v', ns)
+                    if v is not None and (v.text or '').isdigit():
+                        si = int(v.text)
+                        value = shared[si] if 0 <= si < len(shared) else ''
+                elif t == 'inlineStr':
+                    is_el = c.find('a:is', ns)
+                    if is_el is not None:
+                        value = ''.join(tn.text or '' for tn in is_el.findall('.//a:t', ns))
+                else:
+                    v = c.find('a:v', ns)
+                    value = v.text if v is not None and v.text is not None else ''
+                if col_idx > 0:
+                    row_map[col_idx] = value
+            if max_col:
+                rows.append([row_map.get(i, '') for i in range(1, max_col + 1)])
+    if not rows:
+        return pd.DataFrame()
+    max_cols = max(len(r) for r in rows)
+    rows = [r + [''] * (max_cols - len(r)) for r in rows]
+    header = [str(x).strip() for x in rows[0]]
+    body = rows[1:] if len(rows) > 1 else []
+    return pd.DataFrame(body, columns=header)
+
+
+def read_faq_uploaded_file(file_name: str, raw: bytes) -> pd.DataFrame:
+    suffix = Path(file_name).suffix.lower()
+    if suffix == '.csv':
+        tmp = Path('/tmp/_faq_upload.csv')
+        tmp.write_bytes(raw)
+        df = read_csv_flexible(tmp)
+    else:
+        df = _read_xlsx_bytes(raw)
+    return normalize_faq_columns(df)
+
+
+def save_faq_csv_full(faq_path: Path, df: pd.DataFrame) -> int:
+    clean = normalize_faq_columns(df)
+    faq_path.parent.mkdir(parents=True, exist_ok=True)
+    clean.to_csv(faq_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_ALL)
+    return len(clean)
+
 # ===== PDF生成（ReportLab）===== 
 REPORTLAB_AVAILABLE = False
 try:
@@ -138,186 +375,6 @@ def build_contact_link() -> str:
         # 件名などは最低限。必要なら後で増やせます。
         return f"mailto:{CONTACT_EMAIL}?subject=情シス問い合わせAI%20導入相談"
     return ""
-
-
-FEATURE_FLAGS_PATH = Path(_get_setting("FEATURE_FLAGS_PATH", "runtime_data/feature_flags.json"))
-FEATURE_FLAGS_FLASH_KEY = "feature_flags_flash"
-
-
-FEATURE_SPECS = {
-    "company_branding": {
-        "label": "会社名・ロゴ表示",
-        "group": "ヘッダー",
-        "description": "左上の会社名、ロゴ、サービス名キャプションを表示します。",
-        "default": True,
-    },
-    "contact_button": {
-        "label": "導入相談ボタン",
-        "group": "ヘッダー",
-        "description": "ヘッダー右上の『導入相談』ボタンを表示します。",
-        "default": True,
-    },
-    "hero_header": {
-        "label": "ヒーローヘッダー",
-        "group": "メイン画面",
-        "description": "アプリ上部の大型説明ヘッダーを表示します。",
-        "default": True,
-    },
-    "kpi_cards": {
-        "label": "KPIカード",
-        "group": "メイン画面",
-        "description": "直近7日の問い合わせ数、自動対応率、削減時間などのKPIを表示します。",
-        "default": True,
-    },
-    "sidebar_overview": {
-        "label": "サイドバー: このAIでできること",
-        "group": "サイドバー",
-        "description": "サイドバーの機能概要ブロックを表示します。",
-        "default": True,
-    },
-    "sidebar_expected_effect": {
-        "label": "サイドバー: 想定効果",
-        "group": "サイドバー",
-        "description": "削減効果や品質平準化などの想定効果を表示します。",
-        "default": True,
-    },
-    "sidebar_usage": {
-        "label": "サイドバー: 使い方",
-        "group": "サイドバー",
-        "description": "ユーザー向けの簡易操作手順を表示します。",
-        "default": True,
-    },
-    "sidebar_nohit_stats": {
-        "label": "サイドバー: 問い合わせログ状況",
-        "group": "サイドバー",
-        "description": "該当なしログの件数メトリクスを表示します。",
-        "default": True,
-    },
-    "sidebar_simulator": {
-        "label": "サイドバー: 削減時間シミュレーター",
-        "group": "サイドバー",
-        "description": "平均対応時間と解決率を使った削減時間試算UIを表示します。",
-        "default": True,
-    },
-    "sidebar_charts": {
-        "label": "サイドバー: 見える化グラフ",
-        "group": "サイドバー",
-        "description": "問い合わせ件数、自動対応率、削減時間の推移グラフを表示します。",
-        "default": True,
-    },
-    "sidebar_effect_report_pdf": {
-        "label": "サイドバー: 効果レポートPDF",
-        "group": "サイドバー",
-        "description": "導入効果レポートPDFの出力ブロックを表示します。",
-        "default": True,
-    },
-    "sidebar_log_download": {
-        "label": "サイドバー: ログダウンロード",
-        "group": "サイドバー",
-        "description": "該当なしログCSV/ZIPのダウンロード機能を表示します。",
-        "default": True,
-    },
-    "reference_faq": {
-        "label": "参照したFAQ（根拠）",
-        "group": "回答表示",
-        "description": "回答に使ったFAQ候補を展開表示します。",
-        "default": True,
-    },
-    "suggested_questions": {
-        "label": "おすすめ質問ボタン",
-        "group": "入力補助",
-        "description": "定番の質問をワンクリック送信できるボタン群を表示します。",
-        "default": True,
-    },
-    "nohit_extra_form": {
-        "label": "該当なし時の追加情報フォーム",
-        "group": "入力補助",
-        "description": "該当なし時に詳細情報を記録するフォームを表示します。",
-        "default": True,
-    },
-    "admin_material_pdfs": {
-        "label": "管理者向け資料PDF",
-        "group": "管理者",
-        "description": "操作説明書PDFと提案資料PDFのダウンロード機能を表示します。",
-        "default": True,
-    },
-    "admin_faq_auto_generation": {
-        "label": "管理者: FAQ自動生成",
-        "group": "管理者",
-        "description": "該当なしログからFAQ案を生成して faq.csv に追記する機能を表示します。",
-        "default": True,
-    },
-}
-
-
-FEATURE_FLAG_LABELS = {key: spec["label"] for key, spec in FEATURE_SPECS.items()}
-
-
-def default_feature_flags() -> dict:
-    return {key: bool(spec.get("default", True)) for key, spec in FEATURE_SPECS.items()}
-
-
-def _sanitize_feature_flags(data: dict | None) -> dict:
-    base = default_feature_flags()
-    src = data if isinstance(data, dict) else {}
-    out = {}
-    for key, default in base.items():
-        out[key] = bool(src.get(key, default))
-    return out
-
-
-def _write_json_atomic(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(path)
-
-
-def load_feature_flags() -> dict:
-    if FEATURE_FLAGS_PATH.exists():
-        try:
-            data = json.loads(FEATURE_FLAGS_PATH.read_text(encoding="utf-8"))
-            return _sanitize_feature_flags(data)
-        except Exception:
-            return default_feature_flags()
-    return default_feature_flags()
-
-
-def save_feature_flags(flags: dict) -> tuple[bool, dict, str]:
-    clean = _sanitize_feature_flags(flags)
-    try:
-        _write_json_atomic(FEATURE_FLAGS_PATH, clean)
-        return True, clean, f"{FEATURE_FLAGS_PATH} に保存しました。"
-    except Exception as e:
-        return False, clean, f"保存に失敗しました: {e}"
-
-
-FEATURE_FLAGS = load_feature_flags()
-if "feature_flags" not in st.session_state:
-    st.session_state.feature_flags = FEATURE_FLAGS.copy()
-
-
-def feature_enabled(key: str) -> bool:
-    current = st.session_state.get("feature_flags", FEATURE_FLAGS)
-    return bool(current.get(key, default_feature_flags().get(key, True)))
-
-
-def ff(key: str) -> bool:
-    return feature_enabled(key)
-
-
-def feature_flags_table_df(flags: dict | None = None) -> pd.DataFrame:
-    current = _sanitize_feature_flags(flags if flags is not None else st.session_state.get("feature_flags", FEATURE_FLAGS))
-    rows = []
-    for key, spec in FEATURE_SPECS.items():
-        rows.append({
-            "グループ": spec.get("group", "その他"),
-            "機能キー": key,
-            "機能": spec.get("label", key),
-            "現在値": "ON" if current.get(key, False) else "OFF",
-            "説明": spec.get("description", ""),
-        })
-    return pd.DataFrame(rows)
 
 
 def list_log_files():
@@ -889,29 +946,23 @@ h1 {
 # ===== 会社名 / ロゴ（左上）=====
 contact_link = build_contact_link()
 logo_path_obj = Path(LOGO_PATH)
-show_branding = ff("company_branding") or ff("contact_button")
-if show_branding:
-    col_logo, col_name, col_btn = st.columns([1, 6, 3])
-    with col_logo:
-        if ff("company_branding"):
-            if LOGO_PATH and logo_path_obj.exists():
-                st.image(str(logo_path_obj), width=52)
-            else:
-                st.markdown("### 🏢")
-    with col_name:
-        if ff("company_branding"):
-            st.markdown(f"### {COMPANY_NAME}")
-            st.caption("情シス問い合わせAI（営業デモ）")
-    with col_btn:
-        if ff("contact_button"):
-            if contact_link:
-                st.link_button("📩 導入相談", contact_link, width="stretch")
-            else:
-                st.button("📩 導入相談（リンク未設定）", disabled=True, width="stretch")
+col_logo, col_name, col_btn = st.columns([1, 6, 3])
+with col_logo:
+    if LOGO_PATH and logo_path_obj.exists():
+        st.image(str(logo_path_obj), width=52)
+    else:
+        st.markdown("### 🏢")
+with col_name:
+    st.markdown(f"### {COMPANY_NAME}")
+    st.caption("情シス問い合わせAI（営業デモ）")
+with col_btn:
+    if contact_link:
+        st.link_button("📩 導入相談", contact_link, width="stretch")
+    else:
+        st.button("📩 導入相談（リンク未設定）", disabled=True, width="stretch")
 
 # ===== ヒーローヘッダー =====
-if ff("hero_header"):
-    st.markdown(
+st.markdown(
     """
 <div class="hero">
   <h1>情シス問い合わせAI</h1>
@@ -938,27 +989,28 @@ if ff("hero_header"):
 
 
 # ===== KPI（直近7日）=====
-if ff("kpi_cards"):
-    try:
-        _df7 = read_interactions(days=7)
-        if _df7 is not None and len(_df7) > 0:
-            _total7 = int(len(_df7))
-            _matched7 = int(_df7["matched"].sum()) if "matched" in _df7.columns else 0
-            _rate7 = (_matched7 / _total7 * 100.0) if _total7 else 0.0
-            _today_prefix = datetime.now().strftime("%Y-%m-%d")
-            _today = _df7[_df7["timestamp"].astype(str).str.startswith(_today_prefix)]
-            _total_today = int(len(_today))
+try:
+    _df7 = read_interactions(days=7)
+    if _df7 is not None and len(_df7) > 0:
+        _total7 = int(len(_df7))
+        _matched7 = int(_df7["matched"].sum()) if "matched" in _df7.columns else 0
+        _rate7 = (_matched7 / _total7 * 100.0) if _total7 else 0.0
+        _today_prefix = datetime.now().strftime("%Y-%m-%d")
+        _today = _df7[_df7["timestamp"].astype(str).str.startswith(_today_prefix)]
+        _total_today = int(len(_today))
 
-            _avg_min_kpi = float(st.session_state.get("avg_min", 5))
-            _deflect_kpi = float(st.session_state.get("deflect", 0.7))
-            _hourly_cost_kpi = int(st.session_state.get("hourly_cost", 4000))
-            _saved_min7 = _matched7 * _avg_min_kpi * _deflect_kpi
-            _saved_h7 = _saved_min7 / 60.0
-            _saved_yen7 = int(round(_saved_h7 * _hourly_cost_kpi)) if _hourly_cost_kpi else 0
+        # 営業用：削減時間（推定）KPI（サイドバー入力と連動）
+        _avg_min_kpi = float(st.session_state.get("avg_min", 5))
+        _deflect_kpi = float(st.session_state.get("deflect", 0.7))
+        _hourly_cost_kpi = int(st.session_state.get("hourly_cost", 4000))
+        _saved_min7 = _matched7 * _avg_min_kpi * _deflect_kpi
+        _saved_h7 = _saved_min7 / 60.0
+        _saved_yen7 = int(round(_saved_h7 * _hourly_cost_kpi)) if _hourly_cost_kpi else 0
 
-            st.markdown('<div class="section-title">📊 直近の利用状況</div>', unsafe_allow_html=True)
-            st.markdown(
-                f'''
+        # 営業用：KPIカード（中央に大きく）
+        st.markdown('<div class="section-title">📊 直近の利用状況</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'''
 <div class="kpi-grid">
   <div class="kpi">
     <div class="label">直近7日 問い合わせ</div>
@@ -987,88 +1039,88 @@ if ff("kpi_cards"):
   </div>
 </div>
 ''',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.caption("（利用ログがまだありません。質問するとKPIが表示されます）")
-    except Exception:
-        pass
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption("（利用ログがまだありません。質問するとKPIが表示されます）")
+except Exception:
+    pass
 
 
 with st.sidebar:
-    if ff("sidebar_overview"):
-        st.markdown("### 📌 このAIでできること")
-        st.markdown(
-            """
+    st.markdown("### 📌 このAIでできること")
+    st.markdown(
+        """
 - FAQから最も近い回答を提示（根拠表示）
 - 低一致は「該当なし」へ誘導＋必要情報テンプレ
 - 問い合わせ文の統一（必要情報を自動ガイド）
 """
-        )
+    )
 
-    if ff("sidebar_expected_effect"):
-        st.markdown("### 📈 想定効果（例）")
-        st.markdown(
-            """
+    st.markdown("### 📈 想定効果（例）")
+    st.markdown(
+        """
 - 繰り返し質問の削減
 - 対応品質の平準化
 - 新人でも同じ回答ができる
 """
-        )
+    )
 
-    if ff("sidebar_usage"):
-        st.markdown("### 🧭 使い方")
-        st.markdown(
-            """
+    st.markdown("### 🧭 使い方")
+    st.markdown(
+        """
 1. 質問を入力（またはおすすめボタン）  
 2. 回答＋参照FAQ（根拠）を確認  
 3. 該当なしはテンプレを使って情シスへ連絡  
 """
-        )
+    )
 
-    if ff("sidebar_nohit_stats"):
-        st.markdown("### 📊 問い合わせログ状況（該当なし）")
-        t_cnt, w_cnt, total_cnt = count_nohit_logs(days=7)
-        cA, cB, cC = st.columns(3)
-        cA.metric("今日", t_cnt)
-        cB.metric("過去7日", w_cnt)
-        cC.metric("累計", total_cnt)
+    # ======================
+    # ログ（該当なし）状況＆ダウンロード
+    # ======================
+    st.markdown("### 📊 問い合わせログ状況（該当なし）")
+    t_cnt, w_cnt, total_cnt = count_nohit_logs(days=7)
+    cA, cB, cC = st.columns(3)
+    cA.metric("今日", t_cnt)
+    cB.metric("過去7日", w_cnt)
+    cC.metric("累計", total_cnt)
 
-    avg_min = float(st.session_state.get("avg_min", 5))
-    deflect_pct = int(st.session_state.get("deflect_pct", 70))
+
+    # ======================
+    # 削減時間シミュレーター（営業用）
+    # ======================
+    st.markdown("### ⏱ 削減時間シミュレーター")
+    avg_min = st.slider("1件あたりの平均対応時間（分）", 1, 20, int(st.session_state.get("avg_min", 5)), help="情シスが1件対応する平均時間の目安", key="avg_min")
+    deflect_pct = st.slider("AIで解決できる割合（推定）", 30, 100, int(st.session_state.get("deflect_pct", 70)), help="AI回答で自己解決に至る割合の推定", key="deflect_pct")
     deflect = deflect_pct / 100.0
     st.session_state["deflect"] = deflect
-    hourly_cost = int(st.session_state.get("hourly_cost", 4000))
-
-    if ff("sidebar_simulator"):
-        st.markdown("### ⏱ 削減時間シミュレーター")
-        avg_min = st.slider("1件あたりの平均対応時間（分）", 1, 20, int(st.session_state.get("avg_min", 5)), help="情シスが1件対応する平均時間の目安", key="avg_min")
-        deflect_pct = st.slider("AIで解決できる割合（推定）", 30, 100, int(st.session_state.get("deflect_pct", 70)), help="AI回答で自己解決に至る割合の推定", key="deflect_pct")
-        deflect = deflect_pct / 100.0
-        st.session_state["deflect"] = deflect
 
     df_int = read_interactions(days=7)
-    if ff("sidebar_simulator"):
-        if df_int is None or len(df_int) == 0:
-            st.caption("まだ利用ログがありません（質問すると自動で蓄積します）。")
-        else:
-            matched_7d = int(df_int["matched"].sum()) if "matched" in df_int.columns else 0
-            total_7d = int(len(df_int))
-            nohit_7d = total_7d - matched_7d
-            saved_min_7d = matched_7d * float(avg_min) * float(deflect)
-            st.metric("推定削減（過去7日）", format_minutes_to_hours(saved_min_7d))
-            st.caption(f"内訳：自動対応 {matched_7d} 件 / 該当なし {nohit_7d} 件（合計 {total_7d} 件）")
+    if df_int is None or len(df_int) == 0:
+        st.caption("まだ利用ログがありません（質問すると自動で蓄積します）。")
+    else:
+        matched_7d = int(df_int["matched"].sum()) if "matched" in df_int.columns else 0
+        total_7d = int(len(df_int))
+        nohit_7d = total_7d - matched_7d
+        saved_min_7d = matched_7d * float(avg_min) * float(deflect)
+        st.metric("推定削減（過去7日）", format_minutes_to_hours(saved_min_7d))
+        st.caption(f"内訳：自動対応 {matched_7d} 件 / 該当なし {nohit_7d} 件（合計 {total_7d} 件）")
 
-            try:
-                today_prefix = datetime.now().strftime("%Y-%m-%d")
-                df_today = df_int[df_int["timestamp"].astype(str).str.startswith(today_prefix)]
-                matched_today = int(df_today["matched"].sum()) if len(df_today) else 0
-                saved_min_today = matched_today * float(avg_min) * float(deflect)
-                st.metric("推定削減（今日）", format_minutes_to_hours(saved_min_today))
-            except Exception:
-                pass
+        # 今日分（timestamp先頭が YYYY-MM-DD の想定）
+        try:
+            today_prefix = datetime.now().strftime("%Y-%m-%d")
+            df_today = df_int[df_int["timestamp"].astype(str).str.startswith(today_prefix)]
+            matched_today = int(df_today["matched"].sum()) if len(df_today) else 0
+            saved_min_today = matched_today * float(avg_min) * float(deflect)
+            st.metric("推定削減（今日）", format_minutes_to_hours(saved_min_today))
+        except Exception:
+            pass
 
-    if ff("sidebar_charts") and df_int is not None and len(df_int) > 0:
+    
+    # ======================
+    # 見える化（グラフ）
+    # ======================
+    if df_int is not None and len(df_int) > 0:
         st.markdown("### 📈 見える化（直近7日）")
 
         df_plot = df_int.copy()
@@ -1083,79 +1135,88 @@ with st.sidebar:
         daily["saved_min"] = daily["matched"] * float(avg_min) * float(deflect)
         daily["saved_min_cum"] = daily["saved_min"].cumsum()
 
+        # 1) 問い合わせ件数
         st.caption("📈 7日間の問い合わせ件数推移")
         st.line_chart(daily.set_index("date")[["total"]])
+
+        # 2) 自動対応率
         st.caption("🧠 AI自動対応率の推移（FAQヒット率）")
         st.line_chart(daily.set_index("date")[["auto_rate"]])
+
+        # 3) 削減時間（累計）
         st.caption("⏱ 削減時間の累計（推定）")
         st.line_chart(daily.set_index("date")[["saved_min_cum"]])
 
-    if ff("sidebar_effect_report_pdf"):
-        st.markdown("### 📄 効果レポート（PDF）")
-        if not REPORTLAB_AVAILABLE:
-            st.warning("PDF出力には 'reportlab' が必要です。Streamlit Cloud の requirements.txt に 'reportlab' を追加して再デプロイしてください。")
-            st.code("reportlab", language="text")
-        else:
-            hourly_cost = st.number_input("想定人件費（円/時間）", min_value=0, max_value=20000, value=int(st.session_state.get("hourly_cost", 4000)), step=500, key="hourly_cost")
-            df_month_all = read_interactions(days=60)
-            if df_month_all is None or len(df_month_all) == 0:
-                st.caption("今月の利用ログがまだありません。質問すると自動で蓄積します。")
-            else:
-                try:
-                    ts = pd.to_datetime(df_month_all["timestamp"], errors="coerce")
-                    month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                    df_month = df_month_all[ts >= month_start]
-                except Exception:
-                    df_month = df_month_all
+    # ======================
+    # 効果レポートPDF出力（今月）
+    # ======================
+    st.markdown("### 📄 効果レポート（PDF）")
 
-                try:
-                    pdf_bytes = generate_effect_report_pdf(
-                        df=df_month,
-                        avg_min=float(avg_min),
-                        deflect=float(deflect),
-                        hourly_cost_yen=int(hourly_cost),
-                    )
-                    st.download_button(
-                        "📄 今月の導入効果レポートをダウンロード",
-                        data=pdf_bytes,
-                        file_name=f"effect_report_{datetime.now().strftime('%Y%m')}.pdf",
-                        mime="application/pdf",
-                        width="stretch",
-                    )
-                except Exception as e:
-                    st.error(f"PDF生成でエラー: {e}")
+    if not REPORTLAB_AVAILABLE:
+        st.warning("PDF出力には 'reportlab' が必要です。Streamlit Cloud の requirements.txt に 'reportlab' を追加して再デプロイしてください。")
+        st.code("reportlab", language="text")
+    else:
+        hourly_cost = st.number_input("想定人件費（円/時間）", min_value=0, max_value=20000, value=int(st.session_state.get("hourly_cost", 4000)), step=500, key="hourly_cost")
+        # st.session_state["hourly_cost"] = int(hourly_cost)
 
-    if ff("sidebar_log_download"):
-        st.markdown("### 📥 ログ（該当なし）ダウンロード")
-        log_files = list_log_files()
-        if not log_files:
-            st.caption("まだログはありません。")
+        # 今月のログを集計（最大60日読み込み→今月分だけ抽出）
+        df_month_all = read_interactions(days=60)
+        if df_month_all is None or len(df_month_all) == 0:
+            st.caption("今月の利用ログがまだありません。質問すると自動で蓄積します。")
         else:
-            latest = log_files[0]
             try:
-                latest_bytes = latest.read_bytes()
+                ts = pd.to_datetime(df_month_all["timestamp"], errors="coerce")
+                month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                df_month = df_month_all[ts >= month_start]
             except Exception:
-                latest_bytes = b""
-            st.download_button(
-                "⬇ 最新ログCSVをダウンロード",
-                data=latest_bytes,
-                file_name=latest.name,
-                mime="text/csv",
-                width="stretch",
-            )
+                df_month = df_month_all
 
-            zip_bytes = make_logs_zip(log_files)
-            st.download_button(
-                "⬇ ログをZIPでまとめてDL",
-                data=zip_bytes,
-                file_name="nohit_logs.zip",
-                mime="application/zip",
-                width="stretch",
-            )
+            try:
+                pdf_bytes = generate_effect_report_pdf(
+                    df=df_month,
+                    avg_min=float(avg_min),
+                    deflect=float(deflect),
+                    hourly_cost_yen=int(hourly_cost),
+                )
+                st.download_button(
+                    "📄 今月の導入効果レポートをダウンロード",
+                    data=pdf_bytes,
+                    file_name=f"effect_report_{datetime.now().strftime('%Y%m')}.pdf",
+                    mime="application/pdf",
+                    width="stretch",
+                )
+            except Exception as e:
+                st.error(f"PDF生成でエラー: {e}")
+    st.markdown("### 📥 ログ（該当なし）ダウンロード")
+    log_files = list_log_files()
+    if not log_files:
+        st.caption("まだログはありません。")
+    else:
+        latest = log_files[0]
+        try:
+            latest_bytes = latest.read_bytes()
+        except Exception:
+            latest_bytes = b""
+        st.download_button(
+            "⬇ 最新ログCSVをダウンロード",
+            data=latest_bytes,
+            file_name=latest.name,
+            mime="text/csv",
+            width="stretch",
+        )
 
-            with st.expander("ログ一覧を見る"):
-                for p in log_files[:20]:
-                    st.write(f"• {p.name}")
+        zip_bytes = make_logs_zip(log_files)
+        st.download_button(
+            "⬇ ログをZIPでまとめてDL",
+            data=zip_bytes,
+            file_name="nohit_logs.zip",
+            mime="application/zip",
+            width="stretch",
+        )
+
+        with st.expander("ログ一覧を見る"):
+            for p in log_files[:20]:
+                st.write(f"• {p.name}")
 
 
 # ======================
@@ -1168,14 +1229,10 @@ def load_faq_index(faq_path: Path):
         return empty, None, None
 
     try:
-        df = pd.read_csv(faq_path, encoding="utf-8", engine="python", on_bad_lines="skip")
+        df = normalize_faq_columns(read_csv_flexible(faq_path))
     except Exception:
         empty = pd.DataFrame(columns=["question", "answer", "category"])
         return empty, None, None
-
-    for col in ["question", "answer", "category"]:
-        if col not in df.columns:
-            df[col] = ""
 
     df["question"] = df["question"].fillna("").astype(str)
     df["answer"] = df["answer"].fillna("").astype(str)
@@ -1561,7 +1618,7 @@ def append_faq_csv(faq_path: Path, new_df: pd.DataFrame) -> int:
     # 既存読み込み
     if faq_path.exists():
         try:
-            exist = pd.read_csv(faq_path, encoding="utf-8", engine="python", on_bad_lines="skip")
+            exist = normalize_faq_columns(read_csv_flexible(faq_path))
         except Exception:
             exist = pd.DataFrame(columns=["question", "answer", "category"])
     else:
@@ -1615,119 +1672,112 @@ with st.sidebar:
             st.session_state.is_admin = False
             st.rerun()
 
-        with st.expander("⚙️ 機能表示設定", expanded=False):
-            if st.session_state.get(FEATURE_FLAGS_FLASH_KEY):
-                st.success(st.session_state.pop(FEATURE_FLAGS_FLASH_KEY))
+        with st.expander("📂 FAQ管理（Excelダウンロード / アップロード）", expanded=True):
+            st.caption("管理者は FAQ を Excel(.xlsx) で一括入出力できます。500件以上でもまとめて置き換え可能です。推奨列名は『質問 / 回答 / カテゴリ』です。")
 
-            st.caption("各機能の表示/非表示を切り替えられます。保存すると feature_flags.json に保存され、Streamlit を再起動しても保持されます。")
-            current_flags = _sanitize_feature_flags(st.session_state.get("feature_flags", FEATURE_FLAGS).copy())
-            edited_flags = {}
+            current_faq_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
+            excel_bytes = faq_df_to_excel_bytes(current_faq_df)
+            st.download_button(
+                "⬇ 現在のFAQをExcelでダウンロード",
+                data=excel_bytes,
+                file_name="faq.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                width="stretch",
+            )
+            st.caption(f"現在登録中のFAQ件数: {len(current_faq_df)} 件")
 
-            for group_name in sorted({spec.get("group", "その他") for spec in FEATURE_SPECS.values()}):
-                with st.container(border=True):
-                    st.markdown(f"**{group_name}**")
-                    for key, spec in FEATURE_SPECS.items():
-                        if spec.get("group", "その他") != group_name:
-                            continue
-                        edited_flags[key] = st.checkbox(
-                            spec.get("label", key),
-                            value=bool(current_flags.get(key, default_feature_flags()[key])),
-                            help=spec.get("description", ""),
-                            key=f"feature_flag_{key}",
-                        )
+            uploaded_faq = st.file_uploader(
+                "FAQファイルをアップロード",
+                type=["xlsx", "xls", "csv"],
+                key="faq_excel_uploader_admin",
+                help="Excel(.xlsx) 推奨。質問 / 回答 / カテゴリ、または question / answer / category に対応。",
+            )
 
-            st.dataframe(feature_flags_table_df(edited_flags), width="stretch", hide_index=True)
-            col_ff1, col_ff2 = st.columns(2)
-            with col_ff1:
-                if st.button("💾 機能設定を保存", width="stretch"):
-                    ok, saved, msg = save_feature_flags(edited_flags)
-                    st.session_state.feature_flags = saved
-                    if ok:
-                        st.session_state[FEATURE_FLAGS_FLASH_KEY] = f"機能設定を保存しました。保存先: {FEATURE_FLAGS_PATH}"
+            if uploaded_faq is not None:
+                try:
+                    incoming_df = read_faq_uploaded_file(uploaded_faq.name, uploaded_faq.getvalue())
+                    st.success(f"アップロード確認OK: {len(incoming_df)} 件のFAQを検出しました。")
+                    preview_df = incoming_df.rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"})
+                    st.dataframe(preview_df.head(20), width="stretch", height=420)
+                    if len(incoming_df) > 20:
+                        st.caption(f"先頭20件を表示中です。保存対象は全 {len(incoming_df)} 件です。")
+
+                    if st.button("📥 この内容でFAQを反映する", type="primary", key="replace_faq_excel_admin", width="stretch"):
+                        saved = save_faq_csv_full(FAQ_PATH, incoming_df)
+                        st.success(f"FAQを {saved} 件反映しました。faq.csv を丸ごと更新し、次回検索から全件利用されます。")
                         st.rerun()
-                    else:
-                        st.error(msg)
-            with col_ff2:
-                if st.button("↺ 初期設定に戻す", width="stretch"):
-                    ok, saved, msg = save_feature_flags(default_feature_flags())
-                    st.session_state.feature_flags = saved
-                    if ok:
-                        for key, value in saved.items():
-                            st.session_state[f"feature_flag_{key}"] = value
-                        st.session_state[FEATURE_FLAGS_FLASH_KEY] = f"初期設定に戻しました。保存先: {FEATURE_FLAGS_PATH}"
-                        st.rerun()
-                    else:
-                        st.error(msg)
+                except Exception as e:
+                    st.error(f"FAQファイルの取込でエラー: {e}")
 
         # ===== FAQ自動生成（該当なしログ → FAQ案）=====
-
+        
         # =========================
         # 管理者向け資料（PDF）ダウンロード
         # =========================
-        if ff("admin_material_pdfs"):
-            with st.expander("📘 管理者向け資料（PDF）", expanded=False):
-                if not REPORTLAB_AVAILABLE:
-                    st.warning("PDF出力には reportlab が必要です。requirements.txt に reportlab を追加してください。")
-                else:
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        ops_pdf = generate_ops_manual_pdf()
-                        st.download_button(
-                            "📄 操作説明書PDFをダウンロード",
-                            data=ops_pdf,
-                            file_name="操作説明書_情シス問い合わせAI.pdf",
-                            mime="application/pdf",
-                            width="stretch",
-                        )
-                    with col_b:
-                        proposal_pdf = generate_sales_proposal_pdf()
-                        st.download_button(
-                            "📑 提案資料PDFをダウンロード",
-                            data=proposal_pdf,
-                            file_name="提案資料_情シス問い合わせAI.pdf",
-                            mime="application/pdf",
-                            width="stretch",
-                        )
-                    st.caption("※ どちらもアプリの現状に合わせて自動生成されます（必要に応じて文面はカスタマイズ可能）。")
+        with st.expander("📘 管理者向け資料（PDF）", expanded=False):
+            if not REPORTLAB_AVAILABLE:
+                st.warning("PDF出力には reportlab が必要です。requirements.txt に reportlab を追加してください。")
+            else:
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    ops_pdf = generate_ops_manual_pdf()
+                    st.download_button(
+                        "📄 操作説明書PDFをダウンロード",
+                        data=ops_pdf,
+                        file_name="操作説明書_情シス問い合わせAI.pdf",
+                        mime="application/pdf",
+                        width="stretch",
+                    )
+                with col_b:
+                    proposal_pdf = generate_sales_proposal_pdf()
+                    st.download_button(
+                        "📑 提案資料PDFをダウンロード",
+                        data=proposal_pdf,
+                        file_name="提案資料_情シス問い合わせAI.pdf",
+                        mime="application/pdf",
+                        width="stretch",
+                    )
+                st.caption("※ どちらもアプリの現状に合わせて自動生成されます（必要に応じて文面はカスタマイズ可能）。")
 
-        if ff("admin_faq_auto_generation"):
-            st.markdown("---")
-            with st.expander("🧠 FAQ自動生成（該当なしログ → FAQ案）", expanded=False):
-                st.caption("『該当なし』ログからFAQを自動生成し、faq.csvへ追記できます。")
+        st.markdown("---")
+        with st.expander("🧠 FAQ自動生成（該当なしログ → FAQ案）", expanded=False):
+            st.caption("『該当なし』ログからFAQを自動生成し、faq.csvへ追記できます。")
 
-                log_files = list_log_files()
-                if not log_files:
-                    st.info("まだ nohit_*.csv がありません。まず質問して『該当なし』を発生させてください。")
-                else:
-                    labels = [f.name for f in log_files[:15]]
-                    pick = st.selectbox("参照するログファイル", labels, index=0)
-                    picked_path = next((p for p in log_files if p.name == pick), log_files[0])
+            log_files = list_log_files()
+            if not log_files:
+                st.info("まだ nohit_*.csv がありません。まず質問して『該当なし』を発生させてください。")
+            else:
+                labels = [f.name for f in log_files[:15]]
+                pick = st.selectbox("参照するログファイル", labels, index=0)
+                picked_path = next((p for p in log_files if p.name == pick), log_files[0])
 
-                    max_q = st.slider("生成に使う質問数（重複除外後）", 10, 200, 60, step=10)
-                    n_items = st.slider("生成するFAQ件数", 3, 20, 8)
+                max_q = st.slider("生成に使う質問数（重複除外後）", 10, 200, 60, step=10)
+                n_items = st.slider("生成するFAQ件数", 3, 20, 8)
 
-                    col_seed1, col_seed2 = st.columns([2, 3])
-                    with col_seed1:
-                        if st.button("🧪 デモ用に定番質問を追加（20件）"):
-                            added = seed_nohit_questions(20)
-                            st.success(f"nohitログに {added} 件追加しました。")
-                            st.rerun()
-                    with col_seed2:
-                        st.caption("※ 本番前にFAQ生成を試すためのテストデータです（channel=seedで記録）。")
+                col_seed1, col_seed2 = st.columns([2, 3])
+                with col_seed1:
+                    if st.button("🧪 デモ用に定番質問を追加（20件）"):
+                        added = seed_nohit_questions(20)
+                        st.success(f"nohitログに {added} 件追加しました。")
+                        st.rerun()
+                with col_seed2:
+                    st.caption("※ 本番前にFAQ生成を試すためのテストデータです（channel=seedで記録）。")
 
-                    if st.button("🤖 FAQ案を自動生成", type="primary"):
-                        with st.spinner("FAQ案を生成中..."):
-                            qs = load_nohit_questions_from_logs([picked_path], max_questions=max_q)
-                            st.info(f"ログから抽出できた有効質問数（重複除外後）：{len(qs)} 件")
-                            if len(qs) < 5:
-                                st.session_state.generated_faq_df = pd.DataFrame(columns=["category", "question", "answer"])
-                                st.warning("有効な質問が少なすぎてFAQを生成できません。ログのCSV形式（カラム名/文字コード/区切り）を確認してください。")
-                            else:
-                                try:
-                                    gen_df = generate_faq_candidates(qs, n_items=n_items)
-                                except Exception:
-                                    gen_df = pd.DataFrame(columns=["category", "question", "answer"])
-                                st.session_state.generated_faq_df = gen_df
+                if st.button("🤖 FAQ案を自動生成", type="primary"):
+                    with st.spinner("FAQ案を生成中..."):
+                        qs = load_nohit_questions_from_logs([picked_path], max_questions=max_q)
+
+                        # 生成前に「有効質問数」を可視化（原因切り分け）
+                        st.info(f"ログから抽出できた有効質問数（重複除外後）：{len(qs)} 件")
+                        if len(qs) < 5:
+                            st.session_state.generated_faq_df = pd.DataFrame(columns=["category", "question", "answer"])
+                            st.warning("有効な質問が少なすぎてFAQを生成できません。ログのCSV形式（カラム名/文字コード/区切り）を確認してください。")
+                        else:
+                            try:
+                                gen_df = generate_faq_candidates(qs, n_items=n_items)
+                            except Exception:
+                                gen_df = pd.DataFrame(columns=["category", "question", "answer"])
+                            st.session_state.generated_faq_df = gen_df
 
                 gen_df = st.session_state.get("generated_faq_df")
                 if isinstance(gen_df, pd.DataFrame) and len(gen_df) > 0:
@@ -1745,6 +1795,7 @@ with st.sidebar:
                             added = append_faq_csv(FAQ_PATH, edited.rename(columns={"category": "category"}))
                             if added > 0:
                                 st.success(f"faq.csv に {added} 件追記しました。")
+                                # 反映のため再読み込み
                                 st.session_state.generated_faq_df = pd.DataFrame()
                                 st.rerun()
                             else:
@@ -1780,48 +1831,46 @@ for m in st.session_state.messages:
 # ======================
 # 「参照FAQ」表示
 # ======================
-if ff("reference_faq"):
-    with st.expander("参照したFAQ（根拠）を見る"):
-        used_hits = st.session_state.used_hits
-        if not used_hits:
-            st.markdown('<div class="refbox">該当なし（スコアが低いため問い合わせ誘導）</div>', unsafe_allow_html=True)
-        else:
-            for i, (row, score) in enumerate(used_hits, 1):
-                render_match_bar(score)
-                q_html = str(row.get("question", "")).replace("\n", "<br>")
-                a_html = str(row.get("answer", "")).replace("\n", "<br>")
-                cat = str(row.get("category", ""))
-                match_pct = int(max(0.0, min(1.0, float(score))) * 100)
-                st.markdown(
-                    f"""
+with st.expander("参照したFAQ（根拠）を見る"):
+    used_hits = st.session_state.used_hits
+    if not used_hits:
+        st.markdown('<div class="refbox">該当なし（スコアが低いため問い合わせ誘導）</div>', unsafe_allow_html=True)
+    else:
+        for i, (row, score) in enumerate(used_hits, 1):
+            render_match_bar(score)
+            q_html = str(row.get("question", "")).replace("\n", "<br>")
+            a_html = str(row.get("answer", "")).replace("\n", "<br>")
+            cat = str(row.get("category", ""))
+            match_pct = int(max(0.0, min(1.0, float(score))) * 100)
+            st.markdown(
+                f"""
 <div class="refbox">
 <b>FAQ{i}</b>（一致度：{match_pct}% / category={cat}）<br>
 <b>Q:</b> {q_html}<br>
 <b>A:</b> {a_html}
 </div>
 """,
-                    unsafe_allow_html=True,
-                )
+                unsafe_allow_html=True,
+            )
 
 
 # ======================
 # おすすめ質問ボタン（3つ）
 # ======================
-if ff("suggested_questions"):
-    st.markdown("### 💡 おすすめ質問（クリックで送信）")
-    c1, c2, c3 = st.columns(3)
+st.markdown("### 💡 おすすめ質問（クリックで送信）")
+c1, c2, c3 = st.columns(3)
 
-    if c1.button("🔐 パスワードを忘れた"):
-        st.session_state.pending_q = "パスワードを忘れました"
-        st.rerun()
+if c1.button("🔐 パスワードを忘れた"):
+    st.session_state.pending_q = "パスワードを忘れました"
+    st.rerun()
 
-    if c2.button("🧩 アカウントがロックされた"):
-        st.session_state.pending_q = "アカウントがロックされました"
-        st.rerun()
+if c2.button("🧩 アカウントがロックされた"):
+    st.session_state.pending_q = "アカウントがロックされました"
+    st.rerun()
 
-    if c3.button("🌐 VPNに接続できない"):
-        st.session_state.pending_q = "VPNに接続できません"
-        st.rerun()
+if c3.button("🌐 VPNに接続できない"):
+    st.session_state.pending_q = "VPNに接続できません"
+    st.rerun()
 
 
 
@@ -1893,7 +1942,7 @@ def render_nohit_extra_form(info: dict | None = None, expanded: bool = True):
 # 入力 → 検索 → 回答
 # ======================
 # ===== 該当なし（nohit）の追加情報フォーム =====
-if ff("nohit_extra_form") and st.session_state.get("pending_nohit_active"):
+if st.session_state.get("pending_nohit_active"):
     render_nohit_extra_form(expanded=True)
 
 # 先に chat_input を描画（画面下に固定されます）
@@ -1957,12 +2006,9 @@ if user_q:
             # 「該当なし」のとき、追加情報フォームを"次のrerunでも"表示できるように保持
             st.session_state["pending_nohit_active"] = True
             st.session_state["pending_nohit"] = st.session_state.get("last_nohit", {})
-            if ff("nohit_extra_form"):
-                st.info("該当なしログに追加しました。必要なら下の『追加情報を記録』で状況を補足できます。")
-                # 送信直後（この実行）でも必ずフォームを表示
-                render_nohit_extra_form(info=st.session_state.get('pending_nohit', {}), expanded=True)
-            else:
-                st.info("該当なしログに追加しました。")
+            st.info("該当なしログに追加しました。必要なら下の『追加情報を記録』で状況を補足できます。")
+            # 送信直後（この実行）でも必ずフォームを表示
+            render_nohit_extra_form(info=st.session_state.get('pending_nohit', {}), expanded=True)
 
     st.session_state.messages.append({"role": "assistant", "content": str(answer)})
 
