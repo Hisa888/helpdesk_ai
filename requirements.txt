@@ -1,7 +1,5 @@
-import streamlit as st
-from core.feature_flags import ff
-
-def render_header():
-    if ff("hero_header"):
-        st.title("情シス問い合わせAI")
-        st.caption("FAQ検索で社内問い合わせに回答するデモアプリ")
+streamlit
+pandas
+scikit-learn
+requests
+reportlab
