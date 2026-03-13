@@ -377,6 +377,187 @@ def build_contact_link() -> str:
     return ""
 
 
+FEATURE_FLAGS_PATH = Path(_get_setting("FEATURE_FLAGS_PATH", "runtime_data/feature_flags.json"))
+FEATURE_FLAGS_FLASH_KEY = "feature_flags_flash"
+
+
+FEATURE_SPECS = {
+    "company_branding": {
+        "label": "会社名・ロゴ表示",
+        "group": "ヘッダー",
+        "description": "左上の会社名、ロゴ、サービス名キャプションを表示します。",
+        "default": True,
+    },
+    "contact_button": {
+        "label": "導入相談ボタン",
+        "group": "ヘッダー",
+        "description": "ヘッダー右上の『導入相談』ボタンを表示します。",
+        "default": True,
+    },
+    "hero_header": {
+        "label": "ヒーローヘッダー",
+        "group": "メイン画面",
+        "description": "アプリ上部の大型説明ヘッダーを表示します。",
+        "default": True,
+    },
+    "kpi_cards": {
+        "label": "KPIカード",
+        "group": "メイン画面",
+        "description": "直近7日の問い合わせ数、自動対応率、削減時間などのKPIを表示します。",
+        "default": True,
+    },
+    "sidebar_overview": {
+        "label": "サイドバー: このAIでできること",
+        "group": "サイドバー",
+        "description": "サイドバーの機能概要ブロックを表示します。",
+        "default": True,
+    },
+    "sidebar_expected_effect": {
+        "label": "サイドバー: 想定効果",
+        "group": "サイドバー",
+        "description": "削減効果や品質平準化などの想定効果を表示します。",
+        "default": True,
+    },
+    "sidebar_usage": {
+        "label": "サイドバー: 使い方",
+        "group": "サイドバー",
+        "description": "ユーザー向けの簡易操作手順を表示します。",
+        "default": True,
+    },
+    "sidebar_nohit_stats": {
+        "label": "サイドバー: 問い合わせログ状況",
+        "group": "サイドバー",
+        "description": "該当なしログの件数メトリクスを表示します。",
+        "default": True,
+    },
+    "sidebar_simulator": {
+        "label": "サイドバー: 削減時間シミュレーター",
+        "group": "サイドバー",
+        "description": "平均対応時間と解決率を使った削減時間試算UIを表示します。",
+        "default": True,
+    },
+    "sidebar_charts": {
+        "label": "サイドバー: 見える化グラフ",
+        "group": "サイドバー",
+        "description": "問い合わせ件数、自動対応率、削減時間の推移グラフを表示します。",
+        "default": True,
+    },
+    "sidebar_effect_report_pdf": {
+        "label": "サイドバー: 効果レポートPDF",
+        "group": "サイドバー",
+        "description": "導入効果レポートPDFの出力ブロックを表示します。",
+        "default": True,
+    },
+    "sidebar_log_download": {
+        "label": "サイドバー: ログダウンロード",
+        "group": "サイドバー",
+        "description": "該当なしログCSV/ZIPのダウンロード機能を表示します。",
+        "default": True,
+    },
+    "reference_faq": {
+        "label": "参照したFAQ（根拠）",
+        "group": "回答表示",
+        "description": "回答に使ったFAQ候補を展開表示します。",
+        "default": True,
+    },
+    "suggested_questions": {
+        "label": "おすすめ質問ボタン",
+        "group": "入力補助",
+        "description": "定番の質問をワンクリック送信できるボタン群を表示します。",
+        "default": True,
+    },
+    "nohit_extra_form": {
+        "label": "該当なし時の追加情報フォーム",
+        "group": "入力補助",
+        "description": "該当なし時に詳細情報を記録するフォームを表示します。",
+        "default": True,
+    },
+    "admin_material_pdfs": {
+        "label": "管理者向け資料PDF",
+        "group": "管理者",
+        "description": "操作説明書PDFと提案資料PDFのダウンロード機能を表示します。",
+        "default": True,
+    },
+    "admin_faq_auto_generation": {
+        "label": "管理者: FAQ自動生成",
+        "group": "管理者",
+        "description": "該当なしログからFAQ案を生成して faq.csv に追記する機能を表示します。",
+        "default": True,
+    },
+}
+
+
+FEATURE_FLAG_LABELS = {key: spec["label"] for key, spec in FEATURE_SPECS.items()}
+
+
+def default_feature_flags() -> dict:
+    return {key: bool(spec.get("default", True)) for key, spec in FEATURE_SPECS.items()}
+
+
+def _sanitize_feature_flags(data: dict | None) -> dict:
+    base = default_feature_flags()
+    src = data if isinstance(data, dict) else {}
+    out = {}
+    for key, default in base.items():
+        out[key] = bool(src.get(key, default))
+    return out
+
+
+def _write_json_atomic(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def load_feature_flags() -> dict:
+    if FEATURE_FLAGS_PATH.exists():
+        try:
+            data = json.loads(FEATURE_FLAGS_PATH.read_text(encoding="utf-8"))
+            return _sanitize_feature_flags(data)
+        except Exception:
+            return default_feature_flags()
+    return default_feature_flags()
+
+
+def save_feature_flags(flags: dict) -> tuple[bool, dict, str]:
+    clean = _sanitize_feature_flags(flags)
+    try:
+        _write_json_atomic(FEATURE_FLAGS_PATH, clean)
+        return True, clean, f"{FEATURE_FLAGS_PATH} に保存しました。"
+    except Exception as e:
+        return False, clean, f"保存に失敗しました: {e}"
+
+
+FEATURE_FLAGS = load_feature_flags()
+if "feature_flags" not in st.session_state:
+    st.session_state.feature_flags = FEATURE_FLAGS.copy()
+
+
+def feature_enabled(key: str) -> bool:
+    current = st.session_state.get("feature_flags", FEATURE_FLAGS)
+    return bool(current.get(key, default_feature_flags().get(key, True)))
+
+
+def ff(key: str) -> bool:
+    return feature_enabled(key)
+
+
+def feature_flags_table_df(flags: dict | None = None) -> pd.DataFrame:
+    current = _sanitize_feature_flags(flags if flags is not None else st.session_state.get("feature_flags", FEATURE_FLAGS))
+    rows = []
+    for key, spec in FEATURE_SPECS.items():
+        rows.append({
+            "グループ": spec.get("group", "その他"),
+            "機能キー": key,
+            "機能": spec.get("label", key),
+            "現在値": "ON" if current.get(key, False) else "OFF",
+            "説明": spec.get("description", ""),
+        })
+    return pd.DataFrame(rows)
+
+
+
 def list_log_files():
     """logsフォルダ内のCSV（nohit_*.csv）を新しい順に返す"""
     try:
@@ -1690,6 +1871,50 @@ with st.sidebar:
             st.session_state.is_admin = False
             st.rerun()
 
+        with st.expander("⚙️ 機能表示設定", expanded=False):
+            if st.session_state.get(FEATURE_FLAGS_FLASH_KEY):
+                st.success(st.session_state.pop(FEATURE_FLAGS_FLASH_KEY))
+
+            st.caption("各機能の表示/非表示を切り替えられます。保存すると feature_flags.json に保存され、Streamlit を再起動しても保持されます。")
+            current_flags = _sanitize_feature_flags(st.session_state.get("feature_flags", FEATURE_FLAGS).copy())
+            edited_flags = {}
+
+            for group_name in sorted({spec.get("group", "その他") for spec in FEATURE_SPECS.values()}):
+                with st.container(border=True):
+                    st.markdown(f"**{group_name}**")
+                    for key, spec in FEATURE_SPECS.items():
+                        if spec.get("group", "その他") != group_name:
+                            continue
+                        edited_flags[key] = st.checkbox(
+                            spec.get("label", key),
+                            value=bool(current_flags.get(key, default_feature_flags()[key])),
+                            help=spec.get("description", ""),
+                            key=f"feature_flag_{key}",
+                        )
+
+            st.dataframe(feature_flags_table_df(edited_flags), width="stretch", hide_index=True)
+            col_ff1, col_ff2 = st.columns(2)
+            with col_ff1:
+                if st.button("💾 機能設定を保存", width="stretch"):
+                    ok, saved, msg = save_feature_flags(edited_flags)
+                    st.session_state.feature_flags = saved
+                    if ok:
+                        st.session_state[FEATURE_FLAGS_FLASH_KEY] = f"機能設定を保存しました。保存先: {FEATURE_FLAGS_PATH}"
+                        st.rerun()
+                    else:
+                        st.error(msg)
+            with col_ff2:
+                if st.button("↺ 初期設定に戻す", width="stretch"):
+                    ok, saved, msg = save_feature_flags(default_feature_flags())
+                    st.session_state.feature_flags = saved
+                    if ok:
+                        for key, value in saved.items():
+                            st.session_state[f"feature_flag_{key}"] = value
+                        st.session_state[FEATURE_FLAGS_FLASH_KEY] = f"初期設定に戻しました。保存先: {FEATURE_FLAGS_PATH}"
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
         with st.expander("📂 FAQ管理（Excelダウンロード / アップロード）", expanded=True):
             st.caption("管理者は FAQ を Excel(.xlsx) で一括入出力できます。500件以上でもまとめて置き換え可能です。推奨列名は『質問 / 回答 / カテゴリ』です。")
 
@@ -1742,102 +1967,106 @@ with st.sidebar:
 
         # ===== FAQ自動生成（該当なしログ → FAQ案）=====
         
-        # =========================
-        # 管理者向け資料（PDF）ダウンロード
-        # =========================
-        with st.expander("📘 管理者向け資料（PDF）", expanded=False):
-            if not REPORTLAB_AVAILABLE:
-                st.warning("PDF出力には reportlab が必要です。requirements.txt に reportlab を追加してください。")
-            else:
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    ops_pdf = generate_ops_manual_pdf()
-                    st.download_button(
-                        "📄 操作説明書PDFをダウンロード",
-                        data=ops_pdf,
-                        file_name="操作説明書_情シス問い合わせAI.pdf",
-                        mime="application/pdf",
-                        width="stretch",
-                    )
-                with col_b:
-                    proposal_pdf = generate_sales_proposal_pdf()
-                    st.download_button(
-                        "📑 提案資料PDFをダウンロード",
-                        data=proposal_pdf,
-                        file_name="提案資料_情シス問い合わせAI.pdf",
-                        mime="application/pdf",
-                        width="stretch",
-                    )
-                st.caption("※ どちらもアプリの現状に合わせて自動生成されます（必要に応じて文面はカスタマイズ可能）。")
+        if ff("admin_material_pdfs"):
 
-        st.markdown("---")
-        with st.expander("🧠 FAQ自動生成（該当なしログ → FAQ案）", expanded=False):
-            st.caption("『該当なし』ログからFAQを自動生成し、faq.csvへ追記できます。")
-
-            log_files = list_log_files()
-            if not log_files:
-                st.info("まだ nohit_*.csv がありません。まず質問して『該当なし』を発生させてください。")
-            else:
-                labels = [f.name for f in log_files[:15]]
-                pick = st.selectbox("参照するログファイル", labels, index=0)
-                picked_path = next((p for p in log_files if p.name == pick), log_files[0])
-
-                max_q = st.slider("生成に使う質問数（重複除外後）", 10, 200, 60, step=10)
-                n_items = st.slider("生成するFAQ件数", 3, 20, 8)
-
-                col_seed1, col_seed2 = st.columns([2, 3])
-                with col_seed1:
-                    if st.button("🧪 デモ用に定番質問を追加（20件）"):
-                        added = seed_nohit_questions(20)
-                        st.success(f"nohitログに {added} 件追加しました。")
-                        st.rerun()
-                with col_seed2:
-                    st.caption("※ 本番前にFAQ生成を試すためのテストデータです（channel=seedで記録）。")
-
-                if st.button("🤖 FAQ案を自動生成", type="primary"):
-                    with st.spinner("FAQ案を生成中..."):
-                        qs = load_nohit_questions_from_logs([picked_path], max_questions=max_q)
-
-                        # 生成前に「有効質問数」を可視化（原因切り分け）
-                        st.info(f"ログから抽出できた有効質問数（重複除外後）：{len(qs)} 件")
-                        if len(qs) < 5:
-                            st.session_state.generated_faq_df = pd.DataFrame(columns=["category", "question", "answer"])
-                            st.warning("有効な質問が少なすぎてFAQを生成できません。ログのCSV形式（カラム名/文字コード/区切り）を確認してください。")
-                        else:
-                            try:
-                                gen_df = generate_faq_candidates(qs, n_items=n_items)
-                            except Exception:
-                                gen_df = pd.DataFrame(columns=["category", "question", "answer"])
-                            st.session_state.generated_faq_df = gen_df
-
-                gen_df = st.session_state.get("generated_faq_df")
-                if isinstance(gen_df, pd.DataFrame) and len(gen_df) > 0:
-                    st.markdown("### ✅ 生成結果（編集して保存できます）")
-                    edited = st.data_editor(
-                        gen_df,
-                        num_rows="dynamic",
-                        width="stretch",
-                        key="faq_editor",
-                    )
-
+            # =========================
+            # 管理者向け資料（PDF）ダウンロード
+            # =========================
+            with st.expander("📘 管理者向け資料（PDF）", expanded=False):
+                if not REPORTLAB_AVAILABLE:
+                    st.warning("PDF出力には reportlab が必要です。requirements.txt に reportlab を追加してください。")
+                else:
                     col_a, col_b = st.columns(2)
                     with col_a:
-                        if st.button("💾 faq.csv に追記"):
-                            added = append_faq_csv(FAQ_PATH, edited.rename(columns={"category": "category"}))
-                            if added > 0:
-                                st.success(f"faq.csv に {added} 件追記しました。")
-                                # 反映のため再読み込み
+                        ops_pdf = generate_ops_manual_pdf()
+                        st.download_button(
+                            "📄 操作説明書PDFをダウンロード",
+                            data=ops_pdf,
+                            file_name="操作説明書_情シス問い合わせAI.pdf",
+                            mime="application/pdf",
+                            width="stretch",
+                        )
+                    with col_b:
+                        proposal_pdf = generate_sales_proposal_pdf()
+                        st.download_button(
+                            "📑 提案資料PDFをダウンロード",
+                            data=proposal_pdf,
+                            file_name="提案資料_情シス問い合わせAI.pdf",
+                            mime="application/pdf",
+                            width="stretch",
+                        )
+                    st.caption("※ どちらもアプリの現状に合わせて自動生成されます（必要に応じて文面はカスタマイズ可能）。")
+
+        if ff("admin_faq_auto_generation"):
+
+            st.markdown("---")
+            with st.expander("🧠 FAQ自動生成（該当なしログ → FAQ案）", expanded=False):
+                st.caption("『該当なし』ログからFAQを自動生成し、faq.csvへ追記できます。")
+
+                log_files = list_log_files()
+                if not log_files:
+                    st.info("まだ nohit_*.csv がありません。まず質問して『該当なし』を発生させてください。")
+                else:
+                    labels = [f.name for f in log_files[:15]]
+                    pick = st.selectbox("参照するログファイル", labels, index=0)
+                    picked_path = next((p for p in log_files if p.name == pick), log_files[0])
+
+                    max_q = st.slider("生成に使う質問数（重複除外後）", 10, 200, 60, step=10)
+                    n_items = st.slider("生成するFAQ件数", 3, 20, 8)
+
+                    col_seed1, col_seed2 = st.columns([2, 3])
+                    with col_seed1:
+                        if st.button("🧪 デモ用に定番質問を追加（20件）"):
+                            added = seed_nohit_questions(20)
+                            st.success(f"nohitログに {added} 件追加しました。")
+                            st.rerun()
+                    with col_seed2:
+                        st.caption("※ 本番前にFAQ生成を試すためのテストデータです（channel=seedで記録）。")
+
+                    if st.button("🤖 FAQ案を自動生成", type="primary"):
+                        with st.spinner("FAQ案を生成中..."):
+                            qs = load_nohit_questions_from_logs([picked_path], max_questions=max_q)
+
+                            # 生成前に「有効質問数」を可視化（原因切り分け）
+                            st.info(f"ログから抽出できた有効質問数（重複除外後）：{len(qs)} 件")
+                            if len(qs) < 5:
+                                st.session_state.generated_faq_df = pd.DataFrame(columns=["category", "question", "answer"])
+                                st.warning("有効な質問が少なすぎてFAQを生成できません。ログのCSV形式（カラム名/文字コード/区切り）を確認してください。")
+                            else:
+                                try:
+                                    gen_df = generate_faq_candidates(qs, n_items=n_items)
+                                except Exception:
+                                    gen_df = pd.DataFrame(columns=["category", "question", "answer"])
+                                st.session_state.generated_faq_df = gen_df
+
+                    gen_df = st.session_state.get("generated_faq_df")
+                    if isinstance(gen_df, pd.DataFrame) and len(gen_df) > 0:
+                        st.markdown("### ✅ 生成結果（編集して保存できます）")
+                        edited = st.data_editor(
+                            gen_df,
+                            num_rows="dynamic",
+                            width="stretch",
+                            key="faq_editor",
+                        )
+
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            if st.button("💾 faq.csv に追記"):
+                                added = append_faq_csv(FAQ_PATH, edited.rename(columns={"category": "category"}))
+                                if added > 0:
+                                    st.success(f"faq.csv に {added} 件追記しました。")
+                                    # 反映のため再読み込み
+                                    st.session_state.generated_faq_df = pd.DataFrame()
+                                    st.rerun()
+                                else:
+                                    st.warning("追記できる新規FAQがありません（重複/空欄の可能性）。")
+
+                        with col_b:
+                            if st.button("🧹 生成結果をクリア"):
                                 st.session_state.generated_faq_df = pd.DataFrame()
                                 st.rerun()
-                            else:
-                                st.warning("追記できる新規FAQがありません（重複/空欄の可能性）。")
-
-                    with col_b:
-                        if st.button("🧹 生成結果をクリア"):
-                            st.session_state.generated_faq_df = pd.DataFrame()
-                            st.rerun()
-                elif isinstance(gen_df, pd.DataFrame) and len(gen_df) == 0 and st.session_state.get("generated_faq_df") is not None:
-                    st.warning("FAQ案が生成できませんでした。ログの内容が少ないか、出力形式が崩れています。")
+                    elif isinstance(gen_df, pd.DataFrame) and len(gen_df) == 0 and st.session_state.get("generated_faq_df") is not None:
+                        st.warning("FAQ案が生成できませんでした。ログの内容が少ないか、出力形式が崩れています。")
 # ======================
 # セッション初期化
 # ======================
@@ -1859,49 +2088,53 @@ for m in st.session_state.messages:
         st.markdown(m.get("content", ""))
 
 
-# ======================
-# 「参照FAQ」表示
-# ======================
-with st.expander("参照したFAQ（根拠）を見る"):
-    used_hits = st.session_state.used_hits
-    if not used_hits:
-        st.markdown('<div class="refbox">該当なし（スコアが低いため問い合わせ誘導）</div>', unsafe_allow_html=True)
-    else:
-        for i, (row, score) in enumerate(used_hits, 1):
-            render_match_bar(score)
-            q_html = str(row.get("question", "")).replace("\n", "<br>")
-            a_html = str(row.get("answer", "")).replace("\n", "<br>")
-            cat = str(row.get("category", ""))
-            match_pct = int(max(0.0, min(1.0, float(score))) * 100)
-            st.markdown(
-                f"""
-<div class="refbox">
-<b>FAQ{i}</b>（一致度：{match_pct}% / category={cat}）<br>
-<b>Q:</b> {q_html}<br>
-<b>A:</b> {a_html}
-</div>
-""",
-                unsafe_allow_html=True,
-            )
+if ff("reference_faq"):
+
+    # ======================
+    # 「参照FAQ」表示
+    # ======================
+    with st.expander("参照したFAQ（根拠）を見る"):
+        used_hits = st.session_state.used_hits
+        if not used_hits:
+            st.markdown('<div class="refbox">該当なし（スコアが低いため問い合わせ誘導）</div>', unsafe_allow_html=True)
+        else:
+            for i, (row, score) in enumerate(used_hits, 1):
+                render_match_bar(score)
+                q_html = str(row.get("question", "")).replace("\n", "<br>")
+                a_html = str(row.get("answer", "")).replace("\n", "<br>")
+                cat = str(row.get("category", ""))
+                match_pct = int(max(0.0, min(1.0, float(score))) * 100)
+                st.markdown(
+                    f"""
+    <div class="refbox">
+    <b>FAQ{i}</b>（一致度：{match_pct}% / category={cat}）<br>
+    <b>Q:</b> {q_html}<br>
+    <b>A:</b> {a_html}
+    </div>
+    """,
+                    unsafe_allow_html=True,
+                )
 
 
-# ======================
-# おすすめ質問ボタン（3つ）
-# ======================
-st.markdown("### 💡 おすすめ質問（クリックで送信）")
-c1, c2, c3 = st.columns(3)
+if ff("suggested_questions"):
 
-if c1.button("🔐 パスワードを忘れた"):
-    st.session_state.pending_q = "パスワードを忘れました"
-    st.rerun()
+    # ======================
+    # おすすめ質問ボタン（3つ）
+    # ======================
+    st.markdown("### 💡 おすすめ質問（クリックで送信）")
+    c1, c2, c3 = st.columns(3)
 
-if c2.button("🧩 アカウントがロックされた"):
-    st.session_state.pending_q = "アカウントがロックされました"
-    st.rerun()
+    if c1.button("🔐 パスワードを忘れた"):
+        st.session_state.pending_q = "パスワードを忘れました"
+        st.rerun()
 
-if c3.button("🌐 VPNに接続できない"):
-    st.session_state.pending_q = "VPNに接続できません"
-    st.rerun()
+    if c2.button("🧩 アカウントがロックされた"):
+        st.session_state.pending_q = "アカウントがロックされました"
+        st.rerun()
+
+    if c3.button("🌐 VPNに接続できない"):
+        st.session_state.pending_q = "VPNに接続できません"
+        st.rerun()
 
 
 
@@ -1973,7 +2206,7 @@ def render_nohit_extra_form(info: dict | None = None, expanded: bool = True):
 # 入力 → 検索 → 回答
 # ======================
 # ===== 該当なし（nohit）の追加情報フォーム =====
-if st.session_state.get("pending_nohit_active"):
+if ff("nohit_extra_form") and st.session_state.get("pending_nohit_active"):
     render_nohit_extra_form(expanded=True)
 
 # 先に chat_input を描画（画面下に固定されます）
@@ -2049,7 +2282,8 @@ if user_q:
             st.session_state["pending_nohit"] = st.session_state.get("last_nohit", {})
             st.info("該当なしログに追加しました。必要なら下の『追加情報を記録』で状況を補足できます。")
             # 送信直後（この実行）でも必ずフォームを表示
-            render_nohit_extra_form(info=st.session_state.get('pending_nohit', {}), expanded=True)
+            if ff("nohit_extra_form"):
+                render_nohit_extra_form(info=st.session_state.get('pending_nohit', {}), expanded=True)
 
     st.session_state.messages.append({"role": "assistant", "content": str(answer)})
 
