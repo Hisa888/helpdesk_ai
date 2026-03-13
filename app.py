@@ -1,9 +1,13 @@
+
+import streamlit as st
+st.write("起動確認OK")
+
+
 from pathlib import Path
 import pandas as pd
 import io
 import re
 import json
-import requests
 
 import os
 import re
@@ -11,7 +15,6 @@ import uuid
 import csv
 import io
 import zipfile
-import base64
 
 # ===== CSV読み込みを頑丈にする（文字コード/区切り/カラム揺れ対策）=====
 def read_csv_flexible(path: Path) -> pd.DataFrame:
@@ -312,8 +315,6 @@ def save_faq_csv_full(faq_path: Path, df: pd.DataFrame) -> int:
     clean = normalize_faq_columns(df)
     faq_path.parent.mkdir(parents=True, exist_ok=True)
     clean.to_csv(faq_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_ALL)
-    if faq_path == FAQ_PATH:
-        persist_faq_now()
     return len(clean)
 
 # ===== PDF生成（ReportLab）===== 
@@ -345,12 +346,9 @@ from services.llm_router import chat as llm_chat
 # ======================
 # 基本設定
 # ======================
-ROOT_DIR = Path(".")
-ROOT_FAQ_PATH = ROOT_DIR / "faq.csv"
-DATA_DIR = ROOT_DIR / "runtime_data"
-FAQ_PATH = DATA_DIR / "faq.csv"
-LOG_DIR = DATA_DIR / "logs"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+FAQ_PATH = Path("faq.csv")
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(exist_ok=True)
 
 # ======================
 # 営業用UI設定（secrets / 環境変数で上書き可）
@@ -377,236 +375,6 @@ def build_contact_link() -> str:
         # 件名などは最低限。必要なら後で増やせます。
         return f"mailto:{CONTACT_EMAIL}?subject=情シス問い合わせAI%20導入相談"
     return ""
-
-
-# ======================
-# 永続化設定（v13: GitHub連携対応）
-# ======================
-PERSIST_MODE = _get_setting("PERSIST_MODE", "local").strip().lower()
-GITHUB_TOKEN = _get_setting("GITHUB_TOKEN", "").strip()
-GITHUB_REPO = _get_setting("GITHUB_REPO", "").strip()  # owner/repo
-GITHUB_BRANCH = _get_setting("GITHUB_BRANCH", "main").strip() or "main"
-GITHUB_BASE_PATH = _get_setting("GITHUB_BASE_PATH", "streamlit_data").strip().strip("/")
-
-
-def github_persistence_enabled() -> bool:
-    return PERSIST_MODE == "github" and bool(GITHUB_TOKEN and GITHUB_REPO)
-
-
-def persistence_status_text() -> str:
-    if github_persistence_enabled():
-        return f"GitHub永続化: ON（{GITHUB_REPO}@{GITHUB_BRANCH} / {GITHUB_BASE_PATH}）"
-    return "ローカル保存のみ（Streamlit Cloud の Reboot で消える可能性があります）"
-
-
-def _remote_relpath(local_path: Path) -> str:
-    try:
-        rel = local_path.resolve().relative_to(DATA_DIR.resolve())
-    except Exception:
-        rel = Path(local_path.name)
-    return rel.as_posix()
-
-
-def _github_api_url(rel_path: str) -> str:
-    rel_path = rel_path.strip("/")
-    full_path = f"{GITHUB_BASE_PATH}/{rel_path}" if GITHUB_BASE_PATH else rel_path
-    return f"https://api.github.com/repos/{GITHUB_REPO}/contents/{full_path}"
-
-
-def _github_headers() -> dict:
-    return {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-
-
-def github_download_file(rel_path: str, local_path: Path) -> bool:
-    if not github_persistence_enabled():
-        return False
-    try:
-        res = requests.get(_github_api_url(rel_path), headers=_github_headers(), params={"ref": GITHUB_BRANCH}, timeout=20)
-        if res.status_code != 200:
-            return False
-        data = res.json()
-        content = data.get("content", "")
-        encoding = data.get("encoding", "")
-        if encoding != "base64" or not content:
-            return False
-        raw = base64.b64decode(content)
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        local_path.write_bytes(raw)
-        return True
-    except Exception:
-        return False
-
-
-def github_upload_file(local_path: Path, rel_path: str | None = None, commit_message: str | None = None) -> bool:
-    if not github_persistence_enabled() or not local_path.exists():
-        st.error("GitHub保存の前提条件を満たしていません。PERSIST_MODE / GITHUB_TOKEN / GITHUB_REPO / 対象ファイルを確認してください。")
-        return False
-    rel_path = rel_path or _remote_relpath(local_path)
-    try:
-        existing_sha = None
-        get_res = requests.get(_github_api_url(rel_path), headers=_github_headers(), params={"ref": GITHUB_BRANCH}, timeout=20)
-        if get_res.status_code == 200:
-            existing_sha = get_res.json().get("sha")
-        elif get_res.status_code not in (200, 404):
-            st.error(f"GitHub API error (GET): {get_res.status_code}")
-            st.code(get_res.text)
-            st.caption(f"保存先: {GITHUB_REPO}@{GITHUB_BRANCH} / {GITHUB_BASE_PATH}/{rel_path}")
-            return False
-
-        raw = local_path.read_bytes()
-        payload = {
-            "message": commit_message or f"Update {rel_path} from Streamlit app",
-            "content": base64.b64encode(raw).decode("ascii"),
-            "branch": GITHUB_BRANCH,
-        }
-        if existing_sha:
-            payload["sha"] = existing_sha
-        put_res = requests.put(_github_api_url(rel_path), headers=_github_headers(), json=payload, timeout=25)
-        if put_res.status_code not in (200, 201):
-            st.error(f"GitHub API error (PUT): {put_res.status_code}")
-            st.code(put_res.text)
-            st.caption(f"保存先: {GITHUB_REPO}@{GITHUB_BRANCH} / {GITHUB_BASE_PATH}/{rel_path}")
-            return False
-        return True
-    except Exception as e:
-        st.error("GitHub保存エラー")
-        st.exception(e)
-        st.caption(f"保存先: {GITHUB_REPO}@{GITHUB_BRANCH} / {GITHUB_BASE_PATH}/{rel_path}")
-        return False
-
-
-def github_list_dir(rel_dir: str) -> list[str]:
-    if not github_persistence_enabled():
-        return []
-    try:
-        res = requests.get(_github_api_url(rel_dir), headers=_github_headers(), params={"ref": GITHUB_BRANCH}, timeout=20)
-        if res.status_code != 200:
-            return []
-        data = res.json()
-        if not isinstance(data, list):
-            return []
-        return [str(item.get("path", "")) for item in data if item.get("type") == "file"]
-    except Exception:
-        return []
-
-
-def bootstrap_persistent_storage():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 初回はリポジトリ同梱のfaq.csvをruntimeへコピー
-    if not FAQ_PATH.exists() and ROOT_FAQ_PATH.exists():
-        try:
-            FAQ_PATH.write_bytes(ROOT_FAQ_PATH.read_bytes())
-        except Exception:
-            pass
-
-    # GitHub永続化が有効なら、リモートを優先して取得
-    if github_persistence_enabled():
-        github_download_file("faq.csv", FAQ_PATH)
-        for remote_path in github_list_dir("logs"):
-            if not remote_path.endswith('.csv'):
-                continue
-            name = Path(remote_path).name
-            github_download_file(f"logs/{name}", LOG_DIR / name)
-
-
-def persist_runtime_file(local_path: Path, label: str = "data") -> bool:
-    if not local_path.exists():
-        return False
-    if not github_persistence_enabled():
-        return True
-    rel_path = _remote_relpath(local_path)
-    msg = f"Update {label}: {rel_path}"
-    return github_upload_file(local_path, rel_path=rel_path, commit_message=msg)
-
-
-def persist_faq_now() -> bool:
-    return persist_runtime_file(FAQ_PATH, label="faq")
-
-
-def persist_log_now(path: Path) -> bool:
-    return persist_runtime_file(path, label="log")
-
-
-
-
-
-DEFAULT_SEARCH_THRESHOLD = 0.42
-DEFAULT_SUGGEST_THRESHOLD = 0.26
-
-SEARCH_SETTINGS_PATH = DATA_DIR / "search_settings.json"
-
-
-def default_search_settings() -> dict:
-    return {
-        "answer_threshold": DEFAULT_SEARCH_THRESHOLD,
-        "suggest_threshold": DEFAULT_SUGGEST_THRESHOLD,
-    }
-
-def _sanitize_search_settings(data: dict | None) -> dict:
-    base = default_search_settings()
-    src = data or {}
-    try:
-        answer = float(src.get("answer_threshold", base["answer_threshold"]))
-    except Exception:
-        answer = base["answer_threshold"]
-    try:
-        suggest = float(src.get("suggest_threshold", base["suggest_threshold"]))
-    except Exception:
-        suggest = base["suggest_threshold"]
-    answer = max(0.10, min(1.20, answer))
-    suggest = max(0.05, min(1.20, suggest))
-    if suggest > answer:
-        suggest = max(0.05, round(answer - 0.05, 2))
-    return {"answer_threshold": round(answer, 2), "suggest_threshold": round(suggest, 2)}
-
-def load_search_settings() -> dict:
-    if SEARCH_SETTINGS_PATH.exists():
-        try:
-            data = json.loads(SEARCH_SETTINGS_PATH.read_text(encoding="utf-8"))
-            return _sanitize_search_settings(data if isinstance(data, dict) else {})
-        except Exception:
-            return default_search_settings()
-    return default_search_settings()
-
-def save_search_settings(answer_threshold: float, suggest_threshold: float) -> tuple[bool, dict]:
-    settings = _sanitize_search_settings({
-        "answer_threshold": answer_threshold,
-        "suggest_threshold": suggest_threshold,
-    })
-    try:
-        SEARCH_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        SEARCH_SETTINGS_PATH.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
-        ok = persist_runtime_file(SEARCH_SETTINGS_PATH, label="search_settings")
-        return ok, settings
-    except Exception:
-        return False, settings
-
-bootstrap_persistent_storage()
-if github_persistence_enabled():
-    github_download_file("search_settings.json", SEARCH_SETTINGS_PATH)
-SEARCH_SETTINGS = load_search_settings()
-
-
-def current_search_threshold() -> float:
-    try:
-        return float(st.session_state.get("search_threshold", SEARCH_SETTINGS.get("answer_threshold", DEFAULT_SEARCH_THRESHOLD)))
-    except Exception:
-        return DEFAULT_SEARCH_THRESHOLD
-
-def current_suggest_threshold() -> float:
-    try:
-        answer = current_search_threshold()
-        suggest = float(st.session_state.get("suggest_threshold", SEARCH_SETTINGS.get("suggest_threshold", DEFAULT_SUGGEST_THRESHOLD)))
-        return min(suggest, max(0.05, answer - 0.05))
-    except Exception:
-        return DEFAULT_SUGGEST_THRESHOLD
-
 
 
 def list_log_files():
@@ -1121,6 +889,8 @@ def generate_effect_report_pdf(
 
 
 TOP_K = 3
+MIN_SCORE = 0.15
+
 st.set_page_config(page_title="情シス問い合わせAI", layout="wide")
 
 
@@ -1452,199 +1222,54 @@ with st.sidebar:
 # ======================
 # FAQロード（落ちやすい箇所を全てガード）
 # ======================
-
-FULLWIDTH_TRANS = str.maketrans({
-    "０": "0", "１": "1", "２": "2", "３": "3", "４": "4",
-    "５": "5", "６": "6", "７": "7", "８": "8", "９": "9",
-    "ａ": "a", "ｂ": "b", "ｃ": "c", "ｄ": "d", "ｅ": "e", "ｆ": "f", "ｇ": "g",
-    "ｈ": "h", "ｉ": "i", "ｊ": "j", "ｋ": "k", "ｌ": "l", "ｍ": "m", "ｎ": "n",
-    "ｏ": "o", "ｐ": "p", "ｑ": "q", "ｒ": "r", "ｓ": "s", "ｔ": "t", "ｕ": "u",
-    "ｖ": "v", "ｗ": "w", "ｘ": "x", "ｙ": "y", "ｚ": "z",
-    "Ａ": "a", "Ｂ": "b", "Ｃ": "c", "Ｄ": "d", "Ｅ": "e", "Ｆ": "f", "Ｇ": "g",
-    "Ｈ": "h", "Ｉ": "i", "Ｊ": "j", "Ｋ": "k", "Ｌ": "l", "Ｍ": "m", "Ｎ": "n",
-    "Ｏ": "o", "Ｐ": "p", "Ｑ": "q", "Ｒ": "r", "Ｓ": "s", "Ｔ": "t", "Ｕ": "u",
-    "Ｖ": "v", "Ｗ": "w", "Ｘ": "x", "Ｙ": "y", "Ｚ": "z",
-})
-
-CANONICAL_PATTERNS = [
-    (r"デスクトップパソコン|デスクトップｐｃ|desktop\s*pc", "デスクトップpc"),
-    (r"ノートパソコン|ラップトップ", "ノートpc"),
-    (r"パーソナルコンピュータ|パソコン|ピーシー|ｐｃ|pc端末", "pc"),
-    (r"コンピューター", "コンピュータ"),
-    (r"無線lan|wi-?fi|wifi|ワイファイ", "wifi"),
-    (r"ｖｐｎ|ぶいぴーえぬ|vpn接続", "vpn"),
-    (r"サインイン", "ログイン"),
-    (r"サインアウト", "ログアウト"),
-    (r"パスコード|passcode", "パスワード"),
-    (r"pw", "パスワード"),
-    (r"立ち上がらない|起ち上がらない|立ちあがらない|起ちあがらない", "起動しない"),
-    (r"電源がつかない|電源が付かない|電源がはいらない", "電源が入らない"),
-    (r"ログイン出来ない|ログインできません", "ログインできない"),
-    (r"接続できない|接続できません|接続出来ない|接続出来ません|接続しない|接続されない|つながりません|繋がりません|繋がらない|繋げない|つなげない", "つながらない"),
-    (r"利用できない|使用できない", "使えない"),
-    (r"開けない", "起動しない"),
-    (r"印字できない|プリントできない", "印刷できない"),
-    (r"メール送れない", "メールが送信できない"),
-    (r"メール受け取れない", "メールが受信できない"),
-    (r"認証に失敗|認証エラー", "認証できない"),
-    (r"ロックされた|凍結された", "ロックされた"),
-]
-
-CONCEPT_ALIASES = {
-    "vpn": ["vpn", "リモートアクセス", "社外接続"],
-    "network": ["ネットワーク", "wifi", "lan", "通信", "internet", "インターネット"],
-    "login": ["ログイン", "サインイン", "認証", "アカウント"],
-    "password": ["パスワード", "password", "pw"],
-    "boot": ["起動", "立ち上が", "立上", "電源", "シャットダウン", "再起動"],
-    "mail": ["メール", "outlook", "受信", "送信"],
-    "print": ["印刷", "プリンタ", "printer", "print"],
-    "lock": ["ロック", "凍結", "無効", "停止"],
-    "error": ["エラー", "失敗", "不具合", "異常", "障害"],
-    "cannot": ["できない", "できません", "使えない", "つながらない", "入らない", "起動しない"],
-}
-
-
-def normalize_search_text(text: str) -> str:
-    """FAQ検索用の正規化。表記ゆれ・同義表現を寄せて意味検索を強化する。"""
-    s = str(text or "").strip().lower()
-    if not s:
-        return ""
-
-    s = s.translate(FULLWIDTH_TRANS)
-    for pattern, repl in CANONICAL_PATTERNS:
-        s = re.sub(pattern, repl, s)
-
-    s = re.sub(r"([^a-z0-9])pc([^a-z0-9])", r"\1 pc \2", f" {s} ")
-    s = re.sub(r"[\/／・,、。．・:：;；\-ー_（）()\[\]{}『』「」\"'`]+", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
-def extract_search_tokens(text: str) -> set[str]:
-    """日本語FAQ検索向けの軽量トークン抽出。"""
-    s = normalize_search_text(text)
-    if not s:
-        return set()
-
-    tokens = set()
-    for part in s.split():
-        part = part.strip()
-        if part:
-            tokens.add(part)
-
-    for tok in re.findall(r"[a-z0-9]+|[\u3040-\u30ff\u4e00-\u9fff]{2,}", s):
-        tokens.add(tok)
-
-    split_hints = ["できない", "つながらない", "起動しない", "ログイン", "パスワード", "電源", "印刷", "メール", "アカウント", "vpn", "wifi"]
-    for tok in list(tokens):
-        for hint in split_hints:
-            if hint in tok and tok != hint:
-                tokens.add(hint)
-                remain = tok.replace(hint, " ").strip()
-                if len(remain) >= 2:
-                    tokens.add(remain)
-
-    return {t for t in tokens if t}
-
-
-def extract_concepts(text: str) -> set[str]:
-    s = normalize_search_text(text)
-    found = set()
-    for concept, aliases in CONCEPT_ALIASES.items():
-        if any(alias in s for alias in aliases):
-            found.add(concept)
-    return found
-
-
-# 文字n-gramも混ぜて、日本語の部分一致に強くする
-WORD_VECTORIZER = TfidfVectorizer(ngram_range=(1, 2))
-CHAR_VECTORIZER = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
-
+@st.cache_resource(show_spinner=False)
 def load_faq_index(faq_path: Path):
     if not faq_path.exists():
         empty = pd.DataFrame(columns=["question", "answer", "category"])
-        return empty, None, None, None, None
+        return empty, None, None
 
     try:
         df = normalize_faq_columns(read_csv_flexible(faq_path))
     except Exception:
         empty = pd.DataFrame(columns=["question", "answer", "category"])
-        return empty, None, None, None, None
+        return empty, None, None
 
     df["question"] = df["question"].fillna("").astype(str)
     df["answer"] = df["answer"].fillna("").astype(str)
     df["category"] = df["category"].fillna("").astype(str)
 
     if len(df) == 0:
-        return df, None, None, None, None
+        return df, None, None
 
-    df["question_norm"] = df["question"].apply(normalize_search_text)
-    df["answer_norm"] = df["answer"].apply(normalize_search_text)
     df["qa_text"] = (df["question"] + " / " + df["answer"]).astype(str)
-    df["qa_text_norm"] = (df["question_norm"] + " / " + df["answer_norm"]).astype(str)
-    df["search_tokens"] = df["qa_text_norm"].apply(extract_search_tokens)
-    df["search_concepts"] = df["qa_text_norm"].apply(extract_concepts)
 
     try:
-        word_vectorizer = WORD_VECTORIZER
-        char_vectorizer = CHAR_VECTORIZER
-        X_word = word_vectorizer.fit_transform(df["qa_text_norm"])
-        X_char = char_vectorizer.fit_transform(df["qa_text_norm"])
+        vectorizer = TfidfVectorizer(ngram_range=(1, 2))
+        X = vectorizer.fit_transform(df["qa_text"])
     except Exception:
-        return df, None, None, None, None
+        return df, None, None
 
-    return df, word_vectorizer, X_word, char_vectorizer, X_char
+    return df, vectorizer, X
 
 
-df, vectorizer, X, char_vectorizer, X_char = load_faq_index(FAQ_PATH)
+df, vectorizer, X = load_faq_index(FAQ_PATH)
 
-if df is None or len(df) == 0 or vectorizer is None or X is None or char_vectorizer is None or X_char is None:
+if df is None or len(df) == 0 or vectorizer is None or X is None:
     st.warning("faq.csv が未配置/空/不正のため、FAQ検索は無効です。まず faq.csv を配置してください。")
 
 
 def retrieve_faq(query: str):
     if not query:
         return []
-    if vectorizer is None or X is None or char_vectorizer is None or X_char is None or df is None or len(df) == 0:
+    if vectorizer is None or X is None or df is None or len(df) == 0:
         return []
     try:
-        query_norm = normalize_search_text(query)
-        qv_word = vectorizer.transform([query_norm])
-        qv_char = char_vectorizer.transform([query_norm])
-        sims_word = cosine_similarity(qv_word, X).flatten()
-        sims_char = cosine_similarity(qv_char, X_char).flatten()
-        if sims_word.size == 0 or sims_char.size == 0:
+        qv = vectorizer.transform([query])
+        sims = cosine_similarity(qv, X).flatten()
+        if sims.size == 0:
             return []
-
-        # 単語一致と文字部分一致を合成して、表記ゆれに強くする
-        sims = (sims_word * 0.52) + (sims_char * 0.48)
-
-        # 完全一致に近い正規化結果は少し加点
-        exact_bonus = (df["question_norm"] == query_norm).astype(float).to_numpy() * 0.22
-        contains_bonus = df["question_norm"].apply(
-            lambda x: 0.10 if query_norm and (query_norm in x or x in query_norm) else 0.0
-        ).to_numpy()
-
-        # トークン重複率で加点
-        q_tokens = extract_search_tokens(query_norm)
-        token_bonus = df["search_tokens"].apply(
-            lambda toks: (0.18 * len(q_tokens & set(toks)) / max(1, len(q_tokens))) if q_tokens else 0.0
-        ).to_numpy()
-
-        # 概念一致で加点（vpn / login / boot など）
-        q_concepts = extract_concepts(query_norm)
-        concept_bonus = df["search_concepts"].apply(
-            lambda cs: (0.22 * len(q_concepts & set(cs)) / max(1, len(q_concepts))) if q_concepts else 0.0
-        ).to_numpy()
-
-        prefix_bonus = df["question_norm"].apply(
-            lambda x: 0.06 if query_norm and str(x).startswith(query_norm[: min(8, len(query_norm))]) else 0.0
-        ).to_numpy()
-
-        sims = sims + exact_bonus + contains_bonus + token_bonus + concept_bonus + prefix_bonus
-
         idxs = sims.argsort()[::-1][:3]
-        return [(df.iloc[i], float(sims[i])) for i in idxs if float(sims[i]) > 0]
+        return [(df.iloc[i], float(sims[i])) for i in idxs]
     except Exception:
         return []
 
@@ -1770,7 +1395,10 @@ def log_nohit(question: str, extra: dict | None = None) -> str:
             if is_new:
                 w.writerow(cols)
             w.writerow([row.get(c, "") for c in cols])
-        persist_log_now(path)
+        try:
+            persist_log_now(path)
+        except Exception:
+            pass
     except Exception:
         pass
     return ts
@@ -1823,7 +1451,10 @@ def update_nohit_record(day: str, timestamp: str, question: str, extra: dict) ->
             w.writerow(cols)
             for _, r in df_log[cols].iterrows():
                 w.writerow([str(r.get(c, "")) for c in cols])
-        persist_log_now(path)
+        try:
+            persist_log_now(path)
+        except Exception:
+            pass
         return True
     except Exception:
         return False
@@ -1860,7 +1491,10 @@ def log_interaction(question: str, matched: bool, best_score: float, category: s
             if is_new:
                 w.writerow(["timestamp", "question", "matched", "best_score", "category"])
             w.writerow([datetime.now().isoformat(timespec="seconds"), question, int(bool(matched)), float(best_score), category or ""])
-        persist_log_now(path)
+        try:
+            persist_log_now(path)
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -2024,7 +1658,16 @@ def append_faq_csv(faq_path: Path, new_df: pd.DataFrame) -> int:
             w.writerow(["question", "answer", "category"])
         w.writerows(rows)
 
-    persist_faq_now()
+    if faq_path == FAQ_PATH:
+        try:
+            persist_faq_now()
+        except Exception:
+            pass
+        try:
+            load_faq_index.clear()
+        except Exception:
+            pass
+
     return len(rows)
 
 
@@ -2051,94 +1694,12 @@ with st.sidebar:
             st.session_state.is_admin = False
             st.rerun()
 
-        with st.expander("💾 永続化ステータス（v13）", expanded=True):
-            st.caption(persistence_status_text())
-            st.code("""
-# Streamlit Cloud secrets.toml の例
-PERSIST_MODE = "github"
-GITHUB_REPO = "owner/repo"
-GITHUB_BRANCH = "main"
-GITHUB_BASE_PATH = "streamlit_data"
-GITHUB_TOKEN = "ghp_xxx"
-""".strip(), language="toml")
-            col_sync1, col_sync2 = st.columns(2)
-            with col_sync1:
-                if st.button("📥 GitHubからFAQ再読込", width="stretch", disabled=not github_persistence_enabled()):
-                    ok = github_download_file("faq.csv", FAQ_PATH)
-                    if ok:
-                        try:
-                            load_faq_index.clear()
-                        except Exception:
-                            pass
-                        st.success("GitHub上の faq.csv を再読込しました。")
-                        st.rerun()
-                    else:
-                        st.warning("GitHubからFAQを取得できませんでした。設定を確認してください。")
-            with col_sync2:
-                if st.button("📤 FAQをGitHubへ保存", width="stretch", disabled=not github_persistence_enabled()):
-                    ok = persist_faq_now()
-                    if ok:
-                        st.success("faq.csv を GitHub に保存しました。")
-                    else:
-                        st.warning("GitHubへの保存に失敗しました。設定を確認してください。")
-
-        with st.expander("🎯 検索精度設定（v14）", expanded=True):
-            st.caption("しきい値を管理者が調整できます。高いほど厳密一致寄り、低いほど似た質問も拾いやすくなります。")
-            st.info(f"現在値：自動回答 {current_search_threshold():.2f} / 候補表示 {current_suggest_threshold():.2f}")
-
-            admin_answer_threshold = st.slider(
-                "自動回答しきい値",
-                min_value=0.10,
-                max_value=1.20,
-                value=float(st.session_state.get("search_threshold", DEFAULT_SEARCH_THRESHOLD)),
-                step=0.01,
-                key="admin_answer_threshold_slider",
-                help="この値以上なら通常回答します。",
-            )
-            max_suggest_value = max(0.05, round(admin_answer_threshold - 0.05, 2))
-            suggest_default = min(float(st.session_state.get("suggest_threshold", DEFAULT_SUGGEST_THRESHOLD)), max_suggest_value)
-            admin_suggest_threshold = st.slider(
-                "候補表示しきい値",
-                min_value=0.05,
-                max_value=max_suggest_value,
-                value=suggest_default,
-                step=0.01,
-                key="admin_suggest_threshold_slider",
-                help="この値以上かつ自動回答しきい値未満なら『近いFAQ候補』として表示します。",
-            )
-
-            st.markdown("""- 自動回答以上: 通常回答
-- 候補表示以上: 近いFAQ候補を表示
-- 候補表示未満: 該当なしとして追加情報フォームへ""")
-
-            col_th1, col_th2 = st.columns(2)
-            with col_th1:
-                if st.button("💾 検索設定を保存", width="stretch"):
-                    ok, settings = save_search_settings(admin_answer_threshold, admin_suggest_threshold)
-                    st.session_state.search_threshold = settings["answer_threshold"]
-                    st.session_state.suggest_threshold = settings["suggest_threshold"]
-                    if ok:
-                        st.success(f"保存しました。自動回答={settings['answer_threshold']:.2f} / 候補表示={settings['suggest_threshold']:.2f}")
-                    else:
-                        st.warning("ローカル保存またはGitHub保存に失敗した可能性があります。設定値自体はこのセッションに反映しています。")
-                    st.rerun()
-            with col_th2:
-                if st.button("↩ 初期値に戻す", width="stretch"):
-                    ok, settings = save_search_settings(DEFAULT_SEARCH_THRESHOLD, DEFAULT_SUGGEST_THRESHOLD)
-                    st.session_state.search_threshold = settings["answer_threshold"]
-                    st.session_state.suggest_threshold = settings["suggest_threshold"]
-                    if ok:
-                        st.success("検索設定を初期値に戻しました。")
-                    else:
-                        st.warning("初期値に戻しましたが、外部保存に失敗した可能性があります。")
-                    st.rerun()
-
         with st.expander("📂 FAQ管理（Excelダウンロード / アップロード）", expanded=True):
             st.caption("管理者は FAQ を Excel(.xlsx) で一括入出力できます。500件以上でもまとめて置き換え可能です。推奨列名は『質問 / 回答 / カテゴリ』です。")
-
-            if st.session_state.get("faq_replace_result"):
-                st.success(st.session_state["faq_replace_result"])
-                st.session_state.pop("faq_replace_result", None)
+            if github_persistence_enabled():
+                st.success(f"💾 永続化状態: {persistence_status_text()}\nFAQ反映後は GitHub に自動保存され、Reboot 後も保持されます。")
+            else:
+                st.warning("💾 永続化状態: ローカル保存のみです。PERSIST_MODE=github と GITHUB_TOKEN / GITHUB_REPO を設定しない限り、Reboot 後に元へ戻る可能性があります。")
 
             current_faq_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
             excel_bytes = faq_df_to_excel_bytes(current_faq_df)
@@ -2150,6 +1711,11 @@ GITHUB_TOKEN = "ghp_xxx"
                 width="stretch",
             )
             st.caption(f"現在登録中のFAQ件数: {len(current_faq_df)} 件")
+
+            if st.session_state.get("faq_replace_message"):
+                st.success(st.session_state.get("faq_replace_message", ""))
+            if st.session_state.get("faq_persist_message"):
+                st.info(st.session_state.get("faq_persist_message", ""))
 
             uploaded_faq = st.file_uploader(
                 "FAQファイルをアップロード",
@@ -2168,31 +1734,23 @@ GITHUB_TOKEN = "ghp_xxx"
                         st.caption(f"先頭20件を表示中です。保存対象は全 {len(incoming_df)} 件です。")
 
                     if st.button("📥 この内容でFAQを反映する", type="primary", key="replace_faq_excel_admin", width="stretch"):
-                        with st.spinner("FAQを保存しています..."):
-                            saved = save_faq_csv_full(FAQ_PATH, incoming_df)
-                            reloaded_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
-
-                            try:
-                                load_faq_index.clear()
-                            except Exception:
-                                pass
-                            try:
-                                st.cache_resource.clear()
-                            except Exception:
-                                pass
-                            try:
-                                st.cache_data.clear()
-                            except Exception:
-                                pass
-
-                            if int(saved) != int(len(reloaded_df)):
-                                st.error(f"保存件数と再読込件数が一致しません。保存: {saved} 件 / 再読込: {len(reloaded_df)} 件")
+                        before_count = len(current_faq_df)
+                        saved = save_faq_csv_full(FAQ_PATH, incoming_df)
+                        try:
+                            load_faq_index.clear()
+                        except Exception:
+                            pass
+                        persist_msg = ""
+                        if github_persistence_enabled():
+                            if persist_faq_now():
+                                persist_msg = f"GitHub に FAQ を保存しました。保存先: {GITHUB_REPO}@{GITHUB_BRANCH} / {GITHUB_BASE_PATH}/faq.csv"
                             else:
-                                msg = f"FAQを {saved} 件反映しました。現在登録中のFAQ件数も {len(reloaded_df)} 件です。"
-                                st.session_state["faq_replace_result"] = msg
-                                st.success(msg)
-                                st.info("FAQの反映が完了しました。再読み込みは不要です。GitHub永続化ONなら自動で外部保存されます。")
-                                current_faq_df = reloaded_df
+                                persist_msg = "GitHub への FAQ 保存に失敗しました。Secrets の PERSIST_MODE / GITHUB_TOKEN / GITHUB_REPO を確認してください。"
+                        else:
+                            persist_msg = "ローカル保存のみです。Reboot 後も保持したい場合は GitHub 永続化を設定してください。"
+                        st.session_state["faq_replace_message"] = f"FAQを反映しました。反映前: {before_count} 件 → 反映後: {saved} 件"
+                        st.session_state["faq_persist_message"] = persist_msg
+                        st.rerun()
                 except Exception as e:
                     st.error(f"FAQファイルの取込でエラー: {e}")
 
@@ -2306,12 +1864,6 @@ if "messages" not in st.session_state:
 if "pending_q" not in st.session_state:
     st.session_state.pending_q = ""
 
-if "search_threshold" not in st.session_state:
-    st.session_state.search_threshold = float(SEARCH_SETTINGS.get("answer_threshold", DEFAULT_SEARCH_THRESHOLD))
-
-if "suggest_threshold" not in st.session_state:
-    st.session_state.suggest_threshold = float(SEARCH_SETTINGS.get("suggest_threshold", DEFAULT_SUGGEST_THRESHOLD))
-
 
 # ======================
 # チャット履歴表示
@@ -2365,26 +1917,6 @@ if c3.button("🌐 VPNに接続できない"):
     st.session_state.pending_q = "VPNに接続できません"
     st.rerun()
 
-
-
-def build_suggest_answer(user_q: str, hits) -> str:
-    if not hits:
-        return nohit_template()
-    row, score = hits[0]
-    q = str(row.get("question", "")).strip()
-    a = str(row.get("answer", "")).strip()
-    cat = str(row.get("category", "")).strip()
-    parts = [
-        "入力内容に近いFAQ候補が見つかりました。完全一致ではありませんが、まずはこちらを確認してください。",
-    ]
-    if q:
-        parts.append(f"【候補FAQ】{q}")
-    if cat:
-        parts.append(f"【カテゴリ】{cat}")
-    if a:
-        parts.append(f"【回答】\n{a}")
-    parts.append("解決しない場合は、下の『追加情報を記録』から状況を補足してください。")
-    return "\n\n".join(parts)
 
 
 def render_nohit_extra_form(info: dict | None = None, expanded: bool = True):
@@ -2480,46 +2012,41 @@ if user_q:
     if hits:
         render_match_bar(best_score)
 
-    answer_threshold = current_search_threshold()
-    suggest_threshold = current_suggest_threshold()
-
-    if best_score < suggest_threshold:
+    if best_score < MIN_SCORE:
         used_hits = []
         answer = nohit_template()
         ts_nohit = log_nohit(user_q)
         st.session_state["last_nohit"] = {"day": datetime.now().strftime("%Y%m%d"), "timestamp": ts_nohit, "question": user_q}
         was_nohit = True
-        was_suggest = False
-    elif best_score < answer_threshold:
-        used_hits = hits[:1]
-        answer = build_suggest_answer(user_q, used_hits)
-        was_nohit = False
-        was_suggest = True
     else:
         used_hits = hits
         was_nohit = False
-        was_suggest = False
-        faq_answer = ""
-        try:
-            faq_answer = str(hits[0][0].get("answer", "")).strip()
-        except Exception:
-            faq_answer = ""
-        FAQ_DIRECT_SCORE = max(answer_threshold, 0.35)
-        if faq_answer and best_score >= FAQ_DIRECT_SCORE:
+        top_row = hits[0][0] if hits else {}
+        faq_answer = str(top_row.get("answer", "")).strip() if hits else ""
+        faq_question = str(top_row.get("question", "")).strip() if hits else ""
+        normalized_user_q = normalize_question(user_q)
+        normalized_faq_q = normalize_question(faq_question)
+        use_faq_direct = bool(faq_answer) and (
+            best_score >= max(MIN_SCORE + 0.15, 0.45)
+            or (normalized_user_q and normalized_user_q == normalized_faq_q)
+            or (normalized_user_q and normalized_faq_q and normalized_user_q in normalized_faq_q)
+            or (normalized_user_q and normalized_faq_q and normalized_faq_q in normalized_user_q)
+        )
+        if use_faq_direct:
             answer = faq_answer
         else:
             prompt = build_prompt(user_q, hits)
             try:
                 answer = llm_chat(
                     [
-                        {"role": "system", "content": "あなたは情シス担当です。FAQの内容を優先し、必ず日本語で簡潔に回答してください。"},
+                        {"role": "system", "content": "あなたは情シス担当です。"},
                         {"role": "user", "content": prompt},
                     ]
                 )
-                if not str(answer).strip() and faq_answer:
+                if not str(answer or "").strip() and faq_answer:
                     answer = faq_answer
             except Exception:
-                answer = faq_answer if faq_answer else "現在AIの回答機能でエラーが発生しています。しばらくしてから再度お試しください。"
+                answer = faq_answer or "現在AIの回答機能でエラーが発生しています。しばらくしてから再度お試しください。"
 
     st.session_state.used_hits = used_hits
 
@@ -2530,7 +2057,7 @@ if user_q:
             top_cat = str(used_hits[0][0].get("category", ""))
         except Exception:
             top_cat = ""
-    log_interaction(user_q, matched=(best_score >= answer_threshold), best_score=best_score, category=top_cat)
+    log_interaction(user_q, matched=(best_score >= MIN_SCORE), best_score=best_score, category=top_cat)
 
     with st.chat_message("assistant"):
         answer_html = str(answer).replace("\n", "<br>")
@@ -2541,15 +2068,10 @@ if user_q:
             st.session_state["pending_nohit_active"] = True
             st.session_state["pending_nohit"] = st.session_state.get("last_nohit", {})
             st.info("該当なしログに追加しました。必要なら下の『追加情報を記録』で状況を補足できます。")
-        elif 'was_suggest' in locals() and was_suggest:
-            st.info(f"近いFAQ候補を表示しています（スコア: {best_score:.2f} / 自動回答しきい値: {answer_threshold:.2f}）。")
-            st.caption("管理者はサイドバーの『検索精度設定』から判定基準を調整できます。")
+            # 送信直後（この実行）でも必ずフォームを表示
+            render_nohit_extra_form(info=st.session_state.get('pending_nohit', {}), expanded=True)
 
     st.session_state.messages.append({"role": "assistant", "content": str(answer)})
-
-    # nohit はフォーム表示のために再描画
-    if "was_nohit" in locals() and was_nohit:
-        st.rerun()
 
     # おすすめ質問ボタンから自動送信した場合は、もう一度 rerun して入力欄を確実に表示
     if used_pending:
