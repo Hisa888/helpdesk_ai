@@ -896,7 +896,8 @@ FAQ_DIRECT_SCORE = 0.30
 def normalize_match_text(text: str) -> str:
     s = str(text or "").strip().lower()
     s = re.sub(r"[\s\u3000]+", "", s)
-    s = re.sub(r"[\-ー―‐.,。、/\\:：;；!?！？（）()\[\]【】『』"'`]+", "", s)
+    # 記号類を除去（クォートを含んでも SyntaxError にならないようにする）
+    s = re.sub(r'[\-ー―‐.,。、/\\:：;；!?！？（）()\[\]【】『』"\'`]+', "", s)
     return s
 
 
@@ -1730,11 +1731,12 @@ with st.sidebar:
                         except Exception:
                             pass
                         st.session_state["faq_update_msg"] = f"FAQを反映しました。反映前: {before_count} 件 → 反映後: {saved} 件"
-                        st.rerun()
+                        st.session_state["faq_update_info"] = "※ Streamlit Cloud のアップロード反映は現在の起動中セッションでは有効です。Rebootすると GitHub 上の初期 faq.csv に戻ります。永続化するには GitHub 更新、外部ストレージ、またはDB連携が必要です。"
 
                     if st.session_state.get("faq_update_msg"):
                         st.success(st.session_state["faq_update_msg"])
-                        st.info("※ Streamlit Cloud のアップロード反映は現在の起動中セッションでは有効です。Rebootすると GitHub 上の初期 faq.csv に戻ります。永続化するには GitHub 更新、外部ストレージ、またはDB連携が必要です。")
+                        if st.session_state.get("faq_update_info"):
+                            st.info(st.session_state["faq_update_info"])
                 except Exception as e:
                     st.error(f"FAQファイルの取込でエラー: {e}")
 
