@@ -890,6 +890,23 @@ def generate_effect_report_pdf(
 
 TOP_K = 3
 MIN_SCORE = 0.15
+FAQ_DIRECT_SCORE = 0.30
+
+
+def normalize_match_text(text: str) -> str:
+    s = str(text or "").strip().lower()
+    s = re.sub(r"[\s\u3000]+", "", s)
+    s = re.sub(r"[\-ー―‐.,。、/\\:：;；!?！？（）()\[\]【】『』"'`]+", "", s)
+    return s
+
+
+def is_direct_faq_match(user_q: str, faq_q: str) -> bool:
+    uq = normalize_match_text(user_q)
+    fq = normalize_match_text(faq_q)
+    if not uq or not fq:
+        return False
+    return uq == fq or uq in fq or fq in uq
+
 
 st.set_page_config(page_title="情シス問い合わせAI", layout="wide")
 
@@ -1686,6 +1703,9 @@ with st.sidebar:
             )
             st.caption(f"現在登録中のFAQ件数: {len(current_faq_df)} 件")
 
+            if "faq_update_msg" not in st.session_state:
+                st.session_state["faq_update_msg"] = ""
+
             uploaded_faq = st.file_uploader(
                 "FAQファイルをアップロード",
                 type=["xlsx", "xls", "csv"],
@@ -1703,9 +1723,18 @@ with st.sidebar:
                         st.caption(f"先頭20件を表示中です。保存対象は全 {len(incoming_df)} 件です。")
 
                     if st.button("📥 この内容でFAQを反映する", type="primary", key="replace_faq_excel_admin", width="stretch"):
+                        before_count = len(current_faq_df)
                         saved = save_faq_csv_full(FAQ_PATH, incoming_df)
-                        st.success(f"FAQを {saved} 件反映しました。faq.csv を丸ごと更新し、次回検索から全件利用されます。")
+                        try:
+                            load_faq_index.clear()
+                        except Exception:
+                            pass
+                        st.session_state["faq_update_msg"] = f"FAQを反映しました。反映前: {before_count} 件 → 反映後: {saved} 件"
                         st.rerun()
+
+                    if st.session_state.get("faq_update_msg"):
+                        st.success(st.session_state["faq_update_msg"])
+                        st.info("※ Streamlit Cloud のアップロード反映は現在の起動中セッションでは有効です。Rebootすると GitHub 上の初期 faq.csv に戻ります。永続化するには GitHub 更新、外部ストレージ、またはDB連携が必要です。")
                 except Exception as e:
                     st.error(f"FAQファイルの取込でエラー: {e}")
 
@@ -1976,35 +2005,26 @@ if user_q:
     else:
         used_hits = hits
         was_nohit = False
+        top_row = hits[0][0]
+        top_question = str(top_row.get("question", "")).strip()
+        top_answer = str(top_row.get("answer", "")).strip()
+        direct_match = is_direct_faq_match(user_q, top_question)
 
-        # FAQに十分一致している場合は、まずFAQ回答をそのまま優先利用する。
-        # LLMが一時的に失敗しても、FAQ一致時は回答不能にならないようにする。
-        top_row = hits[0][0] if hits else None
-        faq_answer = ""
-        if top_row is not None:
-            try:
-                faq_answer = str(top_row.get("answer", "")).strip()
-            except Exception:
-                faq_answer = ""
-
-        # 高一致のときはFAQ回答を優先
-        FAQ_DIRECT_SCORE = 0.35
-        if faq_answer and best_score >= FAQ_DIRECT_SCORE:
-            answer = faq_answer
+        if top_answer and (best_score >= FAQ_DIRECT_SCORE or direct_match):
+            answer = top_answer
         else:
             prompt = build_prompt(user_q, hits)
             try:
                 answer = llm_chat(
                     [
-                        {"role": "system", "content": "あなたは情シス担当です。FAQの内容を優先し、必ず日本語で簡潔に回答してください。"},
+                        {"role": "system", "content": "あなたは情シス担当です。FAQの内容を優先し、日本語で簡潔に回答してください。"},
                         {"role": "user", "content": prompt},
                     ]
                 )
-                # LLMが空文字や不正っぽい場合もFAQ回答へフォールバック
-                if not str(answer).strip() and faq_answer:
-                    answer = faq_answer
+                if not str(answer).strip() and top_answer:
+                    answer = top_answer
             except Exception:
-                answer = faq_answer if faq_answer else "現在AIの回答機能でエラーが発生しています。しばらくしてから再度お試しください。"
+                answer = top_answer if top_answer else "現在AIの回答機能でエラーが発生しています。しばらくしてから再度お試しください。"
 
     st.session_state.used_hits = used_hits
 
