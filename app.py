@@ -301,30 +301,14 @@ def _read_xlsx_bytes(raw: bytes) -> pd.DataFrame:
 
 
 def read_faq_uploaded_file(file_name: str, raw: bytes) -> pd.DataFrame:
-    """アップロードされたFAQファイルを読む。
-    CSVは既存の柔軟読込、Excelは pandas.read_excel を優先し、
-    失敗時のみ最小XLSXパーサへフォールバックする。
-    """
     suffix = Path(file_name).suffix.lower()
     if suffix == '.csv':
         tmp = Path('/tmp/_faq_upload.csv')
         tmp.write_bytes(raw)
         df = read_csv_flexible(tmp)
-        return normalize_faq_columns(df)
-
-    # Excel読込（.xlsx / .xls）
-    try:
-        df = pd.read_excel(io.BytesIO(raw), engine=None)
-        return normalize_faq_columns(df)
-    except Exception:
-        pass
-
-    # 最小xlsx reader にフォールバック（主に openpyxl 不要で読むため）
-    try:
+    else:
         df = _read_xlsx_bytes(raw)
-        return normalize_faq_columns(df)
-    except Exception as e:
-        raise ValueError(f'Excelファイルの読込に失敗しました。xlsx / csv をお試しください。詳細: {e}') from e
+    return normalize_faq_columns(df)
 
 
 def save_faq_csv_full(faq_path: Path, df: pd.DataFrame) -> int:
@@ -1709,41 +1693,59 @@ with st.sidebar:
                 help="Excel(.xlsx) 推奨。質問 / 回答 / カテゴリ、または question / answer / category に対応。",
             )
 
+            if "faq_upload_preview_df" not in st.session_state:
+                st.session_state["faq_upload_preview_df"] = None
+            if "faq_upload_preview_name" not in st.session_state:
+                st.session_state["faq_upload_preview_name"] = ""
+            if "faq_replace_success_msg" not in st.session_state:
+                st.session_state["faq_replace_success_msg"] = ""
+
+            if st.session_state.get("faq_replace_success_msg"):
+                st.success(st.session_state["faq_replace_success_msg"])
+
             if uploaded_faq is not None:
-                st.caption(f"選択中ファイル: {uploaded_faq.name}")
                 try:
                     incoming_df = read_faq_uploaded_file(uploaded_faq.name, uploaded_faq.getvalue())
-                    st.session_state["faq_upload_preview_df"] = incoming_df
+                    st.session_state["faq_upload_preview_df"] = incoming_df.copy()
                     st.session_state["faq_upload_preview_name"] = uploaded_faq.name
                 except Exception as e:
-                    st.session_state.pop("faq_upload_preview_df", None)
-                    st.session_state["faq_upload_preview_name"] = uploaded_faq.name
+                    st.session_state["faq_upload_preview_df"] = None
+                    st.session_state["faq_upload_preview_name"] = ""
                     st.error(f"FAQファイルの取込でエラー: {e}")
 
-            incoming_df = st.session_state.get("faq_upload_preview_df")
-            preview_name = st.session_state.get("faq_upload_preview_name", "")
-            if isinstance(incoming_df, pd.DataFrame):
-                st.success(f"アップロード確認OK: {len(incoming_df)} 件のFAQを検出しました。")
-                if preview_name:
-                    st.caption(f"プレビュー中: {preview_name}")
-                preview_df = incoming_df.rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"})
-                st.dataframe(preview_df.head(20), width="stretch", height=420)
-                if len(incoming_df) > 20:
-                    st.caption(f"先頭20件を表示中です。保存対象は全 {len(incoming_df)} 件です。")
+            preview_incoming_df = st.session_state.get("faq_upload_preview_df")
+            preview_incoming_name = st.session_state.get("faq_upload_preview_name", "")
 
-                c1, c2 = st.columns(2)
-                with c1:
+            if isinstance(preview_incoming_df, pd.DataFrame) and len(preview_incoming_df) > 0:
+                st.caption(f"選択中ファイル: {preview_incoming_name}")
+                st.success(f"アップロード確認OK: {len(preview_incoming_df)} 件のFAQを検出しました。")
+                preview_df = preview_incoming_df.rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"})
+                st.dataframe(preview_df.head(20), width="stretch", height=420)
+                if len(preview_incoming_df) > 20:
+                    st.caption(f"先頭20件を表示中です。保存対象は全 {len(preview_incoming_df)} 件です。")
+
+                col_apply, col_clear = st.columns(2)
+                with col_apply:
                     if st.button("📥 この内容でFAQを反映する", type="primary", key="replace_faq_excel_admin", width="stretch"):
-                        saved = save_faq_csv_full(FAQ_PATH, incoming_df)
-                        load_faq_index.clear()
-                        st.session_state.pop("faq_upload_preview_df", None)
-                        st.session_state.pop("faq_upload_preview_name", None)
-                        st.success(f"FAQを {saved} 件反映しました。faq.csv を丸ごと更新し、次回検索から全件利用されます。")
-                        st.rerun()
-                with c2:
-                    if st.button("🗑 プレビューをクリア", key="clear_faq_upload_preview", width="stretch"):
-                        st.session_state.pop("faq_upload_preview_df", None)
-                        st.session_state.pop("faq_upload_preview_name", None)
+                        try:
+                            before_count = len(normalize_faq_columns(read_csv_flexible(FAQ_PATH))) if FAQ_PATH.exists() else 0
+                            saved = save_faq_csv_full(FAQ_PATH, preview_incoming_df)
+                            try:
+                                load_faq_index.clear()
+                            except Exception:
+                                pass
+                            st.session_state["faq_replace_success_msg"] = (
+                                f"FAQを {saved} 件反映しました。反映前: {before_count} 件 → 反映後: {saved} 件。"
+                            )
+                            st.session_state["faq_upload_preview_df"] = None
+                            st.session_state["faq_upload_preview_name"] = ""
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"FAQ反映でエラー: {e}")
+                with col_clear:
+                    if st.button("🗑 プレビューをクリア", key="clear_faq_excel_preview", width="stretch"):
+                        st.session_state["faq_upload_preview_df"] = None
+                        st.session_state["faq_upload_preview_name"] = ""
                         st.rerun()
 
         # ===== FAQ自動生成（該当なしログ → FAQ案）=====
