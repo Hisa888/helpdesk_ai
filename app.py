@@ -234,17 +234,36 @@ def faq_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
 def _read_xlsx_bytes(raw: bytes) -> pd.DataFrame:
     import xml.etree.ElementTree as ET
     from io import BytesIO
+
     ns = {
         "a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
         "pr": "http://schemas.openxmlformats.org/package/2006/relationships",
     }
+
+    def _visible_text(node) -> str:
+        """Excel の phonetic(rPh) を除外し、表示される文字だけを連結する。"""
+        if node is None:
+            return ""
+        parts = []
+        for child in list(node):
+            tag = child.tag.rsplit('}', 1)[-1]
+            if tag == 't':
+                parts.append(child.text or '')
+            elif tag == 'r':
+                t_el = child.find('a:t', ns)
+                if t_el is not None:
+                    parts.append(t_el.text or '')
+            elif tag in ('rPh', 'phoneticPr'):
+                continue
+        return ''.join(parts)
+
     with zipfile.ZipFile(BytesIO(raw)) as zf:
         shared = []
         if 'xl/sharedStrings.xml' in zf.namelist():
             root = ET.fromstring(zf.read('xl/sharedStrings.xml'))
             for si in root.findall('a:si', ns):
-                texts = [t.text or '' for t in si.findall('.//a:t', ns)]
-                shared.append(''.join(texts))
+                shared.append(_visible_text(si))
+
         sheet_path = 'xl/worksheets/sheet1.xml'
         if 'xl/workbook.xml' in zf.namelist() and 'xl/_rels/workbook.xml.rels' in zf.namelist():
             wb = ET.fromstring(zf.read('xl/workbook.xml'))
@@ -258,6 +277,7 @@ def _read_xlsx_bytes(raw: bytes) -> pd.DataFrame:
                     if not target.startswith('worksheets/'):
                         target = target.split('xl/')[-1]
                     sheet_path = 'xl/' + target
+
         sheet = ET.fromstring(zf.read(sheet_path))
         rows = []
         for row in sheet.findall('a:sheetData/a:row', ns):
@@ -280,7 +300,7 @@ def _read_xlsx_bytes(raw: bytes) -> pd.DataFrame:
                 elif t == 'inlineStr':
                     is_el = c.find('a:is', ns)
                     if is_el is not None:
-                        value = ''.join(tn.text or '' for tn in is_el.findall('.//a:t', ns))
+                        value = _visible_text(is_el)
                 else:
                     v = c.find('a:v', ns)
                     value = v.text if v is not None and v.text is not None else ''
@@ -288,6 +308,7 @@ def _read_xlsx_bytes(raw: bytes) -> pd.DataFrame:
                     row_map[col_idx] = value
             if max_col:
                 rows.append([row_map.get(i, '') for i in range(1, max_col + 1)])
+
     if not rows:
         return pd.DataFrame()
     max_cols = max(len(r) for r in rows)
