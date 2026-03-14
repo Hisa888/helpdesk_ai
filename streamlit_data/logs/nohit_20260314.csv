@@ -9,3 +9,4 @@ timestamp,question,device,location,network,error_text,impact,channel
 2026-03-14T04:30:32,共有フォルダにアクセスできない,,,,,,seed
 2026-03-14T04:30:33,プリンタが印刷できない,,,,,,seed
 2026-03-14T04:30:33,Wi-Fiが頻繁に切れる,,,,,,seed
+2026-03-14T04:30:34,PCが重い,,,,,,seed
