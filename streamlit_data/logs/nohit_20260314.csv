@@ -1,2 +1,3 @@
 timestamp,question,device,location,network,error_text,impact,channel
-2026-03-14T03:57:13,イライラした,,,,,,web
+2026-03-14T03:57:13,イライラした,Windows,社内,有線,"他責な人がいてつかれた
+",自分のみ,web
