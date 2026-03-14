@@ -908,44 +908,68 @@ def _pdf_draw_growth_cycle(c, x0, y0):
 
 
 def _pdf_draw_value_cards(c, x, y, cards, total_width):
-    """カード群を重なりなく描画する。上部ラベルは外に出し、カード内は見出し+説明だけにする。"""
-    gap = 5 * mm
-    label_gap = 3 * mm
-    card_w = (total_width - gap * (len(cards) - 1)) / len(cards)
-    card_h = 26 * mm
-    label_h = 6 * mm
-    side_pad = 6
+    """3ボックス形式の代わりに、表形式/箇条書き形式で安定表示する。"""
+    table_w = total_width
+    col1 = 30 * mm
+    col2 = 40 * mm
+    col3 = table_w - col1 - col2
+    row_h = 14 * mm
+    header_h = 9 * mm
+    pad_x = 4 * mm
+    pad_y = 3.5 * mm
+
+    _pdf_set_stroke_fill(c, stroke="#CBD5E1", fill="#E2E8F0")
+    c.roundRect(x, y - header_h, table_w, header_h, 5, stroke=1, fill=1)
+    c.setFillColor(HexColor("#0F172A"))
+    c.setFont("HeiseiKakuGo-W5", 9)
+    c.drawString(x + pad_x, y - 6.5 * mm, "項目")
+    c.drawString(x + col1 + pad_x, y - 6.5 * mm, "内容")
+    c.drawString(x + col1 + col2 + pad_x, y - 6.5 * mm, "説明")
+
+    top = y - header_h
+    bottom = top - row_h * len(cards)
+
+    _pdf_set_stroke_fill(c, stroke="#CBD5E1", fill="#FFFFFF")
+    c.roundRect(x, bottom, table_w, row_h * len(cards), 6, stroke=1, fill=1)
+
+    c.setStrokeColor(HexColor("#CBD5E1"))
+    c.setLineWidth(0.8)
+    c.line(x + col1, bottom, x + col1, top)
+    c.line(x + col1 + col2, bottom, x + col1 + col2, top)
 
     for idx, (title, value, note, fill, stroke) in enumerate(cards):
-        cx = x + idx * (card_w + gap)
-        label_y = y - label_h
-        cy = label_y - label_gap - card_h
+        row_top = top - row_h * idx
+        row_bottom = row_top - row_h
+        if idx > 0:
+            c.line(x, row_top, x + table_w, row_top)
 
-        _pdf_set_stroke_fill(c, stroke=stroke, fill=fill)
-        c.roundRect(cx, label_y, card_w, label_h, 6, stroke=1, fill=1)
-        c.setFillColor(HexColor("#334155"))
-        c.setFont("HeiseiKakuGo-W5", 8)
-        for i, ln in enumerate(_wrap_lines_for_pdf(title, "HeiseiKakuGo-W5", 8, card_w - side_pad * 2)[:1]):
-            c.drawString(cx + side_pad, label_y + label_h - 10 - i * 8, ln)
-
-        _pdf_set_stroke_fill(c, stroke=stroke, fill="#FFFFFF")
-        c.roundRect(cx, cy, card_w, card_h, 8, stroke=1, fill=1)
+        c.setFillColor(HexColor(stroke))
+        c.roundRect(x + 2.2 * mm, row_bottom + 3.2 * mm, 3.5 * mm, row_h - 6.4 * mm, 2, stroke=0, fill=1)
 
         c.setFillColor(HexColor("#0F172A"))
-        c.setFont("HeiseiKakuGo-W5", 14)
-        value_y = cy + card_h - 16
-        for ln in _wrap_lines_for_pdf(value, "HeiseiKakuGo-W5", 14, card_w - side_pad * 2)[:2]:
-            c.drawString(cx + side_pad, value_y, ln)
-            value_y -= 15
+        c.setFont("HeiseiKakuGo-W5", 9)
+        title_lines = _wrap_lines_for_pdf(title, "HeiseiKakuGo-W5", 9, col1 - 10 * mm)[:2]
+        yy = row_top - pad_y - 7
+        for ln in title_lines:
+            c.drawString(x + 7.5 * mm, yy, ln)
+            yy -= 10
 
-        c.setFillColor(HexColor("#475569"))
-        c.setFont("HeiseiKakuGo-W5", 8)
-        note_y = cy + 12
-        for ln in _wrap_lines_for_pdf(note, "HeiseiKakuGo-W5", 8, card_w - side_pad * 2)[:2]:
-            c.drawString(cx + side_pad, note_y, ln)
-            note_y -= 9
+        c.setFont("HeiseiKakuGo-W5", 10)
+        value_lines = _wrap_lines_for_pdf(value, "HeiseiKakuGo-W5", 10, col2 - 2 * pad_x)[:2]
+        yy = row_top - pad_y - 7
+        for ln in value_lines:
+            c.drawString(x + col1 + pad_x, yy, ln)
+            yy -= 11
 
-    return cy - 6 * mm
+        c.setFillColor(HexColor("#334155"))
+        c.setFont("HeiseiKakuGo-W5", 9)
+        note_lines = _wrap_lines_for_pdf(note, "HeiseiKakuGo-W5", 9, col3 - 2 * pad_x)[:3]
+        yy = row_top - pad_y - 7
+        for ln in note_lines:
+            c.drawString(x + col1 + col2 + pad_x, yy, ln)
+            yy -= 9.5
+
+    return bottom - 6 * mm
 
 
 def generate_ops_manual_pdf() -> bytes:
