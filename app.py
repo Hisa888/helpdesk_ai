@@ -791,53 +791,165 @@ def _pdf_draw_title(c, title: str, subtitle: str | None = None):
     c.line(20 * mm, h - 36 * mm, w - 20 * mm, h - 36 * mm)
 
 
-def _pdf_draw_flow(c, x0, y0):
-    """簡易運用フロー図（箱 + 矢印）"""
-    # box helper
-    def box(x, y, w, h, label):
-        c.setStrokeColor(HexColor("#0F172A"))
-        c.roundRect(x, y, w, h, 6, stroke=1, fill=0)
-        c.setFillColor(HexColor("#0F172A"))
-        c.setFont("HeiseiKakuGo-W5", 10)
-        # center-ish
-        lines = _wrap_lines_for_pdf(label, "HeiseiKakuGo-W5", 10, w - 10)
-        yy = y + h - 14
-        for ln in lines[:3]:
+def _pdf_set_stroke_fill(c, stroke="#0F172A", fill="#FFFFFF"):
+    c.setStrokeColor(HexColor(stroke))
+    c.setFillColor(HexColor(fill))
+
+
+def _pdf_draw_box(c, x, y, w, h, title, subtitle=None, fill="#FFFFFF", stroke="#CBD5E1", title_color="#0F172A"):
+    _pdf_set_stroke_fill(c, stroke=stroke, fill=fill)
+    c.roundRect(x, y, w, h, 8, stroke=1, fill=1)
+    c.setFillColor(HexColor(title_color))
+    c.setFont("HeiseiKakuGo-W5", 10)
+    lines = _wrap_lines_for_pdf(title, "HeiseiKakuGo-W5", 10, w - 12)
+    yy = y + h - 14
+    for ln in lines[:3]:
+        c.drawString(x + 6, yy, ln)
+        yy -= 12
+    if subtitle:
+        c.setFillColor(HexColor("#475569"))
+        c.setFont("HeiseiKakuGo-W5", 8)
+        for ln in _wrap_lines_for_pdf(subtitle, "HeiseiKakuGo-W5", 8, w - 12)[:3]:
             c.drawString(x + 6, yy, ln)
-            yy -= 12
+            yy -= 10
 
-    def arrow(x1, y1, x2, y2):
-        c.line(x1, y1, x2, y2)
-        # arrow head
-        import math
-        ang = math.atan2(y2 - y1, x2 - x1)
-        ah = 6
-        a1 = ang + math.pi * 0.85
-        a2 = ang - math.pi * 0.85
-        c.line(x2, y2, x2 + ah * math.cos(a1), y2 + ah * math.sin(a1))
-        c.line(x2, y2, x2 + ah * math.cos(a2), y2 + ah * math.sin(a2))
 
-    w_box, h_box = 55 * mm, 16 * mm
-    gap_y = 10 * mm
+def _pdf_draw_arrow(c, x1, y1, x2, y2, color="#64748B"):
+    import math
+    c.setStrokeColor(HexColor(color))
+    c.setLineWidth(1.2)
+    c.line(x1, y1, x2, y2)
+    ang = math.atan2(y2 - y1, x2 - x1)
+    ah = 6
+    a1 = ang + math.pi * 0.86
+    a2 = ang - math.pi * 0.86
+    c.line(x2, y2, x2 + ah * math.cos(a1), y2 + ah * math.sin(a1))
+    c.line(x2, y2, x2 + ah * math.cos(a2), y2 + ah * math.sin(a2))
 
-    x = x0
-    y = y0
-    box(x, y, w_box, h_box, "① ユーザーが質問\n（チャット/おすすめ）")
-    arrow(x + w_box/2, y, x + w_box/2, y - gap_y + 2)
-    y2 = y - gap_y - h_box
-    box(x, y2, w_box, h_box, "② FAQ検索（TF-IDF）\n一致度を表示")
-    arrow(x + w_box/2, y2, x + w_box/2, y2 - gap_y + 2)
-    y3 = y2 - gap_y - h_box
-    box(x, y3, w_box, h_box, "③ 低一致なら\n『問い合わせテンプレ』")
-    arrow(x + w_box + 8, y2 + h_box/2, x + w_box + 28, y2 + h_box/2)
-    box(x + w_box + 32, y2, w_box, h_box, "④ 高一致なら\nAI回答（Groq等）")
-    arrow(x + w_box + 8, y3 + h_box/2, x + w_box + 28, y3 + h_box/2)
-    box(x + w_box + 32, y3, w_box, h_box, "⑤ 該当なしログ\n蓄積・集計")
-    return y3 - 10 * mm
+
+def _pdf_draw_section_band(c, x, y, w, label, fill="#E0F2FE", text_color="#075985"):
+    _pdf_set_stroke_fill(c, stroke=fill, fill=fill)
+    c.roundRect(x, y - 4, w, 14, 6, stroke=0, fill=1)
+    c.setFillColor(HexColor(text_color))
+    c.setFont("HeiseiKakuGo-W5", 10)
+    c.drawString(x + 6, y, label)
+
+
+def _pdf_draw_bullet_list(c, x, y, items, max_width_pt, font_size=11, bullet_color="#0EA5E9", text_color="#0F172A", gap_after=2):
+    for item in items:
+        c.setFillColor(HexColor(bullet_color))
+        c.setFont("HeiseiKakuGo-W5", font_size)
+        c.drawString(x, y, "•")
+        c.setFillColor(HexColor(text_color))
+        y = _pdf_draw_paragraph(c, x + 10, y, str(item), "HeiseiKakuGo-W5", font_size, max_width_pt - 10)
+        y -= gap_after
+    return y
+
+
+def _pdf_draw_two_column_steps(c, x, y, col_w, left_title, left_items, right_title, right_items):
+    _pdf_draw_section_band(c, x, y, col_w, left_title)
+    _pdf_draw_section_band(c, x + col_w + 10 * mm, y, col_w, right_title, fill="#DCFCE7", text_color="#166534")
+    y_body = y - 16
+    y_left = _pdf_draw_bullet_list(c, x, y_body, left_items, col_w)
+    y_right = _pdf_draw_bullet_list(c, x + col_w + 10 * mm, y_body, right_items, col_w, bullet_color="#22C55E")
+    return min(y_left, y_right)
+
+
+def _pdf_draw_flow(c, x0, y0):
+    """誰でもわかる運用フロー図（回答成功 / 回答できない時の分岐付き）"""
+    box_w = 48 * mm
+    box_h = 18 * mm
+    right_gap = 18 * mm
+    down_gap = 12 * mm
+
+    x1 = x0
+    x2 = x0 + box_w + right_gap
+    y1 = y0
+    y2 = y1 - box_h - down_gap
+    y3 = y2 - box_h - down_gap
+
+    _pdf_draw_box(c, x1, y1, box_w, box_h, "① 社員が質問する", "例: Wi-Fiがつながらない")
+    _pdf_draw_box(c, x1, y2, box_w, box_h, "② AIがFAQを探す", "登録済みのよくある質問を検索")
+    _pdf_draw_box(c, x1, y3, box_w, box_h, "③ 近い回答が見つかった", "回答と参考FAQを表示")
+
+    _pdf_draw_box(c, x2, y2, box_w, box_h, "④ 回答が見つからない", "問い合わせテンプレートを表示", fill="#FEF3C7", stroke="#F59E0B", title_color="#92400E")
+    _pdf_draw_box(c, x2, y3, box_w, box_h, "⑤ 管理者がログを確認", "不足FAQを追加して次回に備える", fill="#DCFCE7", stroke="#22C55E", title_color="#166534")
+
+    _pdf_draw_arrow(c, x1 + box_w / 2, y1, x1 + box_w / 2, y2 + box_h)
+    _pdf_draw_arrow(c, x1 + box_w / 2, y2, x1 + box_w / 2, y3 + box_h)
+    _pdf_draw_arrow(c, x1 + box_w, y2 + box_h / 2, x2, y2 + box_h / 2)
+    _pdf_draw_arrow(c, x2 + box_w / 2, y2, x2 + box_w / 2, y3 + box_h)
+
+    c.setFillColor(HexColor("#0F172A"))
+    c.setFont("HeiseiKakuGo-W5", 9)
+    c.drawString(x1 + box_w + 4, y2 + box_h / 2 + 6, "見つからない時")
+    c.drawString(x1 + box_w + 6, y2 - 2, "改善サイクル")
+    return y3 - 22 * mm
+
+
+def _pdf_draw_growth_cycle(c, x0, y0):
+    """FAQ育成サイクル図"""
+    box_w = 38 * mm
+    box_h = 15 * mm
+    gap = 9 * mm
+    coords = [
+        (x0, y0, "① 該当なしを記録"),
+        (x0 + box_w + gap, y0, "② ログを確認"),
+        (x0 + box_w + gap, y0 - box_h - gap, "③ FAQを追加"),
+        (x0, y0 - box_h - gap, "④ 次回から自動回答"),
+    ]
+    for x, y, label in coords:
+        _pdf_draw_box(c, x, y, box_w, box_h, label, fill="#F8FAFC")
+    _pdf_draw_arrow(c, x0 + box_w, y0 + box_h / 2, x0 + box_w + gap, y0 + box_h / 2)
+    _pdf_draw_arrow(c, x0 + box_w + gap + box_w / 2, y0, x0 + box_w + gap + box_w / 2, y0 - gap)
+    _pdf_draw_arrow(c, x0 + box_w + gap, y0 - box_h - gap + box_h / 2, x0 + box_w, y0 - box_h - gap + box_h / 2)
+    _pdf_draw_arrow(c, x0 + box_w / 2, y0 - box_h - gap + box_h, x0 + box_w / 2, y0 - 2)
+    return y0 - box_h - gap - 14 * mm
+
+
+def _pdf_draw_value_cards(c, x, y, cards, total_width):
+    """カード群を重なりなく描画する。上部ラベルは外に出し、カード内は見出し+説明だけにする。"""
+    gap = 5 * mm
+    label_gap = 3 * mm
+    card_w = (total_width - gap * (len(cards) - 1)) / len(cards)
+    card_h = 26 * mm
+    label_h = 6 * mm
+    side_pad = 6
+
+    for idx, (title, value, note, fill, stroke) in enumerate(cards):
+        cx = x + idx * (card_w + gap)
+        label_y = y - label_h
+        cy = label_y - label_gap - card_h
+
+        _pdf_set_stroke_fill(c, stroke=stroke, fill=fill)
+        c.roundRect(cx, label_y, card_w, label_h, 6, stroke=1, fill=1)
+        c.setFillColor(HexColor("#334155"))
+        c.setFont("HeiseiKakuGo-W5", 8)
+        for i, ln in enumerate(_wrap_lines_for_pdf(title, "HeiseiKakuGo-W5", 8, card_w - side_pad * 2)[:1]):
+            c.drawString(cx + side_pad, label_y + label_h - 10 - i * 8, ln)
+
+        _pdf_set_stroke_fill(c, stroke=stroke, fill="#FFFFFF")
+        c.roundRect(cx, cy, card_w, card_h, 8, stroke=1, fill=1)
+
+        c.setFillColor(HexColor("#0F172A"))
+        c.setFont("HeiseiKakuGo-W5", 14)
+        value_y = cy + card_h - 16
+        for ln in _wrap_lines_for_pdf(value, "HeiseiKakuGo-W5", 14, card_w - side_pad * 2)[:2]:
+            c.drawString(cx + side_pad, value_y, ln)
+            value_y -= 15
+
+        c.setFillColor(HexColor("#475569"))
+        c.setFont("HeiseiKakuGo-W5", 8)
+        note_y = cy + 12
+        for ln in _wrap_lines_for_pdf(note, "HeiseiKakuGo-W5", 8, card_w - side_pad * 2)[:2]:
+            c.drawString(cx + side_pad, note_y, ln)
+            note_y -= 9
+
+    return cy - 6 * mm
 
 
 def generate_ops_manual_pdf() -> bytes:
-    """機能一覧 + 操作説明書PDF（管理者向け）"""
+    """完全版の操作説明書PDF（誰でも理解できる説明 + 図解付き）"""
     if not REPORTLAB_AVAILABLE:
         return b""
     buf = io.BytesIO()
@@ -845,86 +957,185 @@ def generate_ops_manual_pdf() -> bytes:
     pdfmetrics.registerFont(UnicodeCIDFont("HeiseiKakuGo-W5"))
 
     w, h = A4
-    margin = 20 * mm
+    margin = 18 * mm
     maxw = w - margin * 2
 
-    # --- Page 1: cover
-    _pdf_draw_title(c, "情シス問い合わせAI 操作説明書", "管理者向け / デモ用（Streamlit）")
-    y = h - 55 * mm
+    # Page 1: cover
+    _pdf_draw_title(c, "操作説明書_情シス問い合わせAI", "社員向け / 管理者向け / 誰でもわかる完全版")
+    y = h - 52 * mm
+    _pdf_draw_section_band(c, margin, y, 74 * mm, "この資料でわかること")
+    y -= 18
+    y = _pdf_draw_bullet_list(
+        c,
+        margin,
+        y,
+        [
+            "このAIで何ができるのか",
+            "社員がどの順番で使えばよいのか",
+            "回答が見つからない時にどう動けばよいのか",
+            "管理者がFAQを育てて精度を上げる方法",
+        ],
+        maxw,
+    )
+    y -= 3
+    _pdf_draw_section_band(c, margin, y, 90 * mm, "最初に知っておきたいこと", fill="#DCFCE7", text_color="#166534")
+    y -= 18
     y = _pdf_draw_paragraph(
         c,
         margin,
         y,
-        "本資料は『情シス問い合わせAI』の機能一覧と、管理者・利用者の操作手順をまとめたものです。\n運用時は自社ルール（連絡先、受付時間、SLA、個人情報ポリシー）に合わせて調整してください。",
+        "このシステムは、社内のITに関するよくある質問へすぐに答えるための問い合わせAIです。\n"
+        "まずAIに質問し、解決できない場合だけ情シス担当者へ問い合わせる運用にすると、対応時間を減らしながら回答品質をそろえられます。",
         "HeiseiKakuGo-W5",
         11,
         maxw,
     )
     c.setFont("HeiseiKakuGo-W5", 10)
-    c.drawString(margin, 20 * mm, f"生成日: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-
+    c.setFillColor(HexColor("#64748B"))
+    c.drawString(margin, 18 * mm, f"生成日: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     c.showPage()
 
-    # --- Page 2: feature list
-    _pdf_draw_title(c, "1. 機能一覧", "このアプリでできること")
-    y = h - 55 * mm
-    features = [
-        "FAQ検索（TF-IDF）: faq.csv から近いQ/Aを抽出し、根拠として表示",
-        "一致度（スコア）表示: 上位候補の一致度をバーで可視化",
-        "低一致時の問い合わせテンプレ: 必要情報を自動で提示し、問い合わせ品質を平準化",
-        "おすすめ質問ボタン: 初見ユーザーでも迷わず入力できる導線",
-        "該当なしログ蓄積: 低一致/未該当の質問をログ保存（運用改善の材料）",
-        "ログ状況ダッシュボード: 今日/過去7日/累計の件数を表示",
-        "ログCSVダウンロード: 管理者がログを取得してFAQ改善に活用",
-        "管理者ログイン: 管理者機能（ログ確認/FAQ育成/資料DL）を保護",
-        "削減時間シミュレーター: 問い合わせ削減効果（時間/金額）を試算",
-        "効果レポートPDF出力: 試算結果をPDFで出力（営業・社内説明用）",
+    # Page 2: what it does
+    _pdf_draw_title(c, "1. このAIでできること", "まずは全体像をつかむ")
+    y = h - 52 * mm
+    cards = [
+        ("すぐに答える", "FAQ検索", "登録済みの質問と回答を探します", "#EFF6FF", "#93C5FD"),
+        ("根拠を見せる", "参考FAQ表示", "どのFAQを元にしたか確認できます", "#ECFEFF", "#67E8F9"),
+        ("迷った時を助ける", "テンプレ表示", "必要情報をそろえて問い合わせできます", "#FEFCE8", "#FDE68A"),
     ]
-    for i, f in enumerate(features, 1):
-        y = _pdf_draw_paragraph(c, margin, y, f"・{f}", "HeiseiKakuGo-W5", 11, maxw)
-        y -= 2
-        if y < 30 * mm:
-            c.showPage()
-            _pdf_draw_title(c, "1. 機能一覧（続き）", None)
-            y = h - 55 * mm
-
-    c.showPage()
-
-    # --- Page 3: user flow
-    _pdf_draw_title(c, "2. 利用者の操作手順", "通常ユーザーの使い方")
-    y = h - 55 * mm
-    steps = (
-        "1) 画面下の入力欄に質問を入力（または『おすすめ質問』ボタンをクリック）\n"
-        "2) 回答が表示されます。必要に応じて『参照したFAQ（根拠）』を開いて確認します。\n"
-        "3) 一致度が低い場合は『問い合わせテンプレ』が表示されるので、記載内容を添えて情シスへ連絡します。"
+    y = _pdf_draw_value_cards(c, margin, y, cards, maxw)
+    y = _pdf_draw_bullet_list(
+        c,
+        margin,
+        y,
+        [
+            "よくある問い合わせにすぐ回答します。",
+            "AIの答えとあわせて、参考にしたFAQ候補も表示します。",
+            "回答が見つからない場合は、問い合わせ時に必要な項目をテンプレートで案内します。",
+            "管理者はFAQファイルの入れ替え、問い合わせログの確認、PDF資料のダウンロードができます。",
+            "使われ方のログを見ながら、FAQを追加して精度を上げていけます。",
+        ],
+        maxw,
     )
-    y = _pdf_draw_paragraph(c, margin, y, steps, "HeiseiKakuGo-W5", 11, maxw)
-    y -= 8
-    c.setFont("HeiseiKakuGo-W5", 11)
-    c.drawString(margin, y, "運用フロー（概要）")
-    y -= 10
-    _pdf_draw_flow(c, margin, y - 70 * mm)
-    c.showPage()
-
-    # --- Page 4: admin ops
-    _pdf_draw_title(c, "3. 管理者の操作手順", "ログ確認・FAQ育成・資料ダウンロード")
-    y = h - 55 * mm
-    admin_steps = [
-        "管理者パスワードでログインします（左サイドバー『管理者』）。",
-        "『問い合わせログ状況』で件数を確認し、必要に応じてログCSVをダウンロードします。",
-        "ログ内の『該当なし』質問を確認し、よくある内容は faq.csv にQ/Aとして追加します（運用改善）。",
-        "本操作説明書PDF・提案資料PDF・効果レポートPDFを、必要に応じてダウンロードします。",
-    ]
-    for s in admin_steps:
-        y = _pdf_draw_paragraph(c, margin, y, f"・{s}", "HeiseiKakuGo-W5", 11, maxw)
-        y -= 2
-
-    y -= 6
+    y -= 5
+    _pdf_draw_section_band(c, margin, y, 84 * mm, "利用イメージ", fill="#F8FAFC", text_color="#334155")
+    y -= 18
     y = _pdf_draw_paragraph(
         c,
         margin,
         y,
-        "※ faq.csv の更新後はアプリを再起動（Reboot app）すると反映されます。\n※ 個人情報/機密情報を入力しない運用ルールを社内で明確化してください。",
+        "例: 社員が『Wi-Fiがつながらない』と入力すると、AIはFAQを探して最も近い回答を表示します。\n"
+        "答えが見つからない時は、端末名・利用場所・発生時刻など、情シスが確認したい情報をそろえた問い合わせテンプレートを表示します。",
+        "HeiseiKakuGo-W5",
+        11,
+        maxw,
+    )
+    c.showPage()
+
+    # Page 3: employee flow
+    _pdf_draw_title(c, "2. 社員の使い方", "まずはこの順番で使います")
+    y = h - 52 * mm
+    y = _pdf_draw_bullet_list(
+        c,
+        margin,
+        y,
+        [
+            "画面の入力欄に困っている内容をそのまま入力します。",
+            "表示された回答を読み、必要に応じて参考FAQも確認します。",
+            "その場で解決できたら完了です。",
+            "解決しない時は、問い合わせテンプレートに沿って情シスへ連絡します。",
+        ],
+        maxw,
+    )
+    y -= 8
+    c.setFillColor(HexColor("#0F172A"))
+    c.setFont("HeiseiKakuGo-W5", 11)
+    c.drawString(margin, y, "問い合わせ対応の流れ")
+    y -= 10
+    bottom = _pdf_draw_flow(c, margin, y - 65 * mm)
+    y = bottom + 12 * mm
+    y = _pdf_draw_paragraph(
+        c,
+        margin,
+        y,
+        "見つかった回答だけで解決できる質問は、情シスへ連絡せずにその場で自己解決できます。\n"
+        "回答が見つからない質問はログに残るため、後からFAQへ追加して再発防止につなげられます。",
+        "HeiseiKakuGo-W5",
+        10,
+        maxw,
+    )
+    c.showPage()
+
+    # Page 4: admin steps
+    _pdf_draw_title(c, "3. 管理者の使い方", "左メニューの管理者画面で行うこと")
+    y = h - 52 * mm
+    col_w = (maxw - 10 * mm) / 2
+    y = _pdf_draw_two_column_steps(
+        c,
+        margin,
+        y,
+        col_w,
+        "毎日または週次で確認すること",
+        [
+            "問い合わせログ状況を見て、該当なしの増減を確認する。",
+            "必要に応じてログCSVをダウンロードする。",
+            "利用状況や削減時間シミュレーションを確認する。",
+        ],
+        "FAQを改善する時に行うこと",
+        [
+            "FAQをExcelでダウンロードして現在内容を確認する。",
+            "不足しているQ&Aを追加したExcelまたはCSVをアップロードする。",
+            "反映後、必要に応じてキャッシュクリアや再確認を行う。",
+        ],
+    )
+    y -= 4
+    _pdf_draw_section_band(c, margin, y, 92 * mm, "管理者向けPDFでできること", fill="#FEF3C7", text_color="#92400E")
+    y -= 18
+    y = _pdf_draw_bullet_list(
+        c,
+        margin,
+        y,
+        [
+            "操作説明書PDF: 社員や管理者へ使い方を説明する時に利用します。",
+            "提案資料PDF: 導入効果や導入ステップを説明する営業資料として利用します。",
+            "導入効果レポートPDF: 実際のログを元に削減時間や削減額の試算を共有できます。",
+        ],
+        maxw,
+        bullet_color="#F59E0B",
+    )
+    c.showPage()
+
+    # Page 5: FAQ growth cycle and rules
+    _pdf_draw_title(c, "4. AIを育てる運用", "使うほど精度が上がる仕組み")
+    y = h - 52 * mm
+    c.setFillColor(HexColor("#0F172A"))
+    c.setFont("HeiseiKakuGo-W5", 11)
+    c.drawString(margin, y, "FAQ改善サイクル")
+    y -= 10
+    bottom = _pdf_draw_growth_cycle(c, margin, y - 28 * mm)
+    y = bottom + 10 * mm
+    y = _pdf_draw_bullet_list(
+        c,
+        margin,
+        y,
+        [
+            "該当なしの質問をためるだけで終わらせず、週1回など決めて確認します。",
+            "同じ内容が複数回出ているものは優先してFAQへ追加します。",
+            "回答文は短く、社内で実際に使う手順や連絡先まで書くと使いやすくなります。",
+            "個人情報・機密情報は入力しない運用ルールを明確にしてください。",
+            "FAQ更新後は、必要に応じて反映確認を行ってから社内へ案内します。",
+        ],
+        maxw,
+    )
+    y -= 6
+    _pdf_draw_section_band(c, margin, y, 70 * mm, "おすすめの社内周知文", fill="#E0F2FE", text_color="#075985")
+    y -= 18
+    y = _pdf_draw_paragraph(
+        c,
+        margin,
+        y,
+        "『まずは情シス問い合わせAIで確認してください。回答が見つからない場合だけ、表示されたテンプレートを添えて問い合わせしてください。』\n"
+        "この一文を社内ポータルやTeams/Slackの案内に載せると、自己解決の定着に役立ちます。",
         "HeiseiKakuGo-W5",
         10,
         maxw,
@@ -936,7 +1147,7 @@ def generate_ops_manual_pdf() -> bytes:
 
 
 def generate_sales_proposal_pdf() -> bytes:
-    """営業（副業）向け：提案資料っぽい章立てPDF"""
+    """コンサルレベルの営業提案資料PDF（図解・導入効果・提案ストーリー付き）"""
     if not REPORTLAB_AVAILABLE:
         return b""
     buf = io.BytesIO()
@@ -944,123 +1155,205 @@ def generate_sales_proposal_pdf() -> bytes:
     pdfmetrics.registerFont(UnicodeCIDFont("HeiseiKakuGo-W5"))
 
     w, h = A4
-    margin = 20 * mm
+    margin = 18 * mm
     maxw = w - margin * 2
 
     # Page 1: cover
-    _pdf_draw_title(c, "情シス問い合わせAI 提案資料", "副業デモ用 / FAQ×AIで問い合わせ対応を削減")
-    y = h - 60 * mm
+    _pdf_draw_title(c, "提案資料_情シス問い合わせAI", "社内問い合わせを減らし、対応品質をそろえるための提案書")
+    y = h - 54 * mm
+    _pdf_draw_section_band(c, margin, y, 78 * mm, "提案の結論")
+    y -= 18
     y = _pdf_draw_paragraph(
         c,
         margin,
         y,
-        "目的：社内問い合わせ（情シス/総務/人事など）の一次対応を自動化し、担当者工数を削減しつつ回答品質を平準化します。\n\n構成：FAQ検索（根拠提示）＋AI補助（任意）＋『該当なし』の運用改善サイクル。",
+        "情シス問い合わせAIを導入することで、よくある問い合わせを自己解決へ誘導し、\n"
+        "情シス担当者は本当に人手が必要な問い合わせへ集中できるようになります。",
         "HeiseiKakuGo-W5",
-        11,
+        12,
         maxw,
     )
+    y -= 6
+    cards = [
+        ("問い合わせ削減", "一次対応を自動化", "同じ質問への繰り返し対応を減らす", "#EFF6FF", "#93C5FD"),
+        ("品質平準化", "回答をそろえる", "担当者ごとの差を減らす", "#F0FDF4", "#86EFAC"),
+        ("ナレッジ蓄積", "FAQが育つ", "ログから不足FAQを追加できる", "#FEFCE8", "#FDE68A"),
+    ]
+    y = _pdf_draw_value_cards(c, margin, y, cards, maxw)
     c.setFont("HeiseiKakuGo-W5", 10)
-    c.drawString(margin, 20 * mm, f"生成日: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-
+    c.setFillColor(HexColor("#64748B"))
+    c.drawString(margin, 18 * mm, f"生成日: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     c.showPage()
 
-    # Page 2: pain & solution
-    _pdf_draw_title(c, "1. 課題と解決アプローチ", "よくある現場の困りごと")
-    y = h - 55 * mm
-    pains = [
-        "同じ質問が繰り返され、担当者が都度対応している",
-        "回答品質が担当者の経験に依存し、新人が困る",
-        "問い合わせ文がバラバラで、切り分けに時間がかかる",
-        "FAQが更新されず、ナレッジが属人化する",
-    ]
-    y = _pdf_draw_paragraph(c, margin, y, "【現状の課題】", "HeiseiKakuGo-W5", 11, maxw)
-    for p in pains:
-        y = _pdf_draw_paragraph(c, margin, y, f"・{p}", "HeiseiKakuGo-W5", 11, maxw)
-    y -= 8
-    y = _pdf_draw_paragraph(c, margin, y, "【本提案の解決】", "HeiseiKakuGo-W5", 11, maxw)
-    sols = [
-        "FAQ根拠提示で『まずここを見れば解決』を実現",
-        "低一致時はテンプレで必要情報を揃え、二次対応を短縮",
-        "該当なしログを蓄積し、FAQを継続改善できる運用に",
-    ]
-    for s in sols:
-        y = _pdf_draw_paragraph(c, margin, y, f"・{s}", "HeiseiKakuGo-W5", 11, maxw)
-
+    # Page 2: issues and solution
+    _pdf_draw_title(c, "1. 現状課題と解決方針", "よくある課題をどう解決するか")
+    y = h - 52 * mm
+    y = _pdf_draw_two_column_steps(
+        c,
+        margin,
+        y,
+        (maxw - 10 * mm) / 2,
+        "現場で起きがちな課題",
+        [
+            "同じ問い合わせが繰り返し発生している。",
+            "担当者によって回答内容やスピードがばらつく。",
+            "問い合わせ文に必要情報が不足し、切り分けに時間がかかる。",
+            "FAQが更新されず、知識が属人化する。",
+        ],
+        "本提案の解決方針",
+        [
+            "まずAIに聞く導線をつくり、よくある質問を自己解決へ導く。",
+            "FAQを元にした回答で、誰でも同じ案内ができる状態をつくる。",
+            "見つからない場合はテンプレートで必要情報をそろえる。",
+            "該当なしログからFAQを追加し、継続的に改善する。",
+        ],
+    )
+    y -= 4
+    _pdf_draw_section_band(c, margin, y, 85 * mm, "導入後の期待効果", fill="#DCFCE7", text_color="#166534")
+    y -= 18
+    y = _pdf_draw_bullet_list(
+        c,
+        margin,
+        y,
+        [
+            "一次対応の自動化により、情シス担当者の負荷を下げる。",
+            "回答品質を標準化し、新人や兼任担当でも案内しやすくする。",
+            "問い合わせログを改善材料に変え、FAQ資産を増やす。",
+        ],
+        maxw,
+        bullet_color="#22C55E",
+    )
     c.showPage()
 
-    # Page 3: flow diagram
-    _pdf_draw_title(c, "2. 運用フロー", "FAQ育成で精度が上がる仕組み")
-    y = h - 60 * mm
+    # Page 3: process diagram
+    _pdf_draw_title(c, "2. システムの仕組み", "問い合わせから改善までを1つの流れにする")
+    y = h - 52 * mm
+    c.setFillColor(HexColor("#0F172A"))
     c.setFont("HeiseiKakuGo-W5", 11)
-    c.drawString(margin, y, "問い合わせ対応の流れ（図解）")
+    c.drawString(margin, y, "運用フロー図")
     y -= 10
-    _pdf_draw_flow(c, margin, y - 70 * mm)
-    y -= 92 * mm
+    bottom = _pdf_draw_flow(c, margin, y - 65 * mm)
+    y = bottom + 12 * mm
     y = _pdf_draw_paragraph(
         c,
         margin,
         y,
-        "ポイント：『該当なし』をログに残し、管理者が faq.csv に追記 → 次回から自動回答できる範囲が増えます。\nつまり運用するほど“育つ”ヘルプデスクになります。",
+        "ポイントは、回答できた質問だけでなく、回答できなかった質問も価値あるデータとして残ることです。\n"
+        "この仕組みによって、導入直後はFAQが少なくても、使うほど回答範囲を広げられます。",
         "HeiseiKakuGo-W5",
         11,
         maxw,
     )
-
+    y -= 4
+    c.setFillColor(HexColor("#0F172A"))
+    c.setFont("HeiseiKakuGo-W5", 11)
+    c.drawString(margin, y, "FAQ育成サイクル")
+    _pdf_draw_growth_cycle(c, margin, y - 26 * mm)
     c.showPage()
 
-    # Page 4: ROI / pricing guide
-    _pdf_draw_title(c, "3. 効果（削減時間）シミュレーション", "導入前に効果を数値化")
-    y = h - 55 * mm
-    y = _pdf_draw_paragraph(
-        c,
-        margin,
-        y,
-        "本アプリには『削減時間シミュレーター』を搭載しています。\n例：問い合わせ 300件/月、1件あたり対応5分、削減率30% → 75時間/月の削減。\n削減時間×人件費単価で、投資対効果（ROI）を説明できます。",
-        "HeiseiKakuGo-W5",
-        11,
-        maxw,
-    )
-    y -= 8
-    y = _pdf_draw_paragraph(
-        c,
-        margin,
-        y,
-        "（提案用の価格例）\n・スターター：月3〜5万円（FAQ整備 + 初期設定）\n・スタンダード：月8〜12万円（ログ運用 + FAQ育成支援 + レポート）\n・プロ：月15万円〜（部門横断/権限/監査/連携）",
-        "HeiseiKakuGo-W5",
-        11,
-        maxw,
-    )
-
-    c.showPage()
-
-    # Page 5: next steps
-    _pdf_draw_title(c, "4. 導入ステップ", "最短で“動くデモ”まで")
-    y = h - 55 * mm
-    steps = [
-        "1) 現状ヒアリング（問い合わせ種別 / 運用ルール / NG事項）",
-        "2) FAQ（初期30〜100件）を用意（csv）",
-        "3) Streamlitでデモ共有（社内トライアル）",
-        "4) 該当なしログを週次で確認し、FAQを育成",
-        "5) 定着後に部門拡張（総務/人事/経理など）",
+    # Page 4: ROI and model case
+    _pdf_draw_title(c, "3. 導入効果の考え方", "削減時間を数字で説明する")
+    y = h - 52 * mm
+    cards = [
+        ("モデルケース", "100件/月", "月100件の問い合わせを想定", "#F8FAFC", "#CBD5E1"),
+        ("平均対応時間", "5分/件", "情シスが1件対応する平均", "#F8FAFC", "#CBD5E1"),
+        ("削減時間", "約8時間/月", "100件 x 5分 = 500分", "#ECFEFF", "#67E8F9"),
     ]
-    for s in steps:
-        y = _pdf_draw_paragraph(c, margin, y, f"・{s}", "HeiseiKakuGo-W5", 11, maxw)
-        y -= 2
-    y -= 8
+    y = _pdf_draw_value_cards(c, margin, y, cards, maxw)
     y = _pdf_draw_paragraph(
         c,
         margin,
         y,
-        "次のアクション：\n・御社の問い合わせ例（10件）をご提供ください → 即日でデモFAQを作成できます。\n・効果試算に必要な『月間件数/平均対応時間/単価』を確認します。",
+        "例として、月100件・1件5分の問い合わせがある場合、単純計算で月500分の対応時間が発生しています。\n"
+        "このうち多くをAIで自己解決へ回せれば、月約8時間、年間では約96時間の削減余地があります。",
         "HeiseiKakuGo-W5",
         11,
         maxw,
+    )
+    y -= 6
+    _pdf_draw_section_band(c, margin, y, 78 * mm, "経営層への説明ポイント", fill="#FEF3C7", text_color="#92400E")
+    y -= 18
+    y = _pdf_draw_bullet_list(
+        c,
+        margin,
+        y,
+        [
+            "削減時間 = 問い合わせ件数 x 1件あたり対応時間 x AIで自己解決できる割合",
+            "人件費換算を入れると、投資対効果を説明しやすくなる",
+            "数値効果に加えて、回答品質の標準化や問い合わせ品質向上も副次効果として大きい",
+        ],
+        maxw,
+        bullet_color="#F59E0B",
+    )
+    c.showPage()
+
+    # Page 5: implementation plan
+    _pdf_draw_title(c, "4. 導入ステップ", "最短でデモから本運用まで進める")
+    y = h - 52 * mm
+    y = _pdf_draw_bullet_list(
+        c,
+        margin,
+        y,
+        [
+            "Step 1 現状確認: よくある問い合わせ、対応ルール、入力してはいけない情報を確認する。",
+            "Step 2 FAQ準備: まずは30〜100件程度のFAQをCSVまたはExcelで用意する。",
+            "Step 3 デモ公開: Streamlit上で社内向けに試験公開し、使い方を周知する。",
+            "Step 4 ログ改善: 該当なしログを確認し、足りないFAQを追加する。",
+            "Step 5 横展開: 総務、人事、経理など他部門の問い合わせへ拡張する。",
+        ],
+        maxw,
+    )
+    y -= 8
+    _pdf_draw_section_band(c, margin, y, 84 * mm, "初回提案時に確認したい項目", fill="#E0F2FE", text_color="#075985")
+    y -= 18
+    y = _pdf_draw_bullet_list(
+        c,
+        margin,
+        y,
+        [
+            "月間の問い合わせ件数",
+            "1件あたり平均対応時間",
+            "よくある問い合わせ上位10件",
+            "社内で利用する連絡手段（メール / Teams / Slack など）",
+            "個人情報や機密情報の取り扱いルール",
+        ],
+        maxw,
+        bullet_color="#0EA5E9",
+    )
+    c.showPage()
+
+    # Page 6: proposal closing
+    _pdf_draw_title(c, "5. ご提案のまとめ", "小さく始めて、着実に育てる")
+    y = h - 52 * mm
+    y = _pdf_draw_paragraph(
+        c,
+        margin,
+        y,
+        "情シス問い合わせAIは、大規模なシステム刷新ではなく、既存のFAQ資産を活用しながら小さく始められる改善策です。\n"
+        "まずはよくある問い合わせから対象にし、回答できなかった質問をログから追加する運用にすることで、短期間でも効果を体感しやすい構成です。",
+        "HeiseiKakuGo-W5",
+        11,
+        maxw,
+    )
+    y -= 8
+    _pdf_draw_section_band(c, margin, y, 64 * mm, "次のアクション", fill="#DCFCE7", text_color="#166534")
+    y -= 18
+    y = _pdf_draw_bullet_list(
+        c,
+        margin,
+        y,
+        [
+            "問い合わせ例を10件いただければ、デモFAQを作成できます。",
+            "月間件数・平均対応時間・単価がわかれば、削減効果の試算ができます。",
+            "社内向け説明用として、本資料と操作説明書PDFをそのまま活用できます。",
+        ],
+        maxw,
+        bullet_color="#22C55E",
     )
 
     c.save()
     buf.seek(0)
     return buf.getvalue()
-
 
 def render_match_bar(score: float):
     """一致度（0-1）をバーで表示"""
