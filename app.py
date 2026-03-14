@@ -12,6 +12,7 @@ import csv
 import io
 import zipfile
 import base64
+from difflib import SequenceMatcher
 
 # ===== CSV読み込みを頑丈にする（文字コード/区切り/カラム揺れ対策）=====
 def read_csv_flexible(path: Path) -> pd.DataFrame:
@@ -234,36 +235,17 @@ def faq_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
 def _read_xlsx_bytes(raw: bytes) -> pd.DataFrame:
     import xml.etree.ElementTree as ET
     from io import BytesIO
-
     ns = {
         "a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
         "pr": "http://schemas.openxmlformats.org/package/2006/relationships",
     }
-
-    def _visible_text(node) -> str:
-        """Excel の phonetic(rPh) を除外し、表示される文字だけを連結する。"""
-        if node is None:
-            return ""
-        parts = []
-        for child in list(node):
-            tag = child.tag.rsplit('}', 1)[-1]
-            if tag == 't':
-                parts.append(child.text or '')
-            elif tag == 'r':
-                t_el = child.find('a:t', ns)
-                if t_el is not None:
-                    parts.append(t_el.text or '')
-            elif tag in ('rPh', 'phoneticPr'):
-                continue
-        return ''.join(parts)
-
     with zipfile.ZipFile(BytesIO(raw)) as zf:
         shared = []
         if 'xl/sharedStrings.xml' in zf.namelist():
             root = ET.fromstring(zf.read('xl/sharedStrings.xml'))
             for si in root.findall('a:si', ns):
-                shared.append(_visible_text(si))
-
+                texts = [t.text or '' for t in si.findall('.//a:t', ns)]
+                shared.append(''.join(texts))
         sheet_path = 'xl/worksheets/sheet1.xml'
         if 'xl/workbook.xml' in zf.namelist() and 'xl/_rels/workbook.xml.rels' in zf.namelist():
             wb = ET.fromstring(zf.read('xl/workbook.xml'))
@@ -277,7 +259,6 @@ def _read_xlsx_bytes(raw: bytes) -> pd.DataFrame:
                     if not target.startswith('worksheets/'):
                         target = target.split('xl/')[-1]
                     sheet_path = 'xl/' + target
-
         sheet = ET.fromstring(zf.read(sheet_path))
         rows = []
         for row in sheet.findall('a:sheetData/a:row', ns):
@@ -300,7 +281,7 @@ def _read_xlsx_bytes(raw: bytes) -> pd.DataFrame:
                 elif t == 'inlineStr':
                     is_el = c.find('a:is', ns)
                     if is_el is not None:
-                        value = _visible_text(is_el)
+                        value = ''.join(tn.text or '' for tn in is_el.findall('.//a:t', ns))
                 else:
                     v = c.find('a:v', ns)
                     value = v.text if v is not None and v.text is not None else ''
@@ -308,7 +289,6 @@ def _read_xlsx_bytes(raw: bytes) -> pd.DataFrame:
                     row_map[col_idx] = value
             if max_col:
                 rows.append([row_map.get(i, '') for i in range(1, max_col + 1)])
-
     if not rows:
         return pd.DataFrame()
     max_cols = max(len(r) for r in rows)
@@ -410,21 +390,12 @@ GITHUB_BRANCH = _get_setting("GITHUB_BRANCH", "main").strip() or "main"
 GITHUB_BASE_PATH = _get_setting("GITHUB_BASE_PATH", "streamlit_data").strip().strip("/")
 
 
-def _github_persistence_enabled() -> bool:
-    """GitHub永続化の有効判定。NameError回避のため内部関数を実体にする。"""
-    try:
-        return str(PERSIST_MODE).strip().lower() == "github" and bool(str(GITHUB_TOKEN).strip() and str(GITHUB_REPO).strip())
-    except Exception:
-        return False
-
-
 def github_persistence_enabled() -> bool:
-    """後方互換用ラッパー。画面側からは常にこの名前で呼ぶ。"""
-    return _github_persistence_enabled()
+    return PERSIST_MODE == "github" and bool(GITHUB_TOKEN and GITHUB_REPO)
 
 
 def persistence_status_text() -> str:
-    if _github_persistence_enabled():
+    if github_persistence_enabled():
         return f"GitHub永続化: ON（{GITHUB_REPO}@{GITHUB_BRANCH} / {GITHUB_BASE_PATH}）"
     return "ローカル保存のみ（Streamlit Cloud の Reboot で消える可能性があります）"
 
@@ -452,7 +423,7 @@ def _github_headers() -> dict:
 
 
 def github_download_file(rel_path: str, local_path: Path) -> bool:
-    if not _github_persistence_enabled():
+    if not github_persistence_enabled():
         return False
     try:
         res = requests.get(_github_api_url(rel_path), headers=_github_headers(), params={"ref": GITHUB_BRANCH}, timeout=20)
@@ -510,7 +481,7 @@ def github_upload_file(local_path: Path, rel_path: str | None = None, commit_mes
 
 
 def github_list_dir(rel_dir: str) -> list[str]:
-    if not _github_persistence_enabled():
+    if not github_persistence_enabled():
         return []
     try:
         res = requests.get(_github_api_url(rel_dir), headers=_github_headers(), params={"ref": GITHUB_BRANCH}, timeout=20)
@@ -536,7 +507,7 @@ def bootstrap_persistent_storage():
             pass
 
     # GitHub永続化が有効なら、リモートを優先して取得
-    if _github_persistence_enabled():
+    if github_persistence_enabled():
         github_download_file("faq.csv", FAQ_PATH)
         for remote_path in github_list_dir("logs"):
             if not remote_path.endswith('.csv'):
@@ -548,7 +519,7 @@ def bootstrap_persistent_storage():
 def persist_runtime_file(local_path: Path, label: str = "data") -> bool:
     if not local_path.exists():
         return False
-    if not _github_persistence_enabled():
+    if not github_persistence_enabled():
         return True
     rel_path = _remote_relpath(local_path)
     msg = f"Update {label}: {rel_path}"
@@ -618,7 +589,7 @@ def save_search_settings(answer_threshold: float, suggest_threshold: float) -> t
         return False, settings
 
 bootstrap_persistent_storage()
-if _github_persistence_enabled():
+if github_persistence_enabled():
     github_download_file("search_settings.json", SEARCH_SETTINGS_PATH)
 SEARCH_SETTINGS = load_search_settings()
 
@@ -1550,6 +1521,56 @@ def normalize_search_text(text: str) -> str:
     return s
 
 
+
+def tokenize_search_text(text: str) -> set[str]:
+    """RAG強化向けの軽量トークナイズ。既存の検索ロジックを壊さず加点用に使う。"""
+    s = normalize_search_text(text)
+    if not s:
+        return set()
+
+    tokens: set[str] = set()
+
+    for token in re.findall(r"[a-z0-9_]+", s):
+        if len(token) >= 2:
+            tokens.add(token)
+
+    jp_chunks = re.findall(r"[ぁ-んァ-ヶ一-龠ー]{2,}", s)
+    for chunk in jp_chunks:
+        tokens.add(chunk)
+        if len(chunk) >= 3:
+            for n in (2, 3, 4):
+                if len(chunk) >= n:
+                    for i in range(len(chunk) - n + 1):
+                        tokens.add(chunk[i:i+n])
+
+    return {t for t in tokens if t}
+
+
+def soft_text_match_score(query: str, target: str) -> float:
+    """表記ゆれ込みの近似一致スコア。FAQ既存スコアへの補助加点用。"""
+    q = normalize_search_text(query)
+    t = normalize_search_text(target)
+    if not q or not t:
+        return 0.0
+    if q == t:
+        return 1.0
+    if q in t or t in q:
+        return 0.92
+    return float(SequenceMatcher(None, q, t).ratio())
+
+
+@st.cache_resource(show_spinner=False)
+def get_semantic_embedder():
+    """sentence-transformers が使える環境なら埋め込みモデルを返す。未設定なら無効。"""
+    model_name = _get_setting("RAG_EMBED_MODEL", "")
+    if not model_name:
+        return None
+    try:
+        from sentence_transformers import SentenceTransformer  # type: ignore
+        return SentenceTransformer(model_name)
+    except Exception:
+        return None
+
 def extract_search_tokens(text: str) -> set[str]:
     """日本語FAQ検索向けの軽量トークン抽出。"""
     s = normalize_search_text(text)
@@ -1593,26 +1614,27 @@ CHAR_VECTORIZER = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
 def load_faq_index(faq_path: Path):
     if not faq_path.exists():
         empty = pd.DataFrame(columns=["question", "answer", "category"])
-        return empty, None, None, None, None
+        return empty, None, None, None, None, None
 
     try:
         df = normalize_faq_columns(read_csv_flexible(faq_path))
     except Exception:
         empty = pd.DataFrame(columns=["question", "answer", "category"])
-        return empty, None, None, None, None
+        return empty, None, None, None, None, None
 
     df["question"] = df["question"].fillna("").astype(str)
     df["answer"] = df["answer"].fillna("").astype(str)
     df["category"] = df["category"].fillna("").astype(str)
 
     if len(df) == 0:
-        return df, None, None, None, None
+        return df, None, None, None, None, None
 
     df["question_norm"] = df["question"].apply(normalize_search_text)
     df["answer_norm"] = df["answer"].apply(normalize_search_text)
     df["qa_text"] = (df["question"] + " / " + df["answer"]).astype(str)
     df["qa_text_norm"] = (df["question_norm"] + " / " + df["answer_norm"]).astype(str)
     df["search_tokens"] = df["qa_text_norm"].apply(extract_search_tokens)
+    df["search_tokens_rag"] = df["qa_text_norm"].apply(tokenize_search_text)
     df["search_concepts"] = df["qa_text_norm"].apply(extract_concepts)
 
     try:
@@ -1621,12 +1643,20 @@ def load_faq_index(faq_path: Path):
         X_word = word_vectorizer.fit_transform(df["qa_text_norm"])
         X_char = char_vectorizer.fit_transform(df["qa_text_norm"])
     except Exception:
-        return df, None, None, None, None
+        return df, None, None, None, None, None
 
-    return df, word_vectorizer, X_word, char_vectorizer, X_char
+    semantic_vectors = None
+    embedder = get_semantic_embedder()
+    if embedder is not None:
+        try:
+            semantic_vectors = embedder.encode(df["qa_text_norm"].tolist(), normalize_embeddings=True)
+        except Exception:
+            semantic_vectors = None
+
+    return df, word_vectorizer, X_word, char_vectorizer, X_char, semantic_vectors
 
 
-df, vectorizer, X, char_vectorizer, X_char = load_faq_index(FAQ_PATH)
+df, vectorizer, X, char_vectorizer, X_char, semantic_vectors = load_faq_index(FAQ_PATH)
 
 if df is None or len(df) == 0 or vectorizer is None or X is None or char_vectorizer is None or X_char is None:
     st.warning("faq.csv が未配置/空/不正のため、FAQ検索は無効です。まず faq.csv を配置してください。")
@@ -1645,6 +1675,67 @@ def retrieve_faq(query: str):
         sims_char = cosine_similarity(qv_char, X_char).flatten()
         if sims_word.size == 0 or sims_char.size == 0:
             return []
+
+        # 既存のハイブリッド検索を維持
+        base_scores = (sims_word * 0.52) + (sims_char * 0.48)
+
+        exact_bonus = (df["question_norm"] == query_norm).astype(float).to_numpy() * 0.22
+        contains_bonus = df["question_norm"].apply(
+            lambda x: 0.10 if query_norm and (query_norm in x or x in query_norm) else 0.0
+        ).to_numpy()
+
+        q_tokens = extract_search_tokens(query_norm)
+        token_bonus = df["search_tokens"].apply(
+            lambda toks: (0.18 * len(q_tokens & set(toks)) / max(1, len(q_tokens))) if q_tokens else 0.0
+        ).to_numpy()
+
+        q_concepts = extract_concepts(query_norm)
+        concept_bonus = df["search_concepts"].apply(
+            lambda cs: (0.22 * len(q_concepts & set(cs)) / max(1, len(q_concepts))) if q_concepts else 0.0
+        ).to_numpy()
+
+        prefix_bonus = df["question_norm"].apply(
+            lambda x: 0.06 if query_norm and str(x).startswith(query_norm[: min(8, len(query_norm))]) else 0.0
+        ).to_numpy()
+
+        # RAG強化の追加加点
+        rag_tokens = tokenize_search_text(query_norm)
+        rag_token_bonus = df["search_tokens_rag"].apply(
+            lambda toks: (0.12 * len(rag_tokens & set(toks)) / max(1, len(rag_tokens))) if rag_tokens else 0.0
+        ).to_numpy()
+
+        direct_bonus = df["question"].apply(
+            lambda q: 0.14 * soft_text_match_score(query_norm, q)
+        ).to_numpy()
+
+        semantic_bonus = None
+        embedder = get_semantic_embedder()
+        if embedder is not None and semantic_vectors is not None:
+            try:
+                q_emb = embedder.encode([query_norm], normalize_embeddings=True)
+                sem = (semantic_vectors @ q_emb[0]).flatten()
+                semantic_bonus = [0.14 * max(0.0, float(v)) for v in sem]
+            except Exception:
+                semantic_bonus = None
+
+        sims = base_scores + exact_bonus + contains_bonus + token_bonus + concept_bonus + prefix_bonus + rag_token_bonus + direct_bonus
+        if semantic_bonus is not None:
+            import numpy as _np
+            sims = sims + _np.array(semantic_bonus)
+
+        # 近似一致が非常に強い候補は最低スコアを底上げ
+        direct_scores = df["question"].apply(lambda q: soft_text_match_score(query_norm, q)).to_numpy()
+        for i in range(len(direct_scores)):
+            if direct_scores[i] >= 0.92:
+                sims[i] = max(float(sims[i]), 0.92)
+            elif direct_scores[i] >= 0.85 and float(sims_char[i]) >= 0.35:
+                sims[i] = max(float(sims[i]), 0.82)
+
+        idxs = sims.argsort()[::-1][:3]
+        return [(df.iloc[i], float(sims[i])) for i in idxs if float(sims[i]) > 0]
+    except Exception:
+        return []
+
 
         # 単語一致と文字部分一致を合成して、表記ゆれに強くする
         sims = (sims_word * 0.52) + (sims_char * 0.48)
@@ -2093,7 +2184,7 @@ GITHUB_TOKEN = "ghp_xxx"
 """.strip(), language="toml")
             col_sync1, col_sync2 = st.columns(2)
             with col_sync1:
-                if st.button("📥 GitHubからFAQ再読込", width="stretch", disabled=not _github_persistence_enabled()):
+                if st.button("📥 GitHubからFAQ再読込", width="stretch", disabled=not github_persistence_enabled()):
                     ok = github_download_file("faq.csv", FAQ_PATH)
                     if ok:
                         try:
@@ -2105,7 +2196,7 @@ GITHUB_TOKEN = "ghp_xxx"
                     else:
                         st.warning("GitHubからFAQを取得できませんでした。設定を確認してください。")
             with col_sync2:
-                if st.button("📤 FAQをGitHubへ保存", width="stretch", disabled=not _github_persistence_enabled()):
+                if st.button("📤 FAQをGitHubへ保存", width="stretch", disabled=not github_persistence_enabled()):
                     ok = persist_faq_now()
                     if ok:
                         st.success("faq.csv を GitHub に保存しました。")
