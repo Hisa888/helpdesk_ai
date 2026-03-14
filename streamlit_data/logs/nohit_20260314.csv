@@ -17,3 +17,4 @@ timestamp,question,device,location,network,error_text,impact,channel
 2026-03-14T04:30:37,メール添付ファイルが開けない,,,,,,seed
 2026-03-14T04:30:37,二段階認証が通らない,,,,,,seed
 2026-03-14T04:30:38,カメラが映らない,,,,,,seed
+2026-03-14T04:30:38,マイクが認識されない,,,,,,seed
