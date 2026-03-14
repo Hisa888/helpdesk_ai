@@ -856,55 +856,35 @@ def _pdf_draw_two_column_steps(c, x, y, col_w, left_title, left_items, right_tit
 
 
 def _pdf_draw_flow(c, x0, y0):
-    """PDFビューア差で崩れにくい、左基準の縦フロー図。"""
-    box_w = 96 * mm
+    """誰でもわかる運用フロー図（回答成功 / 回答できない時の分岐付き）"""
+    box_w = 48 * mm
     box_h = 18 * mm
-    step_gap = 8 * mm
-    note_gap = 5 * mm
+    right_gap = 18 * mm
+    down_gap = 12 * mm
 
-    steps = [
-        ("① 社員が質問する", "例: Wi-Fiがつながらない", "#F8FAFC", "#CBD5E1", "#0F172A"),
-        ("② AIがFAQを探す", "登録済みのよくある質問を検索", "#EFF6FF", "#93C5FD", "#0F172A"),
-        ("③ 近い回答を表示する", "回答と参考FAQを表示", "#F0FDF4", "#86EFAC", "#166534"),
-        ("④ 見つからない場合", "問い合わせテンプレートを表示", "#FEF3C7", "#F59E0B", "#92400E"),
-        ("⑤ 管理者がログを確認", "不足FAQを追加して次回に備える", "#DCFCE7", "#22C55E", "#166534"),
-    ]
+    x1 = x0
+    x2 = x0 + box_w + right_gap
+    y1 = y0
+    y2 = y1 - box_h - down_gap
+    y3 = y2 - box_h - down_gap
 
-    current_y = y0
-    center_x = x0 + box_w / 2
+    _pdf_draw_box(c, x1, y1, box_w, box_h, "① 社員が質問する", "例: Wi-Fiがつながらない")
+    _pdf_draw_box(c, x1, y2, box_w, box_h, "② AIがFAQを探す", "登録済みのよくある質問を検索")
+    _pdf_draw_box(c, x1, y3, box_w, box_h, "③ 近い回答が見つかった", "回答と参考FAQを表示")
 
-    for idx, (title, subtitle, fill, stroke, title_color) in enumerate(steps):
-        _pdf_draw_box(
-            c,
-            x0,
-            current_y,
-            box_w,
-            box_h,
-            title,
-            subtitle,
-            fill=fill,
-            stroke=stroke,
-            title_color=title_color,
-        )
+    _pdf_draw_box(c, x2, y2, box_w, box_h, "④ 回答が見つからない", "問い合わせテンプレートを表示", fill="#FEF3C7", stroke="#F59E0B", title_color="#92400E")
+    _pdf_draw_box(c, x2, y3, box_w, box_h, "⑤ 管理者がログを確認", "不足FAQを追加して次回に備える", fill="#DCFCE7", stroke="#22C55E", title_color="#166534")
 
-        if idx < len(steps) - 1:
-            arrow_bottom = current_y - step_gap + 2
-            _pdf_draw_arrow(c, center_x, current_y, center_x, arrow_bottom)
+    _pdf_draw_arrow(c, x1 + box_w / 2, y1, x1 + box_w / 2, y2 + box_h)
+    _pdf_draw_arrow(c, x1 + box_w / 2, y2, x1 + box_w / 2, y3 + box_h)
+    _pdf_draw_arrow(c, x1 + box_w, y2 + box_h / 2, x2, y2 + box_h / 2)
+    _pdf_draw_arrow(c, x2 + box_w / 2, y2, x2 + box_w / 2, y3 + box_h)
 
-            if idx == 2:
-                c.setFillColor(HexColor("#92400E"))
-                c.setFont("HeiseiKakuGo-W5", 9)
-                c.drawString(x0, arrow_bottom - 8, "解決しない場合は、問い合わせテンプレートへ進みます")
-                current_y -= note_gap
-            elif idx == 3:
-                c.setFillColor(HexColor("#166534"))
-                c.setFont("HeiseiKakuGo-W5", 9)
-                c.drawString(x0, arrow_bottom - 8, "ログを確認し、FAQを追加すると次回から回答できる範囲が広がります")
-                current_y -= note_gap
-
-        current_y -= (box_h + step_gap)
-
-    return current_y - 6 * mm
+    c.setFillColor(HexColor("#0F172A"))
+    c.setFont("HeiseiKakuGo-W5", 9)
+    c.drawString(x1 + box_w + 4, y2 + box_h / 2 + 6, "見つからない時")
+    c.drawString(x1 + box_w + 6, y2 - 2, "改善サイクル")
+    return y3 - 22 * mm
 
 
 def _pdf_draw_growth_cycle(c, x0, y0):
@@ -928,44 +908,68 @@ def _pdf_draw_growth_cycle(c, x0, y0):
 
 
 def _pdf_draw_value_cards(c, x, y, cards, total_width):
-    """カード群を重なりなく描画する。上部ラベルは外に出し、カード内は見出し+説明だけにする。"""
-    gap = 5 * mm
-    label_gap = 3 * mm
-    card_w = (total_width - gap * (len(cards) - 1)) / len(cards)
-    card_h = 26 * mm
-    label_h = 6 * mm
-    side_pad = 6
+    """3ボックス形式の代わりに、表形式/箇条書き形式で安定表示する。"""
+    table_w = total_width
+    col1 = 30 * mm
+    col2 = 40 * mm
+    col3 = table_w - col1 - col2
+    row_h = 14 * mm
+    header_h = 9 * mm
+    pad_x = 4 * mm
+    pad_y = 3.5 * mm
+
+    _pdf_set_stroke_fill(c, stroke="#CBD5E1", fill="#E2E8F0")
+    c.roundRect(x, y - header_h, table_w, header_h, 5, stroke=1, fill=1)
+    c.setFillColor(HexColor("#0F172A"))
+    c.setFont("HeiseiKakuGo-W5", 9)
+    c.drawString(x + pad_x, y - 6.5 * mm, "項目")
+    c.drawString(x + col1 + pad_x, y - 6.5 * mm, "内容")
+    c.drawString(x + col1 + col2 + pad_x, y - 6.5 * mm, "説明")
+
+    top = y - header_h
+    bottom = top - row_h * len(cards)
+
+    _pdf_set_stroke_fill(c, stroke="#CBD5E1", fill="#FFFFFF")
+    c.roundRect(x, bottom, table_w, row_h * len(cards), 6, stroke=1, fill=1)
+
+    c.setStrokeColor(HexColor("#CBD5E1"))
+    c.setLineWidth(0.8)
+    c.line(x + col1, bottom, x + col1, top)
+    c.line(x + col1 + col2, bottom, x + col1 + col2, top)
 
     for idx, (title, value, note, fill, stroke) in enumerate(cards):
-        cx = x + idx * (card_w + gap)
-        label_y = y - label_h
-        cy = label_y - label_gap - card_h
+        row_top = top - row_h * idx
+        row_bottom = row_top - row_h
+        if idx > 0:
+            c.line(x, row_top, x + table_w, row_top)
 
-        _pdf_set_stroke_fill(c, stroke=stroke, fill=fill)
-        c.roundRect(cx, label_y, card_w, label_h, 6, stroke=1, fill=1)
-        c.setFillColor(HexColor("#334155"))
-        c.setFont("HeiseiKakuGo-W5", 8)
-        for i, ln in enumerate(_wrap_lines_for_pdf(title, "HeiseiKakuGo-W5", 8, card_w - side_pad * 2)[:1]):
-            c.drawString(cx + side_pad, label_y + label_h - 10 - i * 8, ln)
-
-        _pdf_set_stroke_fill(c, stroke=stroke, fill="#FFFFFF")
-        c.roundRect(cx, cy, card_w, card_h, 8, stroke=1, fill=1)
+        c.setFillColor(HexColor(stroke))
+        c.roundRect(x + 2.2 * mm, row_bottom + 3.2 * mm, 3.5 * mm, row_h - 6.4 * mm, 2, stroke=0, fill=1)
 
         c.setFillColor(HexColor("#0F172A"))
-        c.setFont("HeiseiKakuGo-W5", 14)
-        value_y = cy + card_h - 16
-        for ln in _wrap_lines_for_pdf(value, "HeiseiKakuGo-W5", 14, card_w - side_pad * 2)[:2]:
-            c.drawString(cx + side_pad, value_y, ln)
-            value_y -= 15
+        c.setFont("HeiseiKakuGo-W5", 9)
+        title_lines = _wrap_lines_for_pdf(title, "HeiseiKakuGo-W5", 9, col1 - 10 * mm)[:2]
+        yy = row_top - pad_y - 7
+        for ln in title_lines:
+            c.drawString(x + 7.5 * mm, yy, ln)
+            yy -= 10
 
-        c.setFillColor(HexColor("#475569"))
-        c.setFont("HeiseiKakuGo-W5", 8)
-        note_y = cy + 12
-        for ln in _wrap_lines_for_pdf(note, "HeiseiKakuGo-W5", 8, card_w - side_pad * 2)[:2]:
-            c.drawString(cx + side_pad, note_y, ln)
-            note_y -= 9
+        c.setFont("HeiseiKakuGo-W5", 10)
+        value_lines = _wrap_lines_for_pdf(value, "HeiseiKakuGo-W5", 10, col2 - 2 * pad_x)[:2]
+        yy = row_top - pad_y - 7
+        for ln in value_lines:
+            c.drawString(x + col1 + pad_x, yy, ln)
+            yy -= 11
 
-    return cy - 6 * mm
+        c.setFillColor(HexColor("#334155"))
+        c.setFont("HeiseiKakuGo-W5", 9)
+        note_lines = _wrap_lines_for_pdf(note, "HeiseiKakuGo-W5", 9, col3 - 2 * pad_x)[:3]
+        yy = row_top - pad_y - 7
+        for ln in note_lines:
+            c.drawString(x + col1 + col2 + pad_x, yy, ln)
+            yy -= 9.5
+
+    return bottom - 6 * mm
 
 
 def generate_ops_manual_pdf() -> bytes:
@@ -1071,9 +1075,9 @@ def generate_ops_manual_pdf() -> bytes:
     c.setFillColor(HexColor("#0F172A"))
     c.setFont("HeiseiKakuGo-W5", 11)
     c.drawString(margin, y, "問い合わせ対応の流れ")
-    y -= 10
-    bottom = _pdf_draw_flow(c, margin, y - 65 * mm)
-    y = bottom + 12 * mm
+    y -= 5 * mm
+    bottom = _pdf_draw_flow(c, margin, y)
+    y = bottom + 8 * mm
     y = _pdf_draw_paragraph(
         c,
         margin,
@@ -1251,9 +1255,9 @@ def generate_sales_proposal_pdf() -> bytes:
     c.setFillColor(HexColor("#0F172A"))
     c.setFont("HeiseiKakuGo-W5", 11)
     c.drawString(margin, y, "運用フロー図")
-    y -= 10
-    bottom = _pdf_draw_flow(c, margin, y - 65 * mm)
-    y = bottom + 12 * mm
+    y -= 5 * mm
+    bottom = _pdf_draw_flow(c, margin, y)
+    y = bottom + 8 * mm
     y = _pdf_draw_paragraph(
         c,
         margin,
