@@ -856,35 +856,41 @@ def _pdf_draw_two_column_steps(c, x, y, col_w, left_title, left_items, right_tit
 
 
 def _pdf_draw_flow(c, x0, y0):
-    """誰でもわかる運用フロー図（回答成功 / 回答できない時の分岐付き）"""
-    box_w = 48 * mm
-    box_h = 18 * mm
-    right_gap = 18 * mm
-    down_gap = 12 * mm
+    """見出しや本文とかぶりにくい、左基準の縦フロー図。"""
+    box_w = 95 * mm
+    box_h = 16 * mm
+    gap = 8 * mm
 
-    x1 = x0
-    x2 = x0 + box_w + right_gap
-    y1 = y0
-    y2 = y1 - box_h - down_gap
-    y3 = y2 - box_h - down_gap
+    steps = [
+        ("① 社員が質問する", "例: Wi-Fiがつながらない", "#F8FAFC", "#CBD5E1", "#0F172A"),
+        ("② AIがFAQを探す", "登録済みのよくある質問を検索", "#EFF6FF", "#60A5FA", "#1E3A8A"),
+        ("③ 近い回答を表示する", "回答と参考FAQを表示", "#ECFDF5", "#4ADE80", "#166534"),
+        ("④ 見つからない場合", "問い合わせテンプレートを表示", "#FEF3C7", "#F59E0B", "#92400E"),
+        ("⑤ 管理者がログを確認する", "不足FAQを追加して次回に備える", "#DCFCE7", "#22C55E", "#166534"),
+    ]
 
-    _pdf_draw_box(c, x1, y1, box_w, box_h, "① 社員が質問する", "例: Wi-Fiがつながらない")
-    _pdf_draw_box(c, x1, y2, box_w, box_h, "② AIがFAQを探す", "登録済みのよくある質問を検索")
-    _pdf_draw_box(c, x1, y3, box_w, box_h, "③ 近い回答が見つかった", "回答と参考FAQを表示")
+    x = x0
+    y = y0
 
-    _pdf_draw_box(c, x2, y2, box_w, box_h, "④ 回答が見つからない", "問い合わせテンプレートを表示", fill="#FEF3C7", stroke="#F59E0B", title_color="#92400E")
-    _pdf_draw_box(c, x2, y3, box_w, box_h, "⑤ 管理者がログを確認", "不足FAQを追加して次回に備える", fill="#DCFCE7", stroke="#22C55E", title_color="#166534")
+    for idx, (title, subtitle, fill, stroke, title_color) in enumerate(steps):
+        _pdf_draw_box(c, x, y, box_w, box_h, title, subtitle, fill=fill, stroke=stroke, title_color=title_color)
 
-    _pdf_draw_arrow(c, x1 + box_w / 2, y1, x1 + box_w / 2, y2 + box_h)
-    _pdf_draw_arrow(c, x1 + box_w / 2, y2, x1 + box_w / 2, y3 + box_h)
-    _pdf_draw_arrow(c, x1 + box_w, y2 + box_h / 2, x2, y2 + box_h / 2)
-    _pdf_draw_arrow(c, x2 + box_w / 2, y2, x2 + box_w / 2, y3 + box_h)
+        if idx < len(steps) - 1:
+            arrow_x = x + box_w / 2
+            _pdf_draw_arrow(c, arrow_x, y, arrow_x, y - gap)
+
+            if idx == 2:
+                c.setFillColor(HexColor("#92400E"))
+                c.setFont("HeiseiKakuGo-W5", 9)
+                c.drawString(x, y - gap + 1.5 * mm, "解決しない場合は、問い合わせテンプレートへ進みます")
+
+        y -= (box_h + gap)
 
     c.setFillColor(HexColor("#0F172A"))
     c.setFont("HeiseiKakuGo-W5", 9)
-    c.drawString(x1 + box_w + 4, y2 + box_h / 2 + 6, "見つからない時")
-    c.drawString(x1 + box_w + 6, y2 - 2, "改善サイクル")
-    return y3 - 22 * mm
+    c.drawString(x, y + 2 * mm, "見つかった回答だけで解決できる場合は、その場で自己解決できます。")
+    c.drawString(x, y - 2.5 * mm, "回答できなかった内容はログに残るため、FAQ追加で再発防止につなげられます。")
+    return y - 10 * mm
 
 
 def _pdf_draw_growth_cycle(c, x0, y0):
