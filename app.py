@@ -12,7 +12,6 @@ import csv
 import io
 import zipfile
 import base64
-from difflib import SequenceMatcher
 
 # ===== CSV読み込みを頑丈にする（文字コード/区切り/カラム揺れ対策）=====
 def read_csv_flexible(path: Path) -> pd.DataFrame:
@@ -233,8 +232,33 @@ def faq_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
 
 
 def _read_xlsx_bytes(raw: bytes) -> pd.DataFrame:
-    import xml.etree.ElementTree as ET
+    """
+    XLSXを安全にDataFrame化する。
+    既存機能を壊さないため、まず pandas + openpyxl で通常読み込みを試し、
+    失敗した場合のみ従来のXML手動解析へフォールバックする。
+    Excelのふりがな情報（rPh / phoneticPr）が混ざる不具合を避けるため、
+    通常系では openpyxl を優先する。
+    """
     from io import BytesIO
+
+    # 1) まずは pandas + openpyxl で安全に読む
+    try:
+        df = pd.read_excel(BytesIO(raw), engine="openpyxl")
+        if df is None:
+            return pd.DataFrame()
+        # 列名と値を文字列ベースで整える（既存の normalize_faq_columns に渡しやすくする）
+        df.columns = [str(c).strip() for c in df.columns]
+        for col in df.columns:
+            try:
+                df[col] = df[col].fillna("").astype(str).str.strip()
+            except Exception:
+                df[col] = df[col]
+        return df
+    except Exception:
+        pass
+
+    # 2) フォールバック: 従来のXML手動解析
+    import xml.etree.ElementTree as ET
     ns = {
         "a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
         "pr": "http://schemas.openxmlformats.org/package/2006/relationships",
@@ -244,7 +268,10 @@ def _read_xlsx_bytes(raw: bytes) -> pd.DataFrame:
         if 'xl/sharedStrings.xml' in zf.namelist():
             root = ET.fromstring(zf.read('xl/sharedStrings.xml'))
             for si in root.findall('a:si', ns):
-                texts = [t.text or '' for t in si.findall('.//a:t', ns)]
+                # ふりがな(rPh)は拾わず、表示テキスト(t)のみを連結
+                texts = [t.text or '' for t in si.findall('./a:t', ns)]
+                if not texts:
+                    texts = [t.text or '' for t in si.findall('./a:r/a:t', ns)]
                 shared.append(''.join(texts))
         sheet_path = 'xl/worksheets/sheet1.xml'
         if 'xl/workbook.xml' in zf.namelist() and 'xl/_rels/workbook.xml.rels' in zf.namelist():
@@ -281,7 +308,10 @@ def _read_xlsx_bytes(raw: bytes) -> pd.DataFrame:
                 elif t == 'inlineStr':
                     is_el = c.find('a:is', ns)
                     if is_el is not None:
-                        value = ''.join(tn.text or '' for tn in is_el.findall('.//a:t', ns))
+                        texts = [tn.text or '' for tn in is_el.findall('./a:t', ns)]
+                        if not texts:
+                            texts = [tn.text or '' for tn in is_el.findall('./a:r/a:t', ns)]
+                        value = ''.join(texts)
                 else:
                     v = c.find('a:v', ns)
                     value = v.text if v is not None and v.text is not None else ''
@@ -340,11 +370,6 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-try:
-    from sentence_transformers import SentenceTransformer  # type: ignore
-except Exception:
-    SentenceTransformer = None  # type: ignore
-
 from services.auth import check_password
 from services.llm_router import chat as llm_chat
 
@@ -375,7 +400,6 @@ COMPANY_NAME = _get_setting("COMPANY_NAME", "株式会社〇〇（デモ）")
 LOGO_PATH = _get_setting("LOGO_PATH", "assets/logo.png")
 CONTACT_URL = _get_setting("CONTACT_URL", "")
 CONTACT_EMAIL = _get_setting("CONTACT_EMAIL", "")
-RAG_EMBED_MODEL = _get_setting("RAG_EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2").strip()
 
 def build_contact_link() -> str:
     if CONTACT_URL:
@@ -396,12 +420,21 @@ GITHUB_BRANCH = _get_setting("GITHUB_BRANCH", "main").strip() or "main"
 GITHUB_BASE_PATH = _get_setting("GITHUB_BASE_PATH", "streamlit_data").strip().strip("/")
 
 
+def _github_persistence_enabled() -> bool:
+    """GitHub永続化の有効判定。NameError回避のため内部関数を実体にする。"""
+    try:
+        return str(PERSIST_MODE).strip().lower() == "github" and bool(str(GITHUB_TOKEN).strip() and str(GITHUB_REPO).strip())
+    except Exception:
+        return False
+
+
 def github_persistence_enabled() -> bool:
-    return PERSIST_MODE == "github" and bool(GITHUB_TOKEN and GITHUB_REPO)
+    """後方互換用ラッパー。画面側からは常にこの名前で呼ぶ。"""
+    return _github_persistence_enabled()
 
 
 def persistence_status_text() -> str:
-    if github_persistence_enabled():
+    if _github_persistence_enabled():
         return f"GitHub永続化: ON（{GITHUB_REPO}@{GITHUB_BRANCH} / {GITHUB_BASE_PATH}）"
     return "ローカル保存のみ（Streamlit Cloud の Reboot で消える可能性があります）"
 
@@ -429,7 +462,7 @@ def _github_headers() -> dict:
 
 
 def github_download_file(rel_path: str, local_path: Path) -> bool:
-    if not github_persistence_enabled():
+    if not _github_persistence_enabled():
         return False
     try:
         res = requests.get(_github_api_url(rel_path), headers=_github_headers(), params={"ref": GITHUB_BRANCH}, timeout=20)
@@ -487,7 +520,7 @@ def github_upload_file(local_path: Path, rel_path: str | None = None, commit_mes
 
 
 def github_list_dir(rel_dir: str) -> list[str]:
-    if not github_persistence_enabled():
+    if not _github_persistence_enabled():
         return []
     try:
         res = requests.get(_github_api_url(rel_dir), headers=_github_headers(), params={"ref": GITHUB_BRANCH}, timeout=20)
@@ -513,7 +546,7 @@ def bootstrap_persistent_storage():
             pass
 
     # GitHub永続化が有効なら、リモートを優先して取得
-    if github_persistence_enabled():
+    if _github_persistence_enabled():
         github_download_file("faq.csv", FAQ_PATH)
         for remote_path in github_list_dir("logs"):
             if not remote_path.endswith('.csv'):
@@ -525,7 +558,7 @@ def bootstrap_persistent_storage():
 def persist_runtime_file(local_path: Path, label: str = "data") -> bool:
     if not local_path.exists():
         return False
-    if not github_persistence_enabled():
+    if not _github_persistence_enabled():
         return True
     rel_path = _remote_relpath(local_path)
     msg = f"Update {label}: {rel_path}"
@@ -595,7 +628,7 @@ def save_search_settings(answer_threshold: float, suggest_threshold: float) -> t
         return False, settings
 
 bootstrap_persistent_storage()
-if github_persistence_enabled():
+if _github_persistence_enabled():
     github_download_file("search_settings.json", SEARCH_SETTINGS_PATH)
 SEARCH_SETTINGS = load_search_settings()
 
@@ -1563,60 +1596,27 @@ def extract_concepts(text: str) -> set[str]:
     return found
 
 
-def tokenize_search_text(text: str) -> list[str]:
-    return sorted(extract_search_tokens(text))
-
-
-def soft_text_match_score(query: str, target: str) -> float:
-    q = normalize_search_text(query)
-    t = normalize_search_text(target)
-    if not q or not t:
-        return 0.0
-    try:
-        ratio = SequenceMatcher(None, q, t).ratio()
-    except Exception:
-        ratio = 0.0
-    contains = 0.0
-    if q in t or t in q:
-        contains = 0.20
-    q_tokens = set(tokenize_search_text(q))
-    t_tokens = set(tokenize_search_text(t))
-    overlap = len(q_tokens & t_tokens) / max(1, len(q_tokens)) if q_tokens else 0.0
-    return min(1.0, (ratio * 0.55) + (overlap * 0.25) + contains)
-
-
-@st.cache_resource(show_spinner=False)
-def get_semantic_embedder(model_name: str):
-    if not model_name or SentenceTransformer is None:
-        return None
-    try:
-        return SentenceTransformer(model_name)
-    except Exception:
-        return None
-
-
 # 文字n-gramも混ぜて、日本語の部分一致に強くする
 WORD_VECTORIZER = TfidfVectorizer(ngram_range=(1, 2))
 CHAR_VECTORIZER = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
 
-@st.cache_resource(show_spinner=False)
 def load_faq_index(faq_path: Path):
     if not faq_path.exists():
         empty = pd.DataFrame(columns=["question", "answer", "category"])
-        return empty, None, None, None, None, None, None
+        return empty, None, None, None, None
 
     try:
         df = normalize_faq_columns(read_csv_flexible(faq_path))
     except Exception:
         empty = pd.DataFrame(columns=["question", "answer", "category"])
-        return empty, None, None, None, None, None, None
+        return empty, None, None, None, None
 
     df["question"] = df["question"].fillna("").astype(str)
     df["answer"] = df["answer"].fillna("").astype(str)
     df["category"] = df["category"].fillna("").astype(str)
 
     if len(df) == 0:
-        return df, None, None, None, None, None, None
+        return df, None, None, None, None
 
     df["question_norm"] = df["question"].apply(normalize_search_text)
     df["answer_norm"] = df["answer"].apply(normalize_search_text)
@@ -1631,28 +1631,12 @@ def load_faq_index(faq_path: Path):
         X_word = word_vectorizer.fit_transform(df["qa_text_norm"])
         X_char = char_vectorizer.fit_transform(df["qa_text_norm"])
     except Exception:
-        return df, None, None, None, None, None, None
+        return df, None, None, None, None
 
-    semantic_model_name = None
-    X_semantic = None
-    try:
-        if RAG_EMBED_MODEL:
-            embedder = get_semantic_embedder(RAG_EMBED_MODEL)
-            if embedder is not None:
-                semantic_model_name = RAG_EMBED_MODEL
-                X_semantic = embedder.encode(
-                    df["qa_text_norm"].tolist(),
-                    normalize_embeddings=True,
-                    show_progress_bar=False,
-                )
-    except Exception:
-        semantic_model_name = None
-        X_semantic = None
-
-    return df, word_vectorizer, X_word, char_vectorizer, X_char, semantic_model_name, X_semantic
+    return df, word_vectorizer, X_word, char_vectorizer, X_char
 
 
-df, vectorizer, X, char_vectorizer, X_char, semantic_model_name, X_semantic = load_faq_index(FAQ_PATH)
+df, vectorizer, X, char_vectorizer, X_char = load_faq_index(FAQ_PATH)
 
 if df is None or len(df) == 0 or vectorizer is None or X is None or char_vectorizer is None or X_char is None:
     st.warning("faq.csv が未配置/空/不正のため、FAQ検索は無効です。まず faq.csv を配置してください。")
@@ -1673,7 +1657,7 @@ def retrieve_faq(query: str):
             return []
 
         # 単語一致と文字部分一致を合成して、表記ゆれに強くする
-        sims = (sims_word * 0.42) + (sims_char * 0.28)
+        sims = (sims_word * 0.52) + (sims_char * 0.48)
 
         # 完全一致に近い正規化結果は少し加点
         exact_bonus = (df["question_norm"] == query_norm).astype(float).to_numpy() * 0.22
@@ -1697,21 +1681,9 @@ def retrieve_faq(query: str):
             lambda x: 0.06 if query_norm and str(x).startswith(query_norm[: min(8, len(query_norm))]) else 0.0
         ).to_numpy()
 
-        fuzzy_bonus = df["question_norm"].apply(lambda x: soft_text_match_score(query_norm, str(x)) * 0.20).to_numpy()
+        sims = sims + exact_bonus + contains_bonus + token_bonus + concept_bonus + prefix_bonus
 
-        semantic_bonus = 0.0
-        if semantic_model_name and X_semantic is not None:
-            try:
-                embedder = get_semantic_embedder(semantic_model_name)
-                if embedder is not None:
-                    q_sem = embedder.encode([query_norm], normalize_embeddings=True, show_progress_bar=False)
-                    semantic_bonus = cosine_similarity(q_sem, X_semantic).flatten() * 0.22
-            except Exception:
-                semantic_bonus = 0.0
-
-        sims = sims + exact_bonus + contains_bonus + token_bonus + concept_bonus + prefix_bonus + fuzzy_bonus + semantic_bonus
-
-        idxs = sims.argsort()[::-1][:TOP_K]
+        idxs = sims.argsort()[::-1][:3]
         return [(df.iloc[i], float(sims[i])) for i in idxs if float(sims[i]) > 0]
     except Exception:
         return []
@@ -2131,7 +2103,7 @@ GITHUB_TOKEN = "ghp_xxx"
 """.strip(), language="toml")
             col_sync1, col_sync2 = st.columns(2)
             with col_sync1:
-                if st.button("📥 GitHubからFAQ再読込", width="stretch", disabled=not github_persistence_enabled()):
+                if st.button("📥 GitHubからFAQ再読込", width="stretch", disabled=not _github_persistence_enabled()):
                     ok = github_download_file("faq.csv", FAQ_PATH)
                     if ok:
                         try:
@@ -2143,7 +2115,7 @@ GITHUB_TOKEN = "ghp_xxx"
                     else:
                         st.warning("GitHubからFAQを取得できませんでした。設定を確認してください。")
             with col_sync2:
-                if st.button("📤 FAQをGitHubへ保存", width="stretch", disabled=not github_persistence_enabled()):
+                if st.button("📤 FAQをGitHubへ保存", width="stretch", disabled=not _github_persistence_enabled()):
                     ok = persist_faq_now()
                     if ok:
                         st.success("faq.csv を GitHub に保存しました。")
