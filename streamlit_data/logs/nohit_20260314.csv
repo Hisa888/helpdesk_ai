@@ -5,3 +5,5 @@ timestamp,question,device,location,network,error_text,impact,channel
 2026-03-14T04:30:30,Outlookの送受信ができない,,,,,,seed
 2026-03-14T04:30:31,Teamsにログインできない,,,,,,seed
 2026-03-14T04:30:31,パスワードを忘れた,,,,,,seed
+2026-03-14T04:30:32,アカウントがロックされた,,,,,,seed
+2026-03-14T04:30:32,共有フォルダにアクセスできない,,,,,,seed
