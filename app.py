@@ -1077,11 +1077,12 @@ def generate_ops_manual_pdf() -> bytes:
         ],
         maxw,
     )
-    y -= 8
+    # 箇条書きの最終行とフロー図の先頭ボックスが近すぎると重なって見えるため、余白を広げる
+    y -= 18 * mm
     c.setFillColor(HexColor("#0F172A"))
     c.setFont("HeiseiKakuGo-W5", 11)
     c.drawString(margin, y, "問い合わせ対応の流れ")
-    y -= 5 * mm
+    y -= 6 * mm
     bottom = _pdf_draw_flow(c, margin, y)
     y = bottom + 8 * mm
     y = _pdf_draw_paragraph(
