@@ -1,5 +1,6 @@
-streamlit
-pandas
-scikit-learn
-requests
-reportlab
+streamlit>=1.41
+pandas>=2.2
+requests>=2.31
+scikit-learn>=1.5
+reportlab>=4.2
+sentence-transformers>=3.4
