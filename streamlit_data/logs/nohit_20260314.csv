@@ -3,3 +3,5 @@ timestamp,question,device,location,network,error_text,impact,channel
 ",自分のみ,web
 2026-03-14T04:30:30,VPNにつながらない,,,,,,seed
 2026-03-14T04:30:30,Outlookの送受信ができない,,,,,,seed
+2026-03-14T04:30:31,Teamsにログインできない,,,,,,seed
+2026-03-14T04:30:31,パスワードを忘れた,,,,,,seed
