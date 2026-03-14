@@ -856,7 +856,7 @@ def _pdf_draw_two_column_steps(c, x, y, col_w, left_title, left_items, right_tit
 
 
 def _pdf_draw_flow(c, x0, y0):
-    """見出しや本文とかぶりにくい、左基準の縦フロー図。"""
+    """左基準の縦フロー図。補足文章は呼び出し元で描画する。"""
     box_w = 95 * mm
     box_h = 16 * mm
     gap = 8 * mm
@@ -886,11 +886,7 @@ def _pdf_draw_flow(c, x0, y0):
 
         y -= (box_h + gap)
 
-    c.setFillColor(HexColor("#0F172A"))
-    c.setFont("HeiseiKakuGo-W5", 9)
-    c.drawString(x, y + 2 * mm, "見つかった回答だけで解決できる場合は、その場で自己解決できます。")
-    c.drawString(x, y - 2.5 * mm, "回答できなかった内容はログに残るため、FAQ追加で再発防止につなげられます。")
-    return y - 10 * mm
+    return y - 2 * mm
 
 
 def _pdf_draw_growth_cycle(c, x0, y0):
