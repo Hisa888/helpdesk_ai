@@ -2924,7 +2924,7 @@ def build_v25_runtime_summary() -> pd.DataFrame:
 if st.session_state.get('is_admin'):
     st.markdown('---')
     st.markdown('## 🚀 v25 販売強化セット')
-    v25_tabs = st.tabs(['営業ダッシュボード', 'v25資料ダウンロード', 'Slack / Teams展開メモ'])
+    v25_tabs = st.tabs(['営業ダッシュボード', 'v25資料ダウンロード', 'Slack / Teams展開メモ', 'Bot実装コード'])
 
     with v25_tabs[0]:
         df30 = read_interactions(days=30)
@@ -2983,6 +2983,86 @@ if st.session_state.get('is_admin'):
         )
         st.caption('既存の操作説明書PDF・提案資料PDFは残したまま、販売向けのv25資料を追加しています。')
 
+    
+
+# ======================
+# v26 Bot / Teams Bot 実装コード生成（既存機能を削除せず追加）
+# ======================
+
+def build_slack_bot_requirements_text() -> str:
+    return """slack-bolt>=1.21.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+python-dotenv>=1.0.0
+"""
+
+
+def build_teams_bot_requirements_text() -> str:
+    return """aiohttp>=3.9.0
+botbuilder-core>=4.15.0
+botbuilder-integration-aiohttp>=4.15.0
+botbuilder-schema>=4.15.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+python-dotenv>=1.0.0
+"""
+
+
+def build_bot_env_sample_text() -> str:
+    return """# ===== 共通 =====
+FAQ_CSV_PATH=runtime_data/faq.csv
+MATCH_THRESHOLD=0.42
+TOP_K=3
+
+# ===== Slack Socket Mode =====
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_APP_TOKEN=xapp-your-app-level-token
+
+# ===== Teams Bot =====
+MICROSOFT_APP_ID=your-bot-app-id
+MICROSOFT_APP_PASSWORD=your-bot-app-password
+PORT=3978
+"""
+
+
+def build_shared_faq_engine_text() -> str:
+    return 'from __future__ import annotations\n\nimport io\nfrom pathlib import Path\nfrom dataclasses import dataclass\n\nimport pandas as pd\nfrom sklearn.feature_extraction.text import TfidfVectorizer\nfrom sklearn.metrics.pairwise import cosine_similarity\n\n\ndef read_csv_flexible(path: Path) -> pd.DataFrame:\n    raw = path.read_bytes()\n    encs = ["utf-8", "utf-8-sig", "cp932", "shift_jis"]\n    text = None\n    for enc in encs:\n        try:\n            text = raw.decode(enc)\n            break\n        except Exception:\n            continue\n    if text is None:\n        text = raw.decode("latin1", errors="ignore")\n    try:\n        return pd.read_csv(io.StringIO(text), engine="python", on_bad_lines="skip")\n    except Exception:\n        return pd.DataFrame()\n\n\ndef normalize_faq_columns(df: pd.DataFrame) -> pd.DataFrame:\n    if df is None or len(df) == 0:\n        return pd.DataFrame(columns=["question", "answer", "category"])\n    out = df.copy()\n    rename_map = {}\n    for c in out.columns:\n        s = str(c).strip()\n        k = s.lower()\n        if s in ["質問", "問い合わせ", "問合せ"] or k in ["question", "query"]:\n            rename_map[c] = "question"\n        elif s in ["回答"] or k in ["answer", "reply", "answer_text"]:\n            rename_map[c] = "answer"\n        elif s in ["カテゴリ", "分類"] or k in ["category"]:\n            rename_map[c] = "category"\n    out = out.rename(columns=rename_map)\n    for col in ["question", "answer", "category"]:\n        if col not in out.columns:\n            out[col] = ""\n    out = out[["question", "answer", "category"]].copy()\n    for col in ["question", "answer", "category"]:\n        out[col] = out[col].fillna("").astype(str).str.replace("\n", " ").str.replace("\r", " ")\n    out = out[(out["question"] != "") & (out["answer"] != "")].reset_index(drop=True)\n    return out\n\n\n@dataclass\nclass MatchResult:\n    matched: bool\n    score: float\n    answer: str\n    category: str\n    references: list[tuple[str, str, float]]\n\n\nclass FAQEngine:\n    def __init__(self, faq_path: str | Path, threshold: float = 0.42, top_k: int = 3):\n        self.faq_path = Path(faq_path)\n        self.threshold = float(threshold)\n        self.top_k = int(top_k)\n        self.df = pd.DataFrame(columns=["question", "answer", "category"])\n        self.vectorizer: TfidfVectorizer | None = None\n        self.matrix = None\n        self.reload()\n\n    def reload(self):\n        if self.faq_path.exists():\n            self.df = normalize_faq_columns(read_csv_flexible(self.faq_path))\n        else:\n            self.df = pd.DataFrame(columns=["question", "answer", "category"])\n        corpus = self.df["question"].fillna("").astype(str).tolist()\n        if corpus:\n            self.vectorizer = TfidfVectorizer(ngram_range=(1, 2))\n            self.matrix = self.vectorizer.fit_transform(corpus)\n        else:\n            self.vectorizer = None\n            self.matrix = None\n\n    def search(self, query: str) -> MatchResult:\n        q = str(query or "").strip()\n        if not q or self.vectorizer is None or self.matrix is None or len(self.df) == 0:\n            return MatchResult(False, 0.0, "現在回答できるFAQがありません。", "", [])\n        q_vec = self.vectorizer.transform([q])\n        scores = cosine_similarity(q_vec, self.matrix)[0]\n        order = scores.argsort()[::-1][: max(1, self.top_k)]\n        refs = []\n        for idx in order:\n            row = self.df.iloc[int(idx)]\n            refs.append((str(row.get("question", "")), str(row.get("answer", "")), float(scores[int(idx)])))\n        best_row = self.df.iloc[int(order[0])]\n        best_q, best_a, best_s = refs[0]\n        matched = float(best_s) >= float(self.threshold)\n        return MatchResult(\n            matched=matched,\n            score=float(best_s),\n            answer=str(best_a),\n            category=str(best_row.get("category", "")),\n            references=refs,\n        )\n\n\ndef format_match_response(result: MatchResult) -> str:\n    head = "【AI回答】\n" + result.answer\n    score_line = f"\n\n一致度: {int(result.score * 100)}%"\n    refs = "\n".join([f"・{q} ({int(s*100)}%)" for q, _, s in result.references[:3]])\n    if result.matched:\n        return head + score_line + "\n\n参考FAQ候補\n" + refs\n    return (\n        "該当するFAQが見つかりませんでした。\n"\n        "次の情報を添えて情シスへ連絡してください。\n"\n        "・利用者名\n・端末名\n・発生日時\n・利用場所\n・ネットワーク\n・やりたいこと / エラーメッセージ\n\n"\n        "近いFAQ候補\n" + refs\n    )\n'
+
+
+def build_slack_bot_code() -> str:
+    return 'from __future__ import annotations\n\nimport os\nfrom pathlib import Path\nfrom dotenv import load_dotenv\nfrom slack_bolt import App\nfrom slack_bolt.adapter.socket_mode import SocketModeHandler\n\nfrom faq_engine import FAQEngine, format_match_response\n\nload_dotenv()\n\nSLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]\nSLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]\nFAQ_CSV_PATH = os.environ.get("FAQ_CSV_PATH", "runtime_data/faq.csv")\nMATCH_THRESHOLD = float(os.environ.get("MATCH_THRESHOLD", "0.42"))\nTOP_K = int(os.environ.get("TOP_K", "3"))\n\napp = App(token=SLACK_BOT_TOKEN)\nengine = FAQEngine(Path(FAQ_CSV_PATH), threshold=MATCH_THRESHOLD, top_k=TOP_K)\n\nWELCOME = (\n    "こんにちは。情シス問い合わせAIです。\n"\n    "例: Wi-Fiがつながらない / Outlook送受信ができない / Teamsにログインできない"\n)\n\n@app.event("app_mention")\ndef handle_app_mention(event, say, logger):\n    try:\n        text = str(event.get("text", ""))\n        cleaned = text.strip()\n        if not cleaned:\n            say(WELCOME)\n            return\n        result = engine.search(cleaned)\n        say(format_match_response(result))\n    except Exception as e:\n        logger.exception("Slack bot error")\n        say(f"エラーが発生しました: {e}")\n\n@app.message("")\ndef handle_dm(message, say, logger):\n    try:\n        if message.get("channel_type") != "im":\n            return\n        text = str(message.get("text", "")).strip()\n        if not text:\n            say(WELCOME)\n            return\n        result = engine.search(text)\n        say(format_match_response(result))\n    except Exception as e:\n        logger.exception("Slack DM error")\n        say(f"エラーが発生しました: {e}")\n\nif __name__ == "__main__":\n    SocketModeHandler(app, SLACK_APP_TOKEN).start()\n'
+
+
+def build_teams_bot_code() -> str:
+    return 'from __future__ import annotations\n\nimport os\nfrom pathlib import Path\nfrom aiohttp import web\nfrom dotenv import load_dotenv\n\nfrom botbuilder.core import TurnContext\nfrom botbuilder.integration.aiohttp import CloudAdapter, ConfigurationBotFrameworkAuthentication\nfrom botbuilder.core.teams import TeamsActivityHandler\nfrom botbuilder.schema import Activity\n\nfrom faq_engine import FAQEngine, format_match_response\n\nload_dotenv()\n\nFAQ_CSV_PATH = os.environ.get("FAQ_CSV_PATH", "runtime_data/faq.csv")\nMATCH_THRESHOLD = float(os.environ.get("MATCH_THRESHOLD", "0.42"))\nTOP_K = int(os.environ.get("TOP_K", "3"))\nPORT = int(os.environ.get("PORT", "3978"))\n\nSETTINGS = {\n    "MicrosoftAppId": os.environ.get("MICROSOFT_APP_ID", ""),\n    "MicrosoftAppPassword": os.environ.get("MICROSOFT_APP_PASSWORD", ""),\n}\nAUTH = ConfigurationBotFrameworkAuthentication(SETTINGS)\nADAPTER = CloudAdapter(AUTH)\nENGINE = FAQEngine(Path(FAQ_CSV_PATH), threshold=MATCH_THRESHOLD, top_k=TOP_K)\n\nclass HelpdeskTeamsBot(TeamsActivityHandler):\n    async def on_message_activity(self, turn_context: TurnContext):\n        text = (turn_context.activity.text or "").strip()\n        if not text:\n            await turn_context.send_activity(\n                "情シス問い合わせAIです。例: Wi-Fiがつながらない / Outlook送受信ができない / Teamsにログインできない"\n            )\n            return\n        result = ENGINE.search(text)\n        await turn_context.send_activity(format_match_response(result))\n\n    async def on_members_added_activity(self, members_added, turn_context: TurnContext):\n        for member in members_added:\n            if member.id != turn_context.activity.recipient.id:\n                await turn_context.send_activity(\n                    "情シス問い合わせAIへようこそ。困っていることをそのまま入力してください。"\n                )\n\nBOT = HelpdeskTeamsBot()\n\nasync def on_error(context: TurnContext, error: Exception):\n    print(f"[on_turn_error] {error}")\n    await context.send_activity("エラーが発生しました。設定を確認してください。")\n\nADAPTER.on_turn_error = on_error\n\nasync def messages(req: web.Request) -> web.Response:\n    body = await req.json()\n    activity = Activity().deserialize(body)\n    auth_header = req.headers.get("Authorization", "")\n    response = await ADAPTER.process_activity(auth_header, activity, BOT.on_turn)\n    if response:\n        return web.json_response(data=response.body, status=response.status)\n    return web.Response(status=201)\n\napp = web.Application()\napp.router.add_post("/api/messages", messages)\n\nif __name__ == "__main__":\n    web.run_app(app, host="0.0.0.0", port=PORT)\n'
+
+
+def build_teams_manifest_json() -> str:
+    return '{\n  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.19/MicrosoftTeams.schema.json",\n  "manifestVersion": "1.19",\n  "version": "1.0.0",\n  "id": "REPLACE-WITH-YOUR-APP-ID",\n  "packageName": "com.example.helpdeskbot",\n  "developer": {\n    "name": "Your Company",\n    "websiteUrl": "https://example.com",\n    "privacyUrl": "https://example.com/privacy",\n    "termsOfUseUrl": "https://example.com/terms"\n  },\n  "name": {\n    "short": "情シス問い合わせAI",\n    "full": "情シス問い合わせAI Teams Bot"\n  },\n  "description": {\n    "short": "社内IT問い合わせに回答するTeams Bot",\n    "full": "FAQ検索ベースで社内IT問い合わせに一次対応するTeams Botです。"\n  },\n  "icons": {\n    "outline": "outline.png",\n    "color": "color.png"\n  },\n  "accentColor": "#0EA5E9",\n  "bots": [\n    {\n      "botId": "REPLACE-WITH-YOUR-APP-ID",\n      "scopes": ["personal", "team"],\n      "supportsFiles": false,\n      "isNotificationOnly": false,\n      "commandLists": [\n        {\n          "scopes": ["personal", "team"],\n          "commands": [\n            {"title": "help", "description": "使い方を表示"},\n            {"title": "faq", "description": "FAQを検索"}\n          ]\n        }\n      ]\n    }\n  ],\n  "permissions": ["identity", "messageTeamMembers"],\n  "validDomains": []\n}\n'
+
+
+def build_bot_deploy_guide() -> str:
+    return """【Bot実装の考え方】
+1. Streamlit本体はそのまま維持し、Botは別プロセス / 別サービスで動かします。
+2. どちらのBotも同じ faq.csv を参照するため、Web版と回答ロジックを揃えやすくなります。
+3. Slack版は Socket Mode、Teams版は /api/messages を受ける bot サービス構成です。
+4. 先にWeb版でFAQ精度を固め、その後Botを展開する流れが安全です。
+"""
+
+
+def make_bot_bundle_zip() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('faq_engine.py', build_shared_faq_engine_text())
+        zf.writestr('slack_bot.py', build_slack_bot_code())
+        zf.writestr('teams_bot.py', build_teams_bot_code())
+        zf.writestr('requirements_slack.txt', build_slack_bot_requirements_text())
+        zf.writestr('requirements_teams.txt', build_teams_bot_requirements_text())
+        zf.writestr('.env.example', build_bot_env_sample_text())
+        zf.writestr('teams_manifest/manifest.json', build_teams_manifest_json())
+        zf.writestr('README_BOT_SETUP.txt', build_bot_deploy_guide())
+    buf.seek(0)
+    return buf.getvalue()
     with v25_tabs[2]:
         st.markdown('#### Slack展開メモ')
         st.code(build_channel_quickstart('Slack'), language='markdown')
@@ -2995,4 +3075,75 @@ if st.session_state.get('is_admin'):
             '- FAQ更新の担当者と更新頻度\n'
             '- 個人情報・機密情報の入力ルール\n'
             '- 問い合わせ先、SLA、エスカレーション条件'
+        )
+
+    with v25_tabs[3]:
+        st.info('既存のWeb版はそのまま残し、Slack Bot / Teams Bot は別プロセスで動かす前提の実装コードを追加しています。')
+        st.markdown('#### 導入ガイド')
+        st.code(build_bot_deploy_guide(), language='markdown')
+
+        bot_zip = make_bot_bundle_zip()
+        st.download_button(
+            '🤖 Slack / Teams Bot 実装コード一式ZIPをダウンロード',
+            data=bot_zip,
+            file_name='helpdesk_ai_bot_bundle_v26.zip',
+            mime='application/zip',
+            width='stretch',
+        )
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown('#### slack_bot.py')
+            st.code(build_slack_bot_code(), language='python')
+            st.download_button(
+                'Slack Botコードをダウンロード',
+                data=build_slack_bot_code().encode('utf-8'),
+                file_name='slack_bot.py',
+                mime='text/x-python',
+                width='stretch',
+            )
+            st.markdown('#### requirements_slack.txt')
+            st.code(build_slack_bot_requirements_text(), language='text')
+
+        with c2:
+            st.markdown('#### teams_bot.py')
+            st.code(build_teams_bot_code(), language='python')
+            st.download_button(
+                'Teams Botコードをダウンロード',
+                data=build_teams_bot_code().encode('utf-8'),
+                file_name='teams_bot.py',
+                mime='text/x-python',
+                width='stretch',
+            )
+            st.markdown('#### requirements_teams.txt')
+            st.code(build_teams_bot_requirements_text(), language='text')
+
+        st.markdown('#### 共通FAQエンジン')
+        st.code(build_shared_faq_engine_text(), language='python')
+        st.download_button(
+            'faq_engine.py をダウンロード',
+            data=build_shared_faq_engine_text().encode('utf-8'),
+            file_name='faq_engine.py',
+            mime='text/x-python',
+            width='stretch',
+        )
+
+        st.markdown('#### .env.example')
+        st.code(build_bot_env_sample_text(), language='dotenv')
+        st.download_button(
+            '.env.example をダウンロード',
+            data=build_bot_env_sample_text().encode('utf-8'),
+            file_name='.env.example',
+            mime='text/plain',
+            width='stretch',
+        )
+
+        st.markdown('#### Teams manifest.json')
+        st.code(build_teams_manifest_json(), language='json')
+        st.download_button(
+            'Teams manifest.json をダウンロード',
+            data=build_teams_manifest_json().encode('utf-8'),
+            file_name='manifest.json',
+            mime='application/json',
+            width='stretch',
         )
