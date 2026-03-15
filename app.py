@@ -3096,3 +3096,82 @@ if user_q:
     # おすすめ質問ボタンから自動送信した場合は、もう一度 rerun して入力欄を確実に表示
     if used_pending:
         st.rerun()
+
+import io
+import zipfile
+
+def generate_slack_bot_zip_bytes():
+    buffer = io.BytesIO()
+
+    with zipfile.ZipFile(buffer, "w") as z:
+
+        z.writestr(
+            "slack_bot.py",
+            """
+from flask import Flask, request
+import requests
+
+app = Flask(__name__)
+
+AI_URL = "https://your-render-url/ask"
+
+@app.route("/slack/command", methods=["POST"])
+def slack_command():
+
+    text = request.form.get("text")
+
+    r = requests.post(AI_URL, json={"question": text})
+    answer = r.json().get("answer","回答なし")
+
+    return answer
+
+
+@app.route("/slack/events", methods=["POST"])
+def slack_events():
+
+    data = request.json
+
+    if "challenge" in data:
+        return {"challenge": data["challenge"]}
+
+    return {"status":"ok"}
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=3000)
+"""
+        )
+
+        z.writestr(
+            "requirements.txt",
+            """
+flask
+requests
+"""
+        )
+
+        z.writestr(
+            "render.yaml",
+            """
+services:
+  - type: web
+    name: slack-helpdesk-bot
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python slack_bot.py"
+"""
+        )
+
+        z.writestr(
+            "README.md",
+            """
+Slack Helpdesk Bot
+
+RenderにデプロイしてSlackから問い合わせAIに質問できます。
+"""
+        )
+
+    buffer.seek(0)
+
+    return buffer.getvalue()
+     
