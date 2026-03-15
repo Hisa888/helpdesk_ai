@@ -439,6 +439,15 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
+# sentence-transformers は任意。未導入でも既存機能だけで動くようにする
+SENTENCE_TRANSFORMERS_AVAILABLE = False
+try:
+    from sentence_transformers import SentenceTransformer  # type: ignore
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except Exception:
+    SentenceTransformer = None  # type: ignore
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+
 from services.auth import check_password
 from services.llm_router import chat as llm_chat
 
@@ -2003,24 +2012,69 @@ def extract_concepts(text: str) -> set[str]:
 # 文字n-gramも混ぜて、日本語の部分一致に強くする
 WORD_VECTORIZER = TfidfVectorizer(ngram_range=(1, 2))
 CHAR_VECTORIZER = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
+SENTENCE_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+def _load_sentence_transformer_model():
+    if not SENTENCE_TRANSFORMERS_AVAILABLE or SentenceTransformer is None:
+        return None
+    cache_key = "_st_sentence_transformer_model"
+    try:
+        model = st.session_state.get(cache_key)
+        if model is not None:
+            return model
+    except Exception:
+        model = None
+    try:
+        model = SentenceTransformer(SENTENCE_MODEL_NAME)
+        try:
+            st.session_state[cache_key] = model
+        except Exception:
+            pass
+        return model
+    except Exception:
+        return None
+
+
+def _build_sentence_embeddings(model, texts: list[str]):
+    if model is None or not texts:
+        return None
+    try:
+        return model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+    except Exception:
+        return None
+
+
+def _search_with_sentence_transformers(query_norm: str, faq_embeddings) -> list[float] | None:
+    if not query_norm or faq_embeddings is None:
+        return None
+    model = _load_sentence_transformer_model()
+    if model is None:
+        return None
+    try:
+        q_emb = model.encode([query_norm], normalize_embeddings=True, show_progress_bar=False)
+        sims_sem = cosine_similarity(q_emb, faq_embeddings).flatten()
+        return sims_sem.tolist()
+    except Exception:
+        return None
+
 
 def load_faq_index(faq_path: Path):
     if not faq_path.exists():
         empty = pd.DataFrame(columns=["question", "answer", "category"])
-        return empty, None, None, None, None
+        return empty, None, None, None, None, None
 
     try:
         df = normalize_faq_columns(read_csv_flexible(faq_path))
     except Exception:
         empty = pd.DataFrame(columns=["question", "answer", "category"])
-        return empty, None, None, None, None
+        return empty, None, None, None, None, None
 
     df["question"] = df["question"].fillna("").astype(str)
     df["answer"] = df["answer"].fillna("").astype(str)
     df["category"] = df["category"].fillna("").astype(str)
 
     if len(df) == 0:
-        return df, None, None, None, None
+        return df, None, None, None, None, None
 
     df["question_norm"] = df["question"].apply(normalize_search_text)
     df["answer_norm"] = df["answer"].apply(normalize_search_text)
@@ -2035,12 +2089,17 @@ def load_faq_index(faq_path: Path):
         X_word = word_vectorizer.fit_transform(df["qa_text_norm"])
         X_char = char_vectorizer.fit_transform(df["qa_text_norm"])
     except Exception:
-        return df, None, None, None, None
+        return df, None, None, None, None, None
 
-    return df, word_vectorizer, X_word, char_vectorizer, X_char
+    faq_embeddings = None
+    if SENTENCE_TRANSFORMERS_AVAILABLE:
+        model = _load_sentence_transformer_model()
+        faq_embeddings = _build_sentence_embeddings(model, df["qa_text_norm"].tolist())
+
+    return df, word_vectorizer, X_word, char_vectorizer, X_char, faq_embeddings
 
 
-df, vectorizer, X, char_vectorizer, X_char = load_faq_index(FAQ_PATH)
+df, vectorizer, X, char_vectorizer, X_char, faq_embeddings = load_faq_index(FAQ_PATH)
 
 if df is None or len(df) == 0 or vectorizer is None or X is None or char_vectorizer is None or X_char is None:
     st.warning("faq.csv が未配置/空/不正のため、FAQ検索は無効です。まず faq.csv を配置してください。")
@@ -2062,6 +2121,11 @@ def retrieve_faq(query: str):
 
         # 単語一致と文字部分一致を合成して、表記ゆれに強くする
         sims = (sims_word * 0.52) + (sims_char * 0.48)
+
+        # sentence-transformers による意味検索を追加（未導入時は自動スキップ）
+        sims_sem = _search_with_sentence_transformers(query_norm, faq_embeddings)
+        if sims_sem is not None and len(sims_sem) == len(sims):
+            sims = sims + (pd.Series(sims_sem).fillna(0.0).to_numpy() * 0.35)
 
         # 完全一致に近い正規化結果は少し加点
         exact_bonus = (df["question_norm"] == query_norm).astype(float).to_numpy() * 0.22
