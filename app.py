@@ -2537,6 +2537,12 @@ def append_faq_csv(faq_path: Path, new_df: pd.DataFrame) -> int:
 
 
 # ======================
+# Slack Bot 完全版コード生成
+# ======================
+def build_slack_bot_python() -> str:
+    return r
+
+# ======================
 # 管理者ログイン
 # ======================
 if "is_admin" not in st.session_state:
@@ -2640,6 +2646,34 @@ GITHUB_TOKEN = "ghp_xxx"
                     else:
                         st.warning("初期値に戻しましたが、外部保存に失敗した可能性があります。")
                     st.rerun()
+
+        with st.expander("🤖 Slack Bot 完全版コード", expanded=False):
+            st.caption("既存機能はそのままに、Slack連携用の別サービス一式を管理者画面からダウンロードできます。")
+            st.code("""Render URL（Slash Command）
+https://あなたのRenderURL/slack/command
+
+Render URL（Event Subscriptions）
+https://あなたのRenderURL/slack/events
+""".strip())
+            st.download_button(
+                "⬇ Slack Bot 一式ZIPをダウンロード",
+                data=generate_slack_bot_zip_bytes(),
+                file_name="helpdesk_slack_bot_complete.zip",
+                mime="application/zip",
+                width="stretch",
+            )
+            with st.popover("コード内容を確認する"):
+                st.markdown("**slack_bot.py（先頭抜粋）**")
+                st.code(build_slack_bot_python()[:6000], language="python")
+                st.markdown("**requirements.txt**")
+                st.code(build_slack_bot_requirements(), language="text")
+                st.markdown("**render.yaml**")
+                st.code(build_slack_bot_render_yaml(), language="yaml")
+            st.markdown("""**設定手順**  
+1. ZIPを展開してGitHubへ配置  
+2. Renderで `slack_bot.py` をデプロイ  
+3. Slack Appで `/helpdesk` と `app_mention` を設定  
+4. `faq.csv` を差し替えるとBot回答も更新されます""")
 
         with st.expander("📂 FAQ管理（Excelダウンロード / アップロード）", expanded=True):
             st.caption("管理者は FAQ を Excel(.xlsx) で一括入出力できます。500件以上でもまとめて置き換え可能です。推奨列名は『質問 / 回答 / カテゴリ』です。")
