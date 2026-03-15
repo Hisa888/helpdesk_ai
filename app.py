@@ -1367,51 +1367,6 @@ def generate_sales_proposal_pdf() -> bytes:
     buf.seek(0)
     return buf.getvalue()
 
-
-
-# ===== PDF互換ラッパー（旧v25参照が残っていても落ちないようにする） =====
-def _pdf_draw_bullet_list_safe(c, x, y, items, max_width_pt, font_size=11, bullet_color="#0EA5E9", text_color="#0F172A", gap_after=2):
-    """旧PDFコード互換。既存の _pdf_draw_bullet_list が使えるならそれを優先し、
-    使えない場合のみ簡易描画でフォールバックする。"""
-    fn = globals().get("_pdf_draw_bullet_list")
-    if callable(fn):
-        return fn(c, x, y, items, max_width_pt, font_size=font_size, bullet_color=bullet_color, text_color=text_color, gap_after=gap_after)
-
-    for item in items:
-        try:
-            c.setFillColor(HexColor(bullet_color))
-        except Exception:
-            pass
-        try:
-            c.setFont("HeiseiKakuGo-W5", font_size)
-        except Exception:
-            pass
-        try:
-            c.drawString(x, y, "•")
-        except Exception:
-            pass
-        try:
-            c.setFillColor(HexColor(text_color))
-        except Exception:
-            pass
-
-        para = globals().get("_pdf_draw_paragraph")
-        if callable(para):
-            y = para(c, x + 10, y, str(item), "HeiseiKakuGo-W5", font_size, max_width_pt - 10)
-        else:
-            try:
-                c.drawString(x + 10, y, str(item))
-            except Exception:
-                pass
-            y -= font_size * 1.35
-        y -= gap_after
-    return y
-
-
-def generate_sales_proposal_pdf_v25() -> bytes:
-    """旧UI互換。v25名で呼ばれても現行の提案資料PDF生成へ委譲する。"""
-    return generate_sales_proposal_pdf()
-
 def render_match_bar(score: float):
     """一致度（0-1）をバーで表示"""
     try:
@@ -1580,1735 +1535,1720 @@ def generate_effect_report_pdf(
 
 
 TOP_K = 3
-st.set_page_config(page_title="情シス問い合わせAI", layout="wide")
 
 
-# ===== プロっぽい見た目（CSS）=====
-st.markdown(
-    """
-<style>
-/* タイトル上部の余白を確保 */
-.block-container {
-    padding-top: 3rem !important;
-}
-
-/* h1の高さを確保 */
-h1 {
-    padding-top: 0.5rem;
-    line-height: 1.3 !important;
-}
-
-/* スマホ対応 */
-@media (max-width: 768px) {
-    .block-container {
-        padding-top: 2.5rem !important;
-    }
-}
-
-.block-container {padding-top: 2.0rem; padding-bottom: 10rem; max-width: 1100px;}
-.hero {padding: 18px 20px; border-radius: 14px; background: linear-gradient(135deg, #0ea5e9 0%, #22c55e 100%); color: white; margin-bottom: 18px;}
-.hero h1 {font-size: 34px; margin: 0 0 6px 0;}
-.hero p {margin: 0; font-size: 15px; opacity: 0.95;}
-.badges {margin-top: 12px; display:flex; gap:8px; flex-wrap:wrap;}
-.badge {background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.25); padding: 6px 10px; border-radius: 999px; font-size: 12px;}
-.card {background: #ffffff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 14px 14px; box-shadow: 0 6px 20px rgba(0,0,0,0.06);}
-.card h3 {margin: 0 0 8px 0; font-size: 16px;}
-.small {font-size: 12px; color:#6b7280;}
-.refbox {border-left: 4px solid #0ea5e9; background: #f8fafc; padding: 10px 12px; border-radius: 10px;}
-.answerbox {border-left: 4px solid #22c55e; background: #f0fdf4; padding: 12px 14px; border-radius: 12px; line-height: 1.6;}
-
-.kpi-grid {display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 14px 0 18px 0;}
-@media (max-width: 1100px){ .kpi-grid {grid-template-columns: repeat(2, minmax(0, 1fr));} }
-.kpi {background:#ffffff; border:1px solid #e5e7eb; border-radius:16px; padding:14px 14px; box-shadow: 0 8px 26px rgba(0,0,0,0.06);}
-.kpi .label {font-size:12px; color:#6b7280; margin-bottom:6px;}
-.kpi .value {font-size:28px; font-weight:800; letter-spacing: -0.02em; margin:0;}
-.kpi .sub {font-size:12px; color:#6b7280; margin-top:6px;}
-.section-title {font-size:18px; font-weight:800; margin: 8px 0 10px 0;}
-.cta-row {display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;}
-.cta {background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.25); padding: 10px 12px; border-radius: 12px; font-size: 13px;}
-
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
-# ===== 会社名 / ロゴ（左上）=====
-contact_link = build_contact_link()
-logo_path_obj = Path(LOGO_PATH)
-col_logo, col_name, col_btn = st.columns([1, 6, 3])
-with col_logo:
-    if LOGO_PATH and logo_path_obj.exists():
-        st.image(str(logo_path_obj), width=52)
-    else:
-        st.markdown("### 🏢")
-with col_name:
-    st.markdown(f"### {COMPANY_NAME}")
-    st.caption("情シス問い合わせAI（営業デモ）")
-with col_btn:
-    if contact_link:
-        st.link_button("📩 導入相談", contact_link, width="stretch")
-    else:
-        st.button("📩 導入相談（リンク未設定）", disabled=True, width="stretch")
-
-# ===== ヒーローヘッダー =====
-st.markdown(
-    """
-<div class="hero">
-  <h1>情シス問い合わせAI</h1>
-  <p>FAQ根拠付きで回答し、問い合わせ対応を削減する社内ヘルプデスクAI（RAG + LLM）</p>
-
-  <div class="cta-row">
-    <span class="cta">🎯 導入効果：問い合わせ削減 / 品質平準化 / ナレッジ蓄積</span>
-    <span class="cta">🧩 既存FAQ（CSV）で即導入</span>
-    <span class="cta">📄 効果レポートPDF出力</span>
-  </div>
-
-  <div class="badges">
-    <span class="badge">✅ FAQ参照（根拠表示）</span>
-    <span class="badge">⚡ Groq高速推論</span>
-    <span class="badge">📝 ログ / 該当なし蓄積</span>
-    <span class="badge">🔐 管理者でFAQ育成</span>
-  </div>
-</div>
-""",
-    unsafe_allow_html=True,
-)
-
-# ==== サイドバー ========
-
-
-# ===== KPI（直近7日）=====
+# =====================
+# Render / Slack Bot 兼用モード
+# =====================
 try:
-    _df7 = read_interactions(days=7)
-    if _df7 is not None and len(_df7) > 0:
-        _total7 = int(len(_df7))
-        _matched7 = int(_df7["matched"].sum()) if "matched" in _df7.columns else 0
-        _rate7 = (_matched7 / _total7 * 100.0) if _total7 else 0.0
-        _today_prefix = datetime.now().strftime("%Y-%m-%d")
-        _today = _df7[_df7["timestamp"].astype(str).str.startswith(_today_prefix)]
-        _total_today = int(len(_today))
-
-        # 営業用：削減時間（推定）KPI（サイドバー入力と連動）
-        _avg_min_kpi = float(st.session_state.get("avg_min", 5))
-        _deflect_kpi = float(st.session_state.get("deflect", 0.7))
-        _hourly_cost_kpi = int(st.session_state.get("hourly_cost", 4000))
-        _saved_min7 = _matched7 * _avg_min_kpi * _deflect_kpi
-        _saved_h7 = _saved_min7 / 60.0
-        _saved_yen7 = int(round(_saved_h7 * _hourly_cost_kpi)) if _hourly_cost_kpi else 0
-
-        # 営業用：KPIカード（中央に大きく）
-        st.markdown('<div class="section-title">📊 直近の利用状況</div>', unsafe_allow_html=True)
-        st.markdown(
-            f'''
-<div class="kpi-grid">
-  <div class="kpi">
-    <div class="label">直近7日 問い合わせ</div>
-    <div class="value">{_total7}</div>
-    <div class="sub">ログベース</div>
-  </div>
-  <div class="kpi">
-    <div class="label">直近7日 自動対応率</div>
-    <div class="value">{_rate7:.1f}%</div>
-    <div class="sub">FAQヒット率</div>
-  </div>
-  <div class="kpi">
-    <div class="label">直近7日 自動対応件数</div>
-    <div class="value">{_matched7}</div>
-    <div class="sub">自己解決に寄与</div>
-  </div>
-  <div class="kpi">
-    <div class="label">推定削減（直近7日）</div>
-    <div class="value">{_saved_h7:.1f}h</div>
-    <div class="sub">約{_saved_yen7:,}円（{_hourly_cost_kpi:,}円/時間）</div>
-  </div>
-  <div class="kpi">
-    <div class="label">今日の問い合わせ</div>
-    <div class="value">{_total_today}</div>
-    <div class="sub">当日分</div>
-  </div>
-</div>
-''',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.caption("（利用ログがまだありません。質問するとKPIが表示されます）")
-except Exception:
-    pass
+    from flask import Flask, request, jsonify
+except Exception:  # pragma: no cover
+    Flask = None  # type: ignore
+    request = None  # type: ignore
+    jsonify = None  # type: ignore
 
 
-with st.sidebar:
-    st.markdown("### 📌 このAIでできること")
-    st.markdown(
-    """
-    このAIは、社内のIT問い合わせを自己解決につなげるための **情シス問い合わせ支援AI** です。
-
-    主な機能
-
-    ・FAQデータを検索し、最も近い回答を自動表示  
-    ・RAG検索により、表現が少し違う質問でも近いFAQを提示  
-    ・回答の根拠となるFAQ候補と一致度を表示  
-    ・該当するFAQがない場合は問い合わせテンプレートを提示  
-    ・問い合わせログを自動記録し、未整備FAQを可視化  
-
-    管理者機能
-
-    ・FAQを **Excelでダウンロード / アップロード / 更新反映**  
-    ・問い合わせログの確認  
-    ・削減時間シミュレーション  
-    ・導入効果レポートPDFの出力  
-    ・操作説明書 / 提案資料PDFのダウンロード
-    """
-    )
+def _is_flask_runtime() -> bool:
+    server_software = str(os.getenv("SERVER_SOFTWARE", "")).lower()
+    render_flag = os.getenv("RENDER") is not None or os.getenv("RENDER_EXTERNAL_URL") is not None
+    explicit_flag = str(os.getenv("RENDER_SLACK_BOT_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+    slack_flag = bool(os.getenv("SLACK_SIGNING_SECRET") or os.getenv("SLACK_BOT_TOKEN"))
+    gunicorn_flag = "gunicorn" in server_software
+    return explicit_flag or gunicorn_flag or (render_flag and slack_flag)
 
 
-    st.markdown("### 📈 想定効果（例）")
-    st.markdown(
-    """
-    このAIを導入すると、次のような効果が期待できます。
-
-    ・よくある問い合わせを自己解決できるようになる  
-    ・情シス担当者の対応時間を削減できる  
-    ・回答内容のばらつきを減らし、対応品質を安定化できる  
-    ・新人担当者でも一定品質の対応が可能になる  
-    ・問い合わせログをもとにFAQを継続改善できる  
-
-    例（100人規模の企業）
-
-    ・月100件の問い合わせ  
-    ・1件5分対応  
-
-    → 月 **約500分（約8時間）削減**  
-    → 年間 **約96時間削減**
-    """
-    )
+IS_FLASK_MODE = _is_flask_runtime()
 
 
-    st.markdown("### 🧭 使い方")
-    st.markdown(
-    """
-    ① 質問を入力します  
-    例  
-    ・Wi-Fiがつながらない  
-    ・PCが起動しない  
-    ・ソフトをインストールしたい  
-
-    ② AIがFAQを検索します  
-
-    ③ 回答と参考FAQが表示されます  
-
-    ④ 該当FAQがない場合  
-    問い合わせテンプレートを使って情シスへ連絡できます  
-
-    ⑤ 管理者はFAQを更新して  
-    AIの回答精度を継続的に改善できます
-    """
-    )
-    # ======================
-    # ログ（該当なし）状況＆ダウンロード
-    # ======================
-    st.markdown("### 📊 問い合わせログ状況（該当なし）")
-    t_cnt, w_cnt, total_cnt = count_nohit_logs(days=7)
-    cA, cB, cC = st.columns(3)
-    cA.metric("今日", t_cnt)
-    cB.metric("過去7日", w_cnt)
-    cC.metric("累計", total_cnt)
+def _api_faq_path() -> Path:
+    if FAQ_PATH.exists():
+        return FAQ_PATH
+    if ROOT_FAQ_PATH.exists():
+        return ROOT_FAQ_PATH
+    return FAQ_PATH
 
 
-    # ======================
-    # 削減時間シミュレーター（営業用）
-    # ======================
-    st.markdown("### ⏱ 削減時間シミュレーター")
-    avg_min = st.slider("1件あたりの平均対応時間（分）", 1, 20, int(st.session_state.get("avg_min", 5)), help="情シスが1件対応する平均時間の目安", key="avg_min")
-    deflect_pct = st.slider("AIで解決できる割合（推定）", 30, 100, int(st.session_state.get("deflect_pct", 70)), help="AI回答で自己解決に至る割合の推定", key="deflect_pct")
-    deflect = deflect_pct / 100.0
-    st.session_state["deflect"] = deflect
-
-    df_int = read_interactions(days=7)
-    if df_int is None or len(df_int) == 0:
-        st.caption("まだ利用ログがありません（質問すると自動で蓄積します）。")
-    else:
-        matched_7d = int(df_int["matched"].sum()) if "matched" in df_int.columns else 0
-        total_7d = int(len(df_int))
-        nohit_7d = total_7d - matched_7d
-        saved_min_7d = matched_7d * float(avg_min) * float(deflect)
-        st.metric("推定削減（過去7日）", format_minutes_to_hours(saved_min_7d))
-        st.caption(f"内訳：自動対応 {matched_7d} 件 / 該当なし {nohit_7d} 件（合計 {total_7d} 件）")
-
-        # 今日分（timestamp先頭が YYYY-MM-DD の想定）
-        try:
-            today_prefix = datetime.now().strftime("%Y-%m-%d")
-            df_today = df_int[df_int["timestamp"].astype(str).str.startswith(today_prefix)]
-            matched_today = int(df_today["matched"].sum()) if len(df_today) else 0
-            saved_min_today = matched_today * float(avg_min) * float(deflect)
-            st.metric("推定削減（今日）", format_minutes_to_hours(saved_min_today))
-        except Exception:
-            pass
-
-    
-    # ======================
-    # 見える化（グラフ）
-    # ======================
-    if df_int is not None and len(df_int) > 0:
-        st.markdown("### 📈 見える化（直近7日）")
-
-        df_plot = df_int.copy()
-        df_plot["date"] = pd.to_datetime(df_plot["timestamp"], errors="coerce").dt.date
-        daily = (
-            df_plot.groupby("date", dropna=True)
-            .agg(total=("question", "count"), matched=("matched", "sum"))
-            .reset_index()
-            .sort_values("date")
-        )
-        daily["auto_rate"] = (daily["matched"] / daily["total"]).replace([pd.NA, float("inf")], 0.0) * 100.0
-        daily["saved_min"] = daily["matched"] * float(avg_min) * float(deflect)
-        daily["saved_min_cum"] = daily["saved_min"].cumsum()
-
-        # 1) 問い合わせ件数
-        st.caption("📈 7日間の問い合わせ件数推移")
-        st.line_chart(daily.set_index("date")[["total"]])
-
-        # 2) 自動対応率
-        st.caption("🧠 AI自動対応率の推移（FAQヒット率）")
-        st.line_chart(daily.set_index("date")[["auto_rate"]])
-
-        # 3) 削減時間（累計）
-        st.caption("⏱ 削減時間の累計（推定）")
-        st.line_chart(daily.set_index("date")[["saved_min_cum"]])
-
-    # ======================
-    # 効果レポートPDF出力（今月）
-    # ======================
-    st.markdown("### 📄 効果レポート（PDF）")
-
-    if not REPORTLAB_AVAILABLE:
-        st.warning("PDF出力には 'reportlab' が必要です。Streamlit Cloud の requirements.txt に 'reportlab' を追加して再デプロイしてください。")
-        st.code("reportlab", language="text")
-    else:
-        hourly_cost = st.number_input("想定人件費（円/時間）", min_value=0, max_value=20000, value=int(st.session_state.get("hourly_cost", 4000)), step=500, key="hourly_cost")
-        # st.session_state["hourly_cost"] = int(hourly_cost)
-
-        # 今月のログを集計（最大60日読み込み→今月分だけ抽出）
-        df_month_all = read_interactions(days=60)
-        if df_month_all is None or len(df_month_all) == 0:
-            st.caption("今月の利用ログがまだありません。質問すると自動で蓄積します。")
-        else:
-            try:
-                ts = pd.to_datetime(df_month_all["timestamp"], errors="coerce")
-                month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                df_month = df_month_all[ts >= month_start]
-            except Exception:
-                df_month = df_month_all
-
-            try:
-                pdf_bytes = generate_effect_report_pdf(
-                    df=df_month,
-                    avg_min=float(avg_min),
-                    deflect=float(deflect),
-                    hourly_cost_yen=int(hourly_cost),
-                )
-                st.download_button(
-                    "📄 今月の導入効果レポートをダウンロード",
-                    data=pdf_bytes,
-                    file_name=f"effect_report_{datetime.now().strftime('%Y%m')}.pdf",
-                    mime="application/pdf",
-                    width="stretch",
-                )
-            except Exception as e:
-                st.error(f"PDF生成でエラー: {e}")
-    st.markdown("### 📥 ログ（該当なし）ダウンロード")
-    log_files = list_log_files()
-    if not log_files:
-        st.caption("まだログはありません。")
-    else:
-        latest = log_files[0]
-        try:
-            latest_bytes = latest.read_bytes()
-        except Exception:
-            latest_bytes = b""
-        st.download_button(
-            "⬇ 最新ログCSVをダウンロード",
-            data=latest_bytes,
-            file_name=latest.name,
-            mime="text/csv",
-            width="stretch",
-        )
-
-        zip_bytes = make_logs_zip(log_files)
-        st.download_button(
-            "⬇ ログをZIPでまとめてDL",
-            data=zip_bytes,
-            file_name="nohit_logs.zip",
-            mime="application/zip",
-            width="stretch",
-        )
-
-        with st.expander("ログ一覧を見る"):
-            for p in log_files[:20]:
-                st.write(f"• {p.name}")
-
-
-# ======================
-# FAQロード（落ちやすい箇所を全てガード）
-# ======================
-
-FULLWIDTH_TRANS = str.maketrans({
-    "０": "0", "１": "1", "２": "2", "３": "3", "４": "4",
-    "５": "5", "６": "6", "７": "7", "８": "8", "９": "9",
-    "ａ": "a", "ｂ": "b", "ｃ": "c", "ｄ": "d", "ｅ": "e", "ｆ": "f", "ｇ": "g",
-    "ｈ": "h", "ｉ": "i", "ｊ": "j", "ｋ": "k", "ｌ": "l", "ｍ": "m", "ｎ": "n",
-    "ｏ": "o", "ｐ": "p", "ｑ": "q", "ｒ": "r", "ｓ": "s", "ｔ": "t", "ｕ": "u",
-    "ｖ": "v", "ｗ": "w", "ｘ": "x", "ｙ": "y", "ｚ": "z",
-    "Ａ": "a", "Ｂ": "b", "Ｃ": "c", "Ｄ": "d", "Ｅ": "e", "Ｆ": "f", "Ｇ": "g",
-    "Ｈ": "h", "Ｉ": "i", "Ｊ": "j", "Ｋ": "k", "Ｌ": "l", "Ｍ": "m", "Ｎ": "n",
-    "Ｏ": "o", "Ｐ": "p", "Ｑ": "q", "Ｒ": "r", "Ｓ": "s", "Ｔ": "t", "Ｕ": "u",
-    "Ｖ": "v", "Ｗ": "w", "Ｘ": "x", "Ｙ": "y", "Ｚ": "z",
-})
-
-CANONICAL_PATTERNS = [
-    (r"デスクトップパソコン|デスクトップｐｃ|desktop\s*pc", "デスクトップpc"),
-    (r"ノートパソコン|ラップトップ", "ノートpc"),
-    (r"パーソナルコンピュータ|パソコン|ピーシー|ｐｃ|pc端末", "pc"),
-    (r"コンピューター", "コンピュータ"),
-    (r"無線lan|wi-?fi|wifi|ワイファイ", "wifi"),
-    (r"ｖｐｎ|ぶいぴーえぬ|vpn接続", "vpn"),
-    (r"サインイン", "ログイン"),
-    (r"サインアウト", "ログアウト"),
-    (r"パスコード|passcode", "パスワード"),
-    (r"pw", "パスワード"),
-    (r"立ち上がらない|起ち上がらない|立ちあがらない|起ちあがらない", "起動しない"),
-    (r"電源がつかない|電源が付かない|電源がはいらない", "電源が入らない"),
-    (r"ログイン出来ない|ログインできません", "ログインできない"),
-    (r"接続できない|接続できません|接続出来ない|接続出来ません|接続しない|接続されない|つながりません|繋がりません|繋がらない|繋げない|つなげない", "つながらない"),
-    (r"利用できない|使用できない", "使えない"),
-    (r"開けない", "起動しない"),
-    (r"印字できない|プリントできない", "印刷できない"),
-    (r"メール送れない", "メールが送信できない"),
-    (r"メール受け取れない", "メールが受信できない"),
-    (r"認証に失敗|認証エラー", "認証できない"),
-    (r"ロックされた|凍結された", "ロックされた"),
-]
-
-CONCEPT_ALIASES = {
-    "vpn": ["vpn", "リモートアクセス", "社外接続"],
-    "network": ["ネットワーク", "wifi", "lan", "通信", "internet", "インターネット"],
-    "login": ["ログイン", "サインイン", "認証", "アカウント"],
-    "password": ["パスワード", "password", "pw"],
-    "boot": ["起動", "立ち上が", "立上", "電源", "シャットダウン", "再起動"],
-    "mail": ["メール", "outlook", "受信", "送信"],
-    "print": ["印刷", "プリンタ", "printer", "print"],
-    "lock": ["ロック", "凍結", "無効", "停止"],
-    "error": ["エラー", "失敗", "不具合", "異常", "障害"],
-    "cannot": ["できない", "できません", "使えない", "つながらない", "入らない", "起動しない"],
-}
-
-
-def normalize_search_text(text: str) -> str:
-    """FAQ検索用の正規化。表記ゆれ・同義表現を寄せて意味検索を強化する。"""
-    s = str(text or "").strip().lower()
-    if not s:
-        return ""
-
-    s = s.translate(FULLWIDTH_TRANS)
-    for pattern, repl in CANONICAL_PATTERNS:
-        s = re.sub(pattern, repl, s)
-
-    s = re.sub(r"([^a-z0-9])pc([^a-z0-9])", r"\1 pc \2", f" {s} ")
-    s = re.sub(r"[\/／・,、。．・:：;；\-ー_（）()\[\]{}『』「」\"'`]+", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
-def extract_search_tokens(text: str) -> set[str]:
-    """日本語FAQ検索向けの軽量トークン抽出。"""
-    s = normalize_search_text(text)
-    if not s:
-        return set()
-
-    tokens = set()
-    for part in s.split():
-        part = part.strip()
-        if part:
-            tokens.add(part)
-
-    for tok in re.findall(r"[a-z0-9]+|[\u3040-\u30ff\u4e00-\u9fff]{2,}", s):
-        tokens.add(tok)
-
-    split_hints = ["できない", "つながらない", "起動しない", "ログイン", "パスワード", "電源", "印刷", "メール", "アカウント", "vpn", "wifi"]
-    for tok in list(tokens):
-        for hint in split_hints:
-            if hint in tok and tok != hint:
-                tokens.add(hint)
-                remain = tok.replace(hint, " ").strip()
-                if len(remain) >= 2:
-                    tokens.add(remain)
-
-    return {t for t in tokens if t}
-
-
-def extract_concepts(text: str) -> set[str]:
-    s = normalize_search_text(text)
-    found = set()
-    for concept, aliases in CONCEPT_ALIASES.items():
-        if any(alias in s for alias in aliases):
-            found.add(concept)
-    return found
-
-
-# 文字n-gramも混ぜて、日本語の部分一致に強くする
-WORD_VECTORIZER = TfidfVectorizer(ngram_range=(1, 2))
-CHAR_VECTORIZER = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
-SENTENCE_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-
-def _load_sentence_transformer_model():
-    if not SENTENCE_TRANSFORMERS_AVAILABLE or SentenceTransformer is None:
-        return None
-    cache_key = "_st_sentence_transformer_model"
+def _api_threshold() -> float:
     try:
-        model = st.session_state.get(cache_key)
-        if model is not None:
-            return model
+        return float(os.getenv("FAQ_MATCH_THRESHOLD", SEARCH_SETTINGS.get("answer_threshold", DEFAULT_SEARCH_THRESHOLD)))
     except Exception:
-        model = None
-    try:
-        model = SentenceTransformer(SENTENCE_MODEL_NAME)
-        try:
-            st.session_state[cache_key] = model
-        except Exception:
-            pass
-        return model
-    except Exception:
-        return None
+        return DEFAULT_SEARCH_THRESHOLD
 
 
-def _build_sentence_embeddings(model, texts: list[str]):
-    if model is None or not texts:
-        return None
-    try:
-        return model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
-    except Exception:
-        return None
+def _api_retrieve_faq(query: str, top_k: int = 3) -> dict:
+    q = str(query or "").strip()
+    if not q:
+        return {"matched": False, "score": 0.0, "answer": "質問が空です。", "category": "", "references": []}
 
-
-def _search_with_sentence_transformers(query_norm: str, faq_embeddings) -> list[float] | None:
-    if not query_norm or faq_embeddings is None:
-        return None
-    model = _load_sentence_transformer_model()
-    if model is None:
-        return None
-    try:
-        q_emb = model.encode([query_norm], normalize_embeddings=True, show_progress_bar=False)
-        sims_sem = cosine_similarity(q_emb, faq_embeddings).flatten()
-        return sims_sem.tolist()
-    except Exception:
-        return None
-
-
-def load_faq_index(faq_path: Path):
-    if not faq_path.exists():
-        empty = pd.DataFrame(columns=["question", "answer", "category"])
-        return empty, None, None, None, None, None
+    faq_file = _api_faq_path()
+    if not faq_file.exists():
+        return {"matched": False, "score": 0.0, "answer": "FAQファイルが見つかりません。", "category": "", "references": []}
 
     try:
-        df = normalize_faq_columns(read_csv_flexible(faq_path))
+        df = normalize_faq_columns(read_csv_flexible(faq_file))
     except Exception:
-        empty = pd.DataFrame(columns=["question", "answer", "category"])
-        return empty, None, None, None, None, None
+        df = pd.DataFrame(columns=["question", "answer", "category"])
 
-    df["question"] = df["question"].fillna("").astype(str)
-    df["answer"] = df["answer"].fillna("").astype(str)
-    df["category"] = df["category"].fillna("").astype(str)
+    if df is None or len(df) == 0:
+        return {"matched": False, "score": 0.0, "answer": "現在回答できるFAQがありません。", "category": "", "references": []}
 
-    if len(df) == 0:
-        return df, None, None, None, None, None
-
-    df["question_norm"] = df["question"].apply(normalize_search_text)
-    df["answer_norm"] = df["answer"].apply(normalize_search_text)
-    df["qa_text"] = (df["question"] + " / " + df["answer"]).astype(str)
-    df["qa_text_norm"] = (df["question_norm"] + " / " + df["answer_norm"]).astype(str)
-    df["search_tokens"] = df["qa_text_norm"].apply(extract_search_tokens)
-    df["search_concepts"] = df["qa_text_norm"].apply(extract_concepts)
-
+    corpus = df["question"].fillna("").astype(str).tolist()
+    vec_word = TfidfVectorizer(ngram_range=(1, 2))
+    vec_char = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
     try:
-        word_vectorizer = WORD_VECTORIZER
-        char_vectorizer = CHAR_VECTORIZER
-        X_word = word_vectorizer.fit_transform(df["qa_text_norm"])
-        X_char = char_vectorizer.fit_transform(df["qa_text_norm"])
+        Xw = vec_word.fit_transform(corpus)
+        Xc = vec_char.fit_transform(corpus)
+        qw = vec_word.transform([q])
+        qc = vec_char.transform([q])
+        sims_w = cosine_similarity(qw, Xw).flatten()
+        sims_c = cosine_similarity(qc, Xc).flatten()
+        scores = 0.7 * sims_w + 0.3 * sims_c
     except Exception:
-        return df, None, None, None, None, None
+        vec = TfidfVectorizer(ngram_range=(1, 2))
+        X = vec.fit_transform(corpus)
+        qv = vec.transform([q])
+        scores = cosine_similarity(qv, X).flatten()
 
-    faq_embeddings = None
-    if SENTENCE_TRANSFORMERS_AVAILABLE:
-        model = _load_sentence_transformer_model()
-        faq_embeddings = _build_sentence_embeddings(model, df["qa_text_norm"].tolist())
+    order = scores.argsort()[::-1][:max(1, int(top_k))]
+    refs = []
+    for idx in order:
+        row = df.iloc[int(idx)]
+        refs.append({
+            "question": str(row.get("question", "")),
+            "answer": str(row.get("answer", "")),
+            "category": str(row.get("category", "")),
+            "score": float(scores[int(idx)]),
+        })
 
-    return df, word_vectorizer, X_word, char_vectorizer, X_char, faq_embeddings
-
-
-df, vectorizer, X, char_vectorizer, X_char, faq_embeddings = load_faq_index(FAQ_PATH)
-
-if df is None or len(df) == 0 or vectorizer is None or X is None or char_vectorizer is None or X_char is None:
-    st.warning("faq.csv が未配置/空/不正のため、FAQ検索は無効です。まず faq.csv を配置してください。")
-
-
-def retrieve_faq(query: str):
-    if not query:
-        return []
-    if vectorizer is None or X is None or char_vectorizer is None or X_char is None or df is None or len(df) == 0:
-        return []
-    try:
-        query_norm = normalize_search_text(query)
-        qv_word = vectorizer.transform([query_norm])
-        qv_char = char_vectorizer.transform([query_norm])
-        sims_word = cosine_similarity(qv_word, X).flatten()
-        sims_char = cosine_similarity(qv_char, X_char).flatten()
-        if sims_word.size == 0 or sims_char.size == 0:
-            return []
-
-        # 単語一致と文字部分一致を合成して、表記ゆれに強くする
-        sims = (sims_word * 0.52) + (sims_char * 0.48)
-
-        # sentence-transformers による意味検索を追加（未導入時は自動スキップ）
-        sims_sem = _search_with_sentence_transformers(query_norm, faq_embeddings)
-        if sims_sem is not None and len(sims_sem) == len(sims):
-            sims = sims + (pd.Series(sims_sem).fillna(0.0).to_numpy() * 0.35)
-
-        # 完全一致に近い正規化結果は少し加点
-        exact_bonus = (df["question_norm"] == query_norm).astype(float).to_numpy() * 0.22
-        contains_bonus = df["question_norm"].apply(
-            lambda x: 0.10 if query_norm and (query_norm in x or x in query_norm) else 0.0
-        ).to_numpy()
-
-        # トークン重複率で加点
-        q_tokens = extract_search_tokens(query_norm)
-        token_bonus = df["search_tokens"].apply(
-            lambda toks: (0.18 * len(q_tokens & set(toks)) / max(1, len(q_tokens))) if q_tokens else 0.0
-        ).to_numpy()
-
-        # 概念一致で加点（vpn / login / boot など）
-        q_concepts = extract_concepts(query_norm)
-        concept_bonus = df["search_concepts"].apply(
-            lambda cs: (0.22 * len(q_concepts & set(cs)) / max(1, len(q_concepts))) if q_concepts else 0.0
-        ).to_numpy()
-
-        prefix_bonus = df["question_norm"].apply(
-            lambda x: 0.06 if query_norm and str(x).startswith(query_norm[: min(8, len(query_norm))]) else 0.0
-        ).to_numpy()
-
-        sims = sims + exact_bonus + contains_bonus + token_bonus + concept_bonus + prefix_bonus
-
-        idxs = sims.argsort()[::-1][:3]
-        return [(df.iloc[i], float(sims[i])) for i in idxs if float(sims[i]) > 0]
-    except Exception:
-        return []
-
-
-def build_prompt(user_q: str, hits):
-    context_parts = []
-    for i, (row, score) in enumerate(hits, 1):
-        q = str(row.get("question", ""))
-        a = str(row.get("answer", ""))
-        context_parts.append(f"\n[FAQ{i}]\nQ:{q}\nA:{a}\n")
-    context = "".join(context_parts)
-
-    return f"""
-あなたは社内の情シス担当です。
-必ず日本語のみで回答してください。
-丁寧で簡潔に、手順は箇条書きで書いてください。
-
-参照FAQ:
-{context}
-
-質問:
-{user_q}
-"""
-
-
-def nohit_template():
-    return """
-FAQに該当がありませんでした。
-
-情シスへお問い合わせの際は、以下の情報を添えてください：
-
-・何ができないか（具体的な操作）
-・エラー画面のスクリーンショット
-・発生時刻
-・利用場所（社内 / 社外）
-・ネットワーク（Wi-Fi / VPN）
-・端末（Windows / Mac）
-・影響範囲（自分のみ / 他の人も）
-
-※これらを共有いただくと対応が早くなります。
-※このAIは御社の運用に合わせてカスタマイズ可能です。
-""".strip()
-
-
-
-def _ensure_nohit_schema(path: Path):
-    """既存nohit CSVが旧形式（timestamp,questionのみ）でも、新スキーマに移行する。"""
-    cols = ["timestamp", "question", "device", "location", "network", "error_text", "impact", "channel"]
-    if not path.exists():
-        return cols
-
-    try:
-        # 先頭行だけ見る（軽量）
-        with path.open("r", encoding="utf-8", errors="ignore") as f:
-            header = f.readline().strip()
-        header_cols = [h.strip() for h in header.split(",")] if header else []
-    except Exception:
-        header_cols = []
-
-    # すでに新スキーマなら何もしない
-    if set(cols).issubset(set(header_cols)):
-        return header_cols
-
-    # 移行：既存を読み取り→新ヘッダで書き直し
-    try:
-        old_df = read_csv_flexible(path)
-        if old_df is None:
-            old_df = pd.DataFrame()
-    except Exception:
-        old_df = pd.DataFrame()
-
-    if len(old_df) == 0:
-        # 空なら新ヘッダで作り直す
-        with path.open("w", encoding="utf-8", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(cols)
-        return cols
-
-    qcol = pick_question_column(old_df.columns) or ("question" if "question" in old_df.columns else None)
-    tcol = "timestamp" if "timestamp" in old_df.columns else None
-
-    rows = []
-    for _, r in old_df.iterrows():
-        ts = str(r.get(tcol, "")).strip() if tcol else ""
-        q = str(r.get(qcol, "")).strip() if qcol else ""
-        if not q:
-            continue
-        rows.append([ts, q, "", "", "", "", "", ""])
-
-    with path.open("w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(cols)
-        w.writerows(rows)
-
-    return cols
-
-
-def log_nohit(question: str, extra: dict | None = None) -> str:
-    """該当なしログを追記して、記録したtimestamp（秒）を返す。"""
-    if not question:
-        return ""
-    extra = extra or {}
-    day = datetime.now().strftime("%Y%m%d")
-    path = LOG_DIR / f"nohit_{day}.csv"
-    cols = _ensure_nohit_schema(path)
-
-    ts = datetime.now().isoformat(timespec="seconds")
-    row = {
-        "timestamp": ts,
-        "question": question,
-        "device": extra.get("device", ""),
-        "location": extra.get("location", ""),
-        "network": extra.get("network", ""),
-        "error_text": extra.get("error_text", ""),
-        "impact": extra.get("impact", ""),
-        "channel": extra.get("channel", "web"),
+    best = refs[0] if refs else {"question": "", "answer": "", "category": "", "score": 0.0}
+    matched = float(best.get("score", 0.0)) >= float(_api_threshold())
+    return {
+        "matched": bool(matched),
+        "score": float(best.get("score", 0.0)),
+        "answer": str(best.get("answer", "")) if matched else "",
+        "category": str(best.get("category", "")),
+        "references": refs,
     }
 
-    try:
-        is_new = not path.exists()
-        with path.open("a", encoding="utf-8", newline="") as f:
-            w = csv.writer(f)
-            if is_new:
-                w.writerow(cols)
-            w.writerow([row.get(c, "") for c in cols])
-        persist_log_now(path)
-    except Exception:
-        pass
-    return ts
+
+def _api_build_fallback_message(result: dict) -> str:
+    refs = result.get("references", []) or []
+    if refs:
+        lines = ["該当するFAQが見つかりませんでした。", "", "近いFAQ候補:"]
+        for ref in refs[:3]:
+            lines.append(f"・{ref.get('question', '')} ({int(float(ref.get('score', 0.0))*100)}%)")
+        lines += ["", "次の情報を添えて情シスへ連絡してください。", "・利用者名", "・端末名", "・発生日時", "・利用場所", "・ネットワーク", "・やりたいこと / エラーメッセージ"]
+        return "\\n".join(lines)
+    return "該当するFAQが見つかりませんでした。利用者名・端末名・発生日時・利用場所・ネットワーク・やりたいこと / エラーメッセージを添えて情シスへ連絡してください。"
 
 
-def update_nohit_record(day: str, timestamp: str, question: str, extra: dict) -> bool:
-    """同じday/timestamp/question の行があれば更新。無ければ追記。"""
-    if not day or not timestamp or not question:
-        return False
-    path = LOG_DIR / f"nohit_{day}.csv"
-    cols = _ensure_nohit_schema(path)
-
-    try:
-        df_log = read_csv_flexible(path)
-        if df_log is None:
-            df_log = pd.DataFrame(columns=cols)
-    except Exception:
-        df_log = pd.DataFrame(columns=cols)
-
-    # 必須列を揃える
-    for c in cols:
-        if c not in df_log.columns:
-            df_log[c] = ""
-
-    # 既存行を更新（最初の一致）
-    mask = (df_log["timestamp"].astype(str) == str(timestamp)) & (df_log["question"].astype(str) == str(question))
-    idxs = df_log.index[mask].tolist()
-    if idxs:
-        i = idxs[0]
-        for k, v in (extra or {}).items():
-            if k in df_log.columns:
-                df_log.at[i, k] = v
-        df_log.at[i, "channel"] = extra.get("channel", df_log.at[i, "channel"] or "web")
-    else:
-        # 無ければ追記
-        row = {c: "" for c in cols}
-        row["timestamp"] = timestamp
-        row["question"] = question
-        for k, v in (extra or {}).items():
-            if k in row:
-                row[k] = v
-        if not row.get("channel"):
-            row["channel"] = "web"
-        df_log = pd.concat([df_log, pd.DataFrame([row])], ignore_index=True)
-
-    # UTF-8で書き戻す（Excel対応ならutf-8-sigでもOK）
-    try:
-        with path.open("w", encoding="utf-8", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(cols)
-            for _, r in df_log[cols].iterrows():
-                w.writerow([str(r.get(c, "")) for c in cols])
-        persist_log_now(path)
+def _verify_slack_request(req) -> bool:
+    secret = str(os.getenv("SLACK_SIGNING_SECRET", "")).strip()
+    if not secret:
         return True
+    timestamp = req.headers.get("X-Slack-Request-Timestamp", "")
+    slack_signature = req.headers.get("X-Slack-Signature", "")
+    if not timestamp or not slack_signature:
+        return False
+    try:
+        if abs(time.time() - int(timestamp)) > 60 * 5:
+            return False
     except Exception:
         return False
+    body = req.get_data(as_text=True)
+    basestring = f"v0:{timestamp}:{body}"
+    my_signature = "v0=" + hmac.new(secret.encode("utf-8"), basestring.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(my_signature, slack_signature)
 
 
-def seed_nohit_questions(n: int = 20) -> int:
-    """本番前のデモ用：情シス定番のnohit質問を今日のログに追加する。"""
-    seeds = [
-        "VPNにつながらない", "Outlookの送受信ができない", "Teamsにログインできない", "パスワードを忘れた",
-        "アカウントがロックされた", "共有フォルダにアクセスできない", "プリンタが印刷できない", "Wi-Fiが頻繁に切れる",
-        "PCが重い", "PCが固まる", "Excelが起動しない", "Excelがフリーズする", "OneDriveが同期しない",
-        "メール添付ファイルが開けない", "二段階認証が通らない", "カメラが映らない", "マイクが認識されない",
-        "ソフトのインストール申請方法が分からない", "Windows更新が終わらない", "画面が真っ黒になる",
-    ]
-    added = 0
-    for q in seeds[:n]:
-        ts = log_nohit(q, {"channel": "seed"})
-        if ts:
-            added += 1
-    return added
-
-
-
-def log_interaction(question: str, matched: bool, best_score: float, category: str):
-    """全ての質問をログ化（削減時間の見える化用）: logs/interactions_YYYYMMDD.csv"""
-    if not question:
-        return
-    day = datetime.now().strftime("%Y%m%d")
-    path = LOG_DIR / f"interactions_{day}.csv"
-    try:
-        is_new = not path.exists()
-        with path.open("a", encoding="utf-8", newline="") as f:
-            w = csv.writer(f)
-            if is_new:
-                w.writerow(["timestamp", "question", "matched", "best_score", "category"])
-            w.writerow([datetime.now().isoformat(timespec="seconds"), question, int(bool(matched)), float(best_score), category or ""])
-        persist_log_now(path)
-    except Exception:
-        pass
-
-
-
-
-import json
-
-def normalize_question(q: str) -> str:
-    q = (q or "").strip().lower()
-    q = re.sub(r"\s+", " ", q)
-    # 日本語も含めて記号類をざっくり除去
-    q = re.sub(r"[\u3000\s\t\r\n]+", " ", q)
-    q = re.sub(r"[!！?？。、,.，:：;；\-_=+~`'\"()（）\[\]{}<>＜＞/\\|@#%^&*]", "", q)
-    return q.strip()
-
-
-
-def load_nohit_questions_from_logs(files, max_questions: int = 100) -> list[str]:
-    """nohit_*.csv から質問を収集（新しいログから優先）。文字コード/カラム揺れに強く読む。"""
-    questions: list[str] = []
-    seen: set[str] = set()
-    for p in files:
-        try:
-            _df = read_csv_flexible(Path(p))
-            if _df is None or len(_df) == 0:
-                continue
-
-            qcol = pick_question_column(_df.columns)
-            if not qcol:
-                continue
-
-            for q in _df[qcol].fillna("").astype(str).tolist():
-                nq = normalize_question(q)
-                if not nq:
-                    continue
-                if nq in seen:
-                    continue
-                seen.add(nq)
-                questions.append(q.strip())
-                if len(questions) >= max_questions:
-                    return questions
-        except Exception:
-            continue
-    return questions
-
-
-
-def generate_faq_candidates(nohit_questions: list[str], n_items: int = 8) -> pd.DataFrame:
-    """該当なしログからFAQ案を生成してDataFrameで返す（category/question/answer）。"""
-    if not nohit_questions:
-        return pd.DataFrame(columns=["category", "question", "answer"])
-
-    # 入力が長すぎると落ちるので上限
-    max_in = min(len(nohit_questions), 80)
-    sample = nohit_questions[:max_in]
-    examples = "\n".join([f"- {q}" for q in sample])
-
-    prompt = f"""あなたは社内情シスのベテラン担当です。
-以下は『FAQに該当なし』として蓄積された、社員からの問い合わせ例です。
-
-【目的】
-この問い合わせ例から、社内で使えるFAQ（Q&A）を {n_items} 件作成してください。
-
-【要件】
-- 日本語のみ
-- 1件ごとに category / question / answer を作る
-- answer は手順を箇条書きで（3〜7行）
-- 個人情報や会社固有の秘密情報は作らない
-- できるだけ汎用的（どの会社でも通用）に
-- 出力は必ずJSONのみ（前後に説明文を入れない）
-- コードブロック ``` は使わない
-
-【出力JSON形式】
-[
-  {{"category":"VPN", "question":"...", "answer":"- ...\n- ..."}},
-  ...
-]
-
-【問い合わせ例】
-{examples}
-"""
-
-    out = llm_chat(
-        [
-            {"role": "system", "content": "あなたは情シスのFAQ作成者です。出力はJSONのみ。"},
-            {"role": "user", "content": prompt},
-        ]
-    )
-
-    out_text = out if isinstance(out, str) else str(out)
-
-    json_text = extract_json_array(out_text) or out_text.strip()
-
-    try:
-        data = json.loads(json_text)
-        if not isinstance(data, list):
-            raise ValueError("JSON is not a list")
-    except Exception:
-        return pd.DataFrame(columns=["category", "question", "answer"])
-
-    rows = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        cat = str(item.get("category", "")).strip()
-        q = str(item.get("question", "")).strip()
-        a = str(item.get("answer", "")).strip()
-        if not q or not a:
-            continue
-        rows.append({"category": cat, "question": q, "answer": a})
-
-    return pd.DataFrame(rows, columns=["category", "question", "answer"])
-
-def append_faq_csv(faq_path: Path, new_df: pd.DataFrame) -> int:
-    """faq.csv に追記。重複（question）をざっくり除外して追記件数を返す。"""
-    if new_df is None or len(new_df) == 0:
-        return 0
-
-    # 必須列を揃える
-    for col in ["question", "answer", "category"]:
-        if col not in new_df.columns:
-            new_df[col] = ""
-
-    new_df = new_df[["question", "answer", "category"]].copy()
-    new_df["question"] = new_df["question"].fillna("").astype(str).str.strip()
-    new_df["answer"] = new_df["answer"].fillna("").astype(str).str.strip()
-    new_df["category"] = new_df["category"].fillna("").astype(str).str.strip()
-    new_df = new_df[(new_df["question"] != "") & (new_df["answer"] != "")]
-    if len(new_df) == 0:
-        return 0
-
-    # 既存読み込み
-    if faq_path.exists():
-        try:
-            exist = normalize_faq_columns(read_csv_flexible(faq_path))
-        except Exception:
-            exist = pd.DataFrame(columns=["question", "answer", "category"])
-    else:
-        exist = pd.DataFrame(columns=["question", "answer", "category"])
-
-    exist_q = set(normalize_question(x) for x in exist.get("question", pd.Series(dtype=str)).fillna("").astype(str).tolist())
-
-    rows = []
-    for _, r in new_df.iterrows():
-        nq = normalize_question(str(r.get("question", "")))
-        if not nq:
-            continue
-        if nq in exist_q:
-            continue
-        exist_q.add(nq)
-        rows.append([r["question"], r["answer"], r.get("category", "")])
-
-    if not rows:
-        return 0
-
-    is_new = not faq_path.exists()
-    with faq_path.open("a", encoding="utf-8", newline="") as f:
-        w = csv.writer(f)
-        if is_new:
-            w.writerow(["question", "answer", "category"])
-        w.writerows(rows)
-
-    persist_faq_now()
-    return len(rows)
-
-
-
-def generate_slack_bot_zip_bytes():
-    """Slack Bot 完全版コード一式をZIPで返す。既存アプリ本体とは分離し、Render等に別サービスとして配置する想定。"""
-    import textwrap
-
-    render_base = "https://your-render-url.onrender.com"
-
-    slack_bot_py = textwrap.dedent("""    import os
+if Flask is not None:
+    import time
     import hmac
     import hashlib
-    import time
-    import json
-    from typing import Any
 
-    import requests
-    from flask import Flask, request, jsonify
+    flask_app = Flask(__name__)
+    app = flask_app  # gunicorn app:app 互換
 
-    app = Flask(__name__)
+    @flask_app.get("/")
+    @flask_app.get("/healthz")
+    def flask_health():
+        return "ok", 200
 
-    HELP_DESK_ASK_URL = os.getenv("HELPDESK_ASK_URL", "https://your-streamlit-or-api-url/ask")
-    SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "")
-    REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
+    @flask_app.post("/ask")
+    def flask_ask():
+        payload = request.get_json(silent=True) or {}
+        question = str(payload.get("question", "")).strip()
+        if not question:
+            return jsonify({"ok": False, "answer": "質問を入力してください。", "score": 0.0, "matched": False, "references": []}), 400
+
+        result = _api_retrieve_faq(question)
+        answer = result.get("answer") if result.get("matched") else _api_build_fallback_message(result)
+        return jsonify({
+            "ok": True,
+            "question": question,
+            "answer": answer,
+            "matched": bool(result.get("matched")),
+            "score": float(result.get("score", 0.0)),
+            "category": str(result.get("category", "")),
+            "references": result.get("references", []),
+        })
+
+    @flask_app.post("/slack/command")
+    def flask_slack_command():
+        if not _verify_slack_request(request):
+            return jsonify({"text": "署名検証に失敗しました。"}), 403
+        question = (request.form.get("text") or "").strip()
+        if not question:
+            return jsonify({"response_type": "ephemeral", "text": "質問文を入れてください。例: /helpdesk VPNがつながらない"})
+        result = _api_retrieve_faq(question)
+        answer = result.get("answer") if result.get("matched") else _api_build_fallback_message(result)
+        return jsonify({"response_type": "in_channel", "text": f"*質問:* {question}\\n*回答:* {answer}"})
+
+    @flask_app.post("/slack/events")
+    def flask_slack_events():
+        if not _verify_slack_request(request):
+            return jsonify({"error": "invalid signature"}), 403
+        data = request.get_json(silent=True) or {}
+        if data.get("type") == "url_verification":
+            return jsonify({"challenge": data.get("challenge", "")})
+        return jsonify({"ok": True})
+else:
+    flask_app = None
+    app = None
 
 
-    def verify_slack_request(req) -> bool:
-        if not SLACK_SIGNING_SECRET:
-            return True
+def main_streamlit():
+    st.set_page_config(page_title="情シス問い合わせAI", layout="wide")
 
-        timestamp = req.headers.get("X-Slack-Request-Timestamp", "")
-        slack_signature = req.headers.get("X-Slack-Signature", "")
-        if not timestamp or not slack_signature:
-            return False
+
+    # ===== プロっぽい見た目（CSS）=====
+    st.markdown(
+        """
+    <style>
+    /* タイトル上部の余白を確保 */
+    .block-container {
+        padding-top: 3rem !important;
+    }
+
+    /* h1の高さを確保 */
+    h1 {
+        padding-top: 0.5rem;
+        line-height: 1.3 !important;
+    }
+
+    /* スマホ対応 */
+    @media (max-width: 768px) {
+        .block-container {
+            padding-top: 2.5rem !important;
+        }
+    }
+
+    .block-container {padding-top: 2.0rem; padding-bottom: 10rem; max-width: 1100px;}
+    .hero {padding: 18px 20px; border-radius: 14px; background: linear-gradient(135deg, #0ea5e9 0%, #22c55e 100%); color: white; margin-bottom: 18px;}
+    .hero h1 {font-size: 34px; margin: 0 0 6px 0;}
+    .hero p {margin: 0; font-size: 15px; opacity: 0.95;}
+    .badges {margin-top: 12px; display:flex; gap:8px; flex-wrap:wrap;}
+    .badge {background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.25); padding: 6px 10px; border-radius: 999px; font-size: 12px;}
+    .card {background: #ffffff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 14px 14px; box-shadow: 0 6px 20px rgba(0,0,0,0.06);}
+    .card h3 {margin: 0 0 8px 0; font-size: 16px;}
+    .small {font-size: 12px; color:#6b7280;}
+    .refbox {border-left: 4px solid #0ea5e9; background: #f8fafc; padding: 10px 12px; border-radius: 10px;}
+    .answerbox {border-left: 4px solid #22c55e; background: #f0fdf4; padding: 12px 14px; border-radius: 12px; line-height: 1.6;}
+
+    .kpi-grid {display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 14px 0 18px 0;}
+    @media (max-width: 1100px){ .kpi-grid {grid-template-columns: repeat(2, minmax(0, 1fr));} }
+    .kpi {background:#ffffff; border:1px solid #e5e7eb; border-radius:16px; padding:14px 14px; box-shadow: 0 8px 26px rgba(0,0,0,0.06);}
+    .kpi .label {font-size:12px; color:#6b7280; margin-bottom:6px;}
+    .kpi .value {font-size:28px; font-weight:800; letter-spacing: -0.02em; margin:0;}
+    .kpi .sub {font-size:12px; color:#6b7280; margin-top:6px;}
+    .section-title {font-size:18px; font-weight:800; margin: 8px 0 10px 0;}
+    .cta-row {display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;}
+    .cta {background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.25); padding: 10px 12px; border-radius: 12px; font-size: 13px;}
+
+    </style>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    # ===== 会社名 / ロゴ（左上）=====
+    contact_link = build_contact_link()
+    logo_path_obj = Path(LOGO_PATH)
+    col_logo, col_name, col_btn = st.columns([1, 6, 3])
+    with col_logo:
+        if LOGO_PATH and logo_path_obj.exists():
+            st.image(str(logo_path_obj), width=52)
+        else:
+            st.markdown("### 🏢")
+    with col_name:
+        st.markdown(f"### {COMPANY_NAME}")
+        st.caption("情シス問い合わせAI（営業デモ）")
+    with col_btn:
+        if contact_link:
+            st.link_button("📩 導入相談", contact_link, width="stretch")
+        else:
+            st.button("📩 導入相談（リンク未設定）", disabled=True, width="stretch")
+
+    # ===== ヒーローヘッダー =====
+    st.markdown(
+        """
+    <div class="hero">
+      <h1>情シス問い合わせAI</h1>
+      <p>FAQ根拠付きで回答し、問い合わせ対応を削減する社内ヘルプデスクAI（RAG + LLM）</p>
+
+      <div class="cta-row">
+        <span class="cta">🎯 導入効果：問い合わせ削減 / 品質平準化 / ナレッジ蓄積</span>
+        <span class="cta">🧩 既存FAQ（CSV）で即導入</span>
+        <span class="cta">📄 効果レポートPDF出力</span>
+      </div>
+
+      <div class="badges">
+        <span class="badge">✅ FAQ参照（根拠表示）</span>
+        <span class="badge">⚡ Groq高速推論</span>
+        <span class="badge">📝 ログ / 該当なし蓄積</span>
+        <span class="badge">🔐 管理者でFAQ育成</span>
+      </div>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    # ==== サイドバー ========
+
+
+    # ===== KPI（直近7日）=====
+    try:
+        _df7 = read_interactions(days=7)
+        if _df7 is not None and len(_df7) > 0:
+            _total7 = int(len(_df7))
+            _matched7 = int(_df7["matched"].sum()) if "matched" in _df7.columns else 0
+            _rate7 = (_matched7 / _total7 * 100.0) if _total7 else 0.0
+            _today_prefix = datetime.now().strftime("%Y-%m-%d")
+            _today = _df7[_df7["timestamp"].astype(str).str.startswith(_today_prefix)]
+            _total_today = int(len(_today))
+
+            # 営業用：削減時間（推定）KPI（サイドバー入力と連動）
+            _avg_min_kpi = float(st.session_state.get("avg_min", 5))
+            _deflect_kpi = float(st.session_state.get("deflect", 0.7))
+            _hourly_cost_kpi = int(st.session_state.get("hourly_cost", 4000))
+            _saved_min7 = _matched7 * _avg_min_kpi * _deflect_kpi
+            _saved_h7 = _saved_min7 / 60.0
+            _saved_yen7 = int(round(_saved_h7 * _hourly_cost_kpi)) if _hourly_cost_kpi else 0
+
+            # 営業用：KPIカード（中央に大きく）
+            st.markdown('<div class="section-title">📊 直近の利用状況</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'''
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="label">直近7日 問い合わせ</div>
+        <div class="value">{_total7}</div>
+        <div class="sub">ログベース</div>
+      </div>
+      <div class="kpi">
+        <div class="label">直近7日 自動対応率</div>
+        <div class="value">{_rate7:.1f}%</div>
+        <div class="sub">FAQヒット率</div>
+      </div>
+      <div class="kpi">
+        <div class="label">直近7日 自動対応件数</div>
+        <div class="value">{_matched7}</div>
+        <div class="sub">自己解決に寄与</div>
+      </div>
+      <div class="kpi">
+        <div class="label">推定削減（直近7日）</div>
+        <div class="value">{_saved_h7:.1f}h</div>
+        <div class="sub">約{_saved_yen7:,}円（{_hourly_cost_kpi:,}円/時間）</div>
+      </div>
+      <div class="kpi">
+        <div class="label">今日の問い合わせ</div>
+        <div class="value">{_total_today}</div>
+        <div class="sub">当日分</div>
+      </div>
+    </div>
+    ''',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption("（利用ログがまだありません。質問するとKPIが表示されます）")
+    except Exception:
+        pass
+
+
+    with st.sidebar:
+        st.markdown("### 📌 このAIでできること")
+        st.markdown(
+        """
+        このAIは、社内のIT問い合わせを自己解決につなげるための **情シス問い合わせ支援AI** です。
+
+        主な機能
+
+        ・FAQデータを検索し、最も近い回答を自動表示  
+        ・RAG検索により、表現が少し違う質問でも近いFAQを提示  
+        ・回答の根拠となるFAQ候補と一致度を表示  
+        ・該当するFAQがない場合は問い合わせテンプレートを提示  
+        ・問い合わせログを自動記録し、未整備FAQを可視化  
+
+        管理者機能
+
+        ・FAQを **Excelでダウンロード / アップロード / 更新反映**  
+        ・問い合わせログの確認  
+        ・削減時間シミュレーション  
+        ・導入効果レポートPDFの出力  
+        ・操作説明書 / 提案資料PDFのダウンロード
+        """
+        )
+
+
+        st.markdown("### 📈 想定効果（例）")
+        st.markdown(
+        """
+        このAIを導入すると、次のような効果が期待できます。
+
+        ・よくある問い合わせを自己解決できるようになる  
+        ・情シス担当者の対応時間を削減できる  
+        ・回答内容のばらつきを減らし、対応品質を安定化できる  
+        ・新人担当者でも一定品質の対応が可能になる  
+        ・問い合わせログをもとにFAQを継続改善できる  
+
+        例（100人規模の企業）
+
+        ・月100件の問い合わせ  
+        ・1件5分対応  
+
+        → 月 **約500分（約8時間）削減**  
+        → 年間 **約96時間削減**
+        """
+        )
+
+
+        st.markdown("### 🧭 使い方")
+        st.markdown(
+        """
+        ① 質問を入力します  
+        例  
+        ・Wi-Fiがつながらない  
+        ・PCが起動しない  
+        ・ソフトをインストールしたい  
+
+        ② AIがFAQを検索します  
+
+        ③ 回答と参考FAQが表示されます  
+
+        ④ 該当FAQがない場合  
+        問い合わせテンプレートを使って情シスへ連絡できます  
+
+        ⑤ 管理者はFAQを更新して  
+        AIの回答精度を継続的に改善できます
+        """
+        )
+        # ======================
+        # ログ（該当なし）状況＆ダウンロード
+        # ======================
+        st.markdown("### 📊 問い合わせログ状況（該当なし）")
+        t_cnt, w_cnt, total_cnt = count_nohit_logs(days=7)
+        cA, cB, cC = st.columns(3)
+        cA.metric("今日", t_cnt)
+        cB.metric("過去7日", w_cnt)
+        cC.metric("累計", total_cnt)
+
+
+        # ======================
+        # 削減時間シミュレーター（営業用）
+        # ======================
+        st.markdown("### ⏱ 削減時間シミュレーター")
+        avg_min = st.slider("1件あたりの平均対応時間（分）", 1, 20, int(st.session_state.get("avg_min", 5)), help="情シスが1件対応する平均時間の目安", key="avg_min")
+        deflect_pct = st.slider("AIで解決できる割合（推定）", 30, 100, int(st.session_state.get("deflect_pct", 70)), help="AI回答で自己解決に至る割合の推定", key="deflect_pct")
+        deflect = deflect_pct / 100.0
+        st.session_state["deflect"] = deflect
+
+        df_int = read_interactions(days=7)
+        if df_int is None or len(df_int) == 0:
+            st.caption("まだ利用ログがありません（質問すると自動で蓄積します）。")
+        else:
+            matched_7d = int(df_int["matched"].sum()) if "matched" in df_int.columns else 0
+            total_7d = int(len(df_int))
+            nohit_7d = total_7d - matched_7d
+            saved_min_7d = matched_7d * float(avg_min) * float(deflect)
+            st.metric("推定削減（過去7日）", format_minutes_to_hours(saved_min_7d))
+            st.caption(f"内訳：自動対応 {matched_7d} 件 / 該当なし {nohit_7d} 件（合計 {total_7d} 件）")
+
+            # 今日分（timestamp先頭が YYYY-MM-DD の想定）
+            try:
+                today_prefix = datetime.now().strftime("%Y-%m-%d")
+                df_today = df_int[df_int["timestamp"].astype(str).str.startswith(today_prefix)]
+                matched_today = int(df_today["matched"].sum()) if len(df_today) else 0
+                saved_min_today = matched_today * float(avg_min) * float(deflect)
+                st.metric("推定削減（今日）", format_minutes_to_hours(saved_min_today))
+            except Exception:
+                pass
+
+    
+        # ======================
+        # 見える化（グラフ）
+        # ======================
+        if df_int is not None and len(df_int) > 0:
+            st.markdown("### 📈 見える化（直近7日）")
+
+            df_plot = df_int.copy()
+            df_plot["date"] = pd.to_datetime(df_plot["timestamp"], errors="coerce").dt.date
+            daily = (
+                df_plot.groupby("date", dropna=True)
+                .agg(total=("question", "count"), matched=("matched", "sum"))
+                .reset_index()
+                .sort_values("date")
+            )
+            daily["auto_rate"] = (daily["matched"] / daily["total"]).replace([pd.NA, float("inf")], 0.0) * 100.0
+            daily["saved_min"] = daily["matched"] * float(avg_min) * float(deflect)
+            daily["saved_min_cum"] = daily["saved_min"].cumsum()
+
+            # 1) 問い合わせ件数
+            st.caption("📈 7日間の問い合わせ件数推移")
+            st.line_chart(daily.set_index("date")[["total"]])
+
+            # 2) 自動対応率
+            st.caption("🧠 AI自動対応率の推移（FAQヒット率）")
+            st.line_chart(daily.set_index("date")[["auto_rate"]])
+
+            # 3) 削減時間（累計）
+            st.caption("⏱ 削減時間の累計（推定）")
+            st.line_chart(daily.set_index("date")[["saved_min_cum"]])
+
+        # ======================
+        # 効果レポートPDF出力（今月）
+        # ======================
+        st.markdown("### 📄 効果レポート（PDF）")
+
+        if not REPORTLAB_AVAILABLE:
+            st.warning("PDF出力には 'reportlab' が必要です。Streamlit Cloud の requirements.txt に 'reportlab' を追加して再デプロイしてください。")
+            st.code("reportlab", language="text")
+        else:
+            hourly_cost = st.number_input("想定人件費（円/時間）", min_value=0, max_value=20000, value=int(st.session_state.get("hourly_cost", 4000)), step=500, key="hourly_cost")
+            # st.session_state["hourly_cost"] = int(hourly_cost)
+
+            # 今月のログを集計（最大60日読み込み→今月分だけ抽出）
+            df_month_all = read_interactions(days=60)
+            if df_month_all is None or len(df_month_all) == 0:
+                st.caption("今月の利用ログがまだありません。質問すると自動で蓄積します。")
+            else:
+                try:
+                    ts = pd.to_datetime(df_month_all["timestamp"], errors="coerce")
+                    month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                    df_month = df_month_all[ts >= month_start]
+                except Exception:
+                    df_month = df_month_all
+
+                try:
+                    pdf_bytes = generate_effect_report_pdf(
+                        df=df_month,
+                        avg_min=float(avg_min),
+                        deflect=float(deflect),
+                        hourly_cost_yen=int(hourly_cost),
+                    )
+                    st.download_button(
+                        "📄 今月の導入効果レポートをダウンロード",
+                        data=pdf_bytes,
+                        file_name=f"effect_report_{datetime.now().strftime('%Y%m')}.pdf",
+                        mime="application/pdf",
+                        width="stretch",
+                    )
+                except Exception as e:
+                    st.error(f"PDF生成でエラー: {e}")
+        st.markdown("### 📥 ログ（該当なし）ダウンロード")
+        log_files = list_log_files()
+        if not log_files:
+            st.caption("まだログはありません。")
+        else:
+            latest = log_files[0]
+            try:
+                latest_bytes = latest.read_bytes()
+            except Exception:
+                latest_bytes = b""
+            st.download_button(
+                "⬇ 最新ログCSVをダウンロード",
+                data=latest_bytes,
+                file_name=latest.name,
+                mime="text/csv",
+                width="stretch",
+            )
+
+            zip_bytes = make_logs_zip(log_files)
+            st.download_button(
+                "⬇ ログをZIPでまとめてDL",
+                data=zip_bytes,
+                file_name="nohit_logs.zip",
+                mime="application/zip",
+                width="stretch",
+            )
+
+            with st.expander("ログ一覧を見る"):
+                for p in log_files[:20]:
+                    st.write(f"• {p.name}")
+
+
+    # ======================
+    # FAQロード（落ちやすい箇所を全てガード）
+    # ======================
+
+    FULLWIDTH_TRANS = str.maketrans({
+        "０": "0", "１": "1", "２": "2", "３": "3", "４": "4",
+        "５": "5", "６": "6", "７": "7", "８": "8", "９": "9",
+        "ａ": "a", "ｂ": "b", "ｃ": "c", "ｄ": "d", "ｅ": "e", "ｆ": "f", "ｇ": "g",
+        "ｈ": "h", "ｉ": "i", "ｊ": "j", "ｋ": "k", "ｌ": "l", "ｍ": "m", "ｎ": "n",
+        "ｏ": "o", "ｐ": "p", "ｑ": "q", "ｒ": "r", "ｓ": "s", "ｔ": "t", "ｕ": "u",
+        "ｖ": "v", "ｗ": "w", "ｘ": "x", "ｙ": "y", "ｚ": "z",
+        "Ａ": "a", "Ｂ": "b", "Ｃ": "c", "Ｄ": "d", "Ｅ": "e", "Ｆ": "f", "Ｇ": "g",
+        "Ｈ": "h", "Ｉ": "i", "Ｊ": "j", "Ｋ": "k", "Ｌ": "l", "Ｍ": "m", "Ｎ": "n",
+        "Ｏ": "o", "Ｐ": "p", "Ｑ": "q", "Ｒ": "r", "Ｓ": "s", "Ｔ": "t", "Ｕ": "u",
+        "Ｖ": "v", "Ｗ": "w", "Ｘ": "x", "Ｙ": "y", "Ｚ": "z",
+    })
+
+    CANONICAL_PATTERNS = [
+        (r"デスクトップパソコン|デスクトップｐｃ|desktop\s*pc", "デスクトップpc"),
+        (r"ノートパソコン|ラップトップ", "ノートpc"),
+        (r"パーソナルコンピュータ|パソコン|ピーシー|ｐｃ|pc端末", "pc"),
+        (r"コンピューター", "コンピュータ"),
+        (r"無線lan|wi-?fi|wifi|ワイファイ", "wifi"),
+        (r"ｖｐｎ|ぶいぴーえぬ|vpn接続", "vpn"),
+        (r"サインイン", "ログイン"),
+        (r"サインアウト", "ログアウト"),
+        (r"パスコード|passcode", "パスワード"),
+        (r"pw", "パスワード"),
+        (r"立ち上がらない|起ち上がらない|立ちあがらない|起ちあがらない", "起動しない"),
+        (r"電源がつかない|電源が付かない|電源がはいらない", "電源が入らない"),
+        (r"ログイン出来ない|ログインできません", "ログインできない"),
+        (r"接続できない|接続できません|接続出来ない|接続出来ません|接続しない|接続されない|つながりません|繋がりません|繋がらない|繋げない|つなげない", "つながらない"),
+        (r"利用できない|使用できない", "使えない"),
+        (r"開けない", "起動しない"),
+        (r"印字できない|プリントできない", "印刷できない"),
+        (r"メール送れない", "メールが送信できない"),
+        (r"メール受け取れない", "メールが受信できない"),
+        (r"認証に失敗|認証エラー", "認証できない"),
+        (r"ロックされた|凍結された", "ロックされた"),
+    ]
+
+    CONCEPT_ALIASES = {
+        "vpn": ["vpn", "リモートアクセス", "社外接続"],
+        "network": ["ネットワーク", "wifi", "lan", "通信", "internet", "インターネット"],
+        "login": ["ログイン", "サインイン", "認証", "アカウント"],
+        "password": ["パスワード", "password", "pw"],
+        "boot": ["起動", "立ち上が", "立上", "電源", "シャットダウン", "再起動"],
+        "mail": ["メール", "outlook", "受信", "送信"],
+        "print": ["印刷", "プリンタ", "printer", "print"],
+        "lock": ["ロック", "凍結", "無効", "停止"],
+        "error": ["エラー", "失敗", "不具合", "異常", "障害"],
+        "cannot": ["できない", "できません", "使えない", "つながらない", "入らない", "起動しない"],
+    }
+
+
+    def normalize_search_text(text: str) -> str:
+        """FAQ検索用の正規化。表記ゆれ・同義表現を寄せて意味検索を強化する。"""
+        s = str(text or "").strip().lower()
+        if not s:
+            return ""
+
+        s = s.translate(FULLWIDTH_TRANS)
+        for pattern, repl in CANONICAL_PATTERNS:
+            s = re.sub(pattern, repl, s)
+
+        s = re.sub(r"([^a-z0-9])pc([^a-z0-9])", r"\1 pc \2", f" {s} ")
+        s = re.sub(r"[\/／・,、。．・:：;；\-ー_（）()\[\]{}『』「」\"'`]+", " ", s)
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+
+
+    def extract_search_tokens(text: str) -> set[str]:
+        """日本語FAQ検索向けの軽量トークン抽出。"""
+        s = normalize_search_text(text)
+        if not s:
+            return set()
+
+        tokens = set()
+        for part in s.split():
+            part = part.strip()
+            if part:
+                tokens.add(part)
+
+        for tok in re.findall(r"[a-z0-9]+|[\u3040-\u30ff\u4e00-\u9fff]{2,}", s):
+            tokens.add(tok)
+
+        split_hints = ["できない", "つながらない", "起動しない", "ログイン", "パスワード", "電源", "印刷", "メール", "アカウント", "vpn", "wifi"]
+        for tok in list(tokens):
+            for hint in split_hints:
+                if hint in tok and tok != hint:
+                    tokens.add(hint)
+                    remain = tok.replace(hint, " ").strip()
+                    if len(remain) >= 2:
+                        tokens.add(remain)
+
+        return {t for t in tokens if t}
+
+
+    def extract_concepts(text: str) -> set[str]:
+        s = normalize_search_text(text)
+        found = set()
+        for concept, aliases in CONCEPT_ALIASES.items():
+            if any(alias in s for alias in aliases):
+                found.add(concept)
+        return found
+
+
+    # 文字n-gramも混ぜて、日本語の部分一致に強くする
+    WORD_VECTORIZER = TfidfVectorizer(ngram_range=(1, 2))
+    CHAR_VECTORIZER = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
+    SENTENCE_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+    def _load_sentence_transformer_model():
+        if not SENTENCE_TRANSFORMERS_AVAILABLE or SentenceTransformer is None:
+            return None
+        cache_key = "_st_sentence_transformer_model"
+        try:
+            model = st.session_state.get(cache_key)
+            if model is not None:
+                return model
+        except Exception:
+            model = None
+        try:
+            model = SentenceTransformer(SENTENCE_MODEL_NAME)
+            try:
+                st.session_state[cache_key] = model
+            except Exception:
+                pass
+            return model
+        except Exception:
+            return None
+
+
+    def _build_sentence_embeddings(model, texts: list[str]):
+        if model is None or not texts:
+            return None
+        try:
+            return model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+        except Exception:
+            return None
+
+
+    def _search_with_sentence_transformers(query_norm: str, faq_embeddings) -> list[float] | None:
+        if not query_norm or faq_embeddings is None:
+            return None
+        model = _load_sentence_transformer_model()
+        if model is None:
+            return None
+        try:
+            q_emb = model.encode([query_norm], normalize_embeddings=True, show_progress_bar=False)
+            sims_sem = cosine_similarity(q_emb, faq_embeddings).flatten()
+            return sims_sem.tolist()
+        except Exception:
+            return None
+
+
+    def load_faq_index(faq_path: Path):
+        if not faq_path.exists():
+            empty = pd.DataFrame(columns=["question", "answer", "category"])
+            return empty, None, None, None, None, None
 
         try:
-            if abs(time.time() - int(timestamp)) > 60 * 5:
-                return False
+            df = normalize_faq_columns(read_csv_flexible(faq_path))
+        except Exception:
+            empty = pd.DataFrame(columns=["question", "answer", "category"])
+            return empty, None, None, None, None, None
+
+        df["question"] = df["question"].fillna("").astype(str)
+        df["answer"] = df["answer"].fillna("").astype(str)
+        df["category"] = df["category"].fillna("").astype(str)
+
+        if len(df) == 0:
+            return df, None, None, None, None, None
+
+        df["question_norm"] = df["question"].apply(normalize_search_text)
+        df["answer_norm"] = df["answer"].apply(normalize_search_text)
+        df["qa_text"] = (df["question"] + " / " + df["answer"]).astype(str)
+        df["qa_text_norm"] = (df["question_norm"] + " / " + df["answer_norm"]).astype(str)
+        df["search_tokens"] = df["qa_text_norm"].apply(extract_search_tokens)
+        df["search_concepts"] = df["qa_text_norm"].apply(extract_concepts)
+
+        try:
+            word_vectorizer = WORD_VECTORIZER
+            char_vectorizer = CHAR_VECTORIZER
+            X_word = word_vectorizer.fit_transform(df["qa_text_norm"])
+            X_char = char_vectorizer.fit_transform(df["qa_text_norm"])
+        except Exception:
+            return df, None, None, None, None, None
+
+        faq_embeddings = None
+        if SENTENCE_TRANSFORMERS_AVAILABLE:
+            model = _load_sentence_transformer_model()
+            faq_embeddings = _build_sentence_embeddings(model, df["qa_text_norm"].tolist())
+
+        return df, word_vectorizer, X_word, char_vectorizer, X_char, faq_embeddings
+
+
+    df, vectorizer, X, char_vectorizer, X_char, faq_embeddings = load_faq_index(FAQ_PATH)
+
+    if df is None or len(df) == 0 or vectorizer is None or X is None or char_vectorizer is None or X_char is None:
+        st.warning("faq.csv が未配置/空/不正のため、FAQ検索は無効です。まず faq.csv を配置してください。")
+
+
+    def retrieve_faq(query: str):
+        if not query:
+            return []
+        if vectorizer is None or X is None or char_vectorizer is None or X_char is None or df is None or len(df) == 0:
+            return []
+        try:
+            query_norm = normalize_search_text(query)
+            qv_word = vectorizer.transform([query_norm])
+            qv_char = char_vectorizer.transform([query_norm])
+            sims_word = cosine_similarity(qv_word, X).flatten()
+            sims_char = cosine_similarity(qv_char, X_char).flatten()
+            if sims_word.size == 0 or sims_char.size == 0:
+                return []
+
+            # 単語一致と文字部分一致を合成して、表記ゆれに強くする
+            sims = (sims_word * 0.52) + (sims_char * 0.48)
+
+            # sentence-transformers による意味検索を追加（未導入時は自動スキップ）
+            sims_sem = _search_with_sentence_transformers(query_norm, faq_embeddings)
+            if sims_sem is not None and len(sims_sem) == len(sims):
+                sims = sims + (pd.Series(sims_sem).fillna(0.0).to_numpy() * 0.35)
+
+            # 完全一致に近い正規化結果は少し加点
+            exact_bonus = (df["question_norm"] == query_norm).astype(float).to_numpy() * 0.22
+            contains_bonus = df["question_norm"].apply(
+                lambda x: 0.10 if query_norm and (query_norm in x or x in query_norm) else 0.0
+            ).to_numpy()
+
+            # トークン重複率で加点
+            q_tokens = extract_search_tokens(query_norm)
+            token_bonus = df["search_tokens"].apply(
+                lambda toks: (0.18 * len(q_tokens & set(toks)) / max(1, len(q_tokens))) if q_tokens else 0.0
+            ).to_numpy()
+
+            # 概念一致で加点（vpn / login / boot など）
+            q_concepts = extract_concepts(query_norm)
+            concept_bonus = df["search_concepts"].apply(
+                lambda cs: (0.22 * len(q_concepts & set(cs)) / max(1, len(q_concepts))) if q_concepts else 0.0
+            ).to_numpy()
+
+            prefix_bonus = df["question_norm"].apply(
+                lambda x: 0.06 if query_norm and str(x).startswith(query_norm[: min(8, len(query_norm))]) else 0.0
+            ).to_numpy()
+
+            sims = sims + exact_bonus + contains_bonus + token_bonus + concept_bonus + prefix_bonus
+
+            idxs = sims.argsort()[::-1][:3]
+            return [(df.iloc[i], float(sims[i])) for i in idxs if float(sims[i]) > 0]
+        except Exception:
+            return []
+
+
+    def build_prompt(user_q: str, hits):
+        context_parts = []
+        for i, (row, score) in enumerate(hits, 1):
+            q = str(row.get("question", ""))
+            a = str(row.get("answer", ""))
+            context_parts.append(f"\n[FAQ{i}]\nQ:{q}\nA:{a}\n")
+        context = "".join(context_parts)
+
+        return f"""
+    あなたは社内の情シス担当です。
+    必ず日本語のみで回答してください。
+    丁寧で簡潔に、手順は箇条書きで書いてください。
+
+    参照FAQ:
+    {context}
+
+    質問:
+    {user_q}
+    """
+
+
+    def nohit_template():
+        return """
+    FAQに該当がありませんでした。
+
+    情シスへお問い合わせの際は、以下の情報を添えてください：
+
+    ・何ができないか（具体的な操作）
+    ・エラー画面のスクリーンショット
+    ・発生時刻
+    ・利用場所（社内 / 社外）
+    ・ネットワーク（Wi-Fi / VPN）
+    ・端末（Windows / Mac）
+    ・影響範囲（自分のみ / 他の人も）
+
+    ※これらを共有いただくと対応が早くなります。
+    ※このAIは御社の運用に合わせてカスタマイズ可能です。
+    """.strip()
+
+
+
+    def _ensure_nohit_schema(path: Path):
+        """既存nohit CSVが旧形式（timestamp,questionのみ）でも、新スキーマに移行する。"""
+        cols = ["timestamp", "question", "device", "location", "network", "error_text", "impact", "channel"]
+        if not path.exists():
+            return cols
+
+        try:
+            # 先頭行だけ見る（軽量）
+            with path.open("r", encoding="utf-8", errors="ignore") as f:
+                header = f.readline().strip()
+            header_cols = [h.strip() for h in header.split(",")] if header else []
+        except Exception:
+            header_cols = []
+
+        # すでに新スキーマなら何もしない
+        if set(cols).issubset(set(header_cols)):
+            return header_cols
+
+        # 移行：既存を読み取り→新ヘッダで書き直し
+        try:
+            old_df = read_csv_flexible(path)
+            if old_df is None:
+                old_df = pd.DataFrame()
+        except Exception:
+            old_df = pd.DataFrame()
+
+        if len(old_df) == 0:
+            # 空なら新ヘッダで作り直す
+            with path.open("w", encoding="utf-8", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(cols)
+            return cols
+
+        qcol = pick_question_column(old_df.columns) or ("question" if "question" in old_df.columns else None)
+        tcol = "timestamp" if "timestamp" in old_df.columns else None
+
+        rows = []
+        for _, r in old_df.iterrows():
+            ts = str(r.get(tcol, "")).strip() if tcol else ""
+            q = str(r.get(qcol, "")).strip() if qcol else ""
+            if not q:
+                continue
+            rows.append([ts, q, "", "", "", "", "", ""])
+
+        with path.open("w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(cols)
+            w.writerows(rows)
+
+        return cols
+
+
+    def log_nohit(question: str, extra: dict | None = None) -> str:
+        """該当なしログを追記して、記録したtimestamp（秒）を返す。"""
+        if not question:
+            return ""
+        extra = extra or {}
+        day = datetime.now().strftime("%Y%m%d")
+        path = LOG_DIR / f"nohit_{day}.csv"
+        cols = _ensure_nohit_schema(path)
+
+        ts = datetime.now().isoformat(timespec="seconds")
+        row = {
+            "timestamp": ts,
+            "question": question,
+            "device": extra.get("device", ""),
+            "location": extra.get("location", ""),
+            "network": extra.get("network", ""),
+            "error_text": extra.get("error_text", ""),
+            "impact": extra.get("impact", ""),
+            "channel": extra.get("channel", "web"),
+        }
+
+        try:
+            is_new = not path.exists()
+            with path.open("a", encoding="utf-8", newline="") as f:
+                w = csv.writer(f)
+                if is_new:
+                    w.writerow(cols)
+                w.writerow([row.get(c, "") for c in cols])
+            persist_log_now(path)
+        except Exception:
+            pass
+        return ts
+
+
+    def update_nohit_record(day: str, timestamp: str, question: str, extra: dict) -> bool:
+        """同じday/timestamp/question の行があれば更新。無ければ追記。"""
+        if not day or not timestamp or not question:
+            return False
+        path = LOG_DIR / f"nohit_{day}.csv"
+        cols = _ensure_nohit_schema(path)
+
+        try:
+            df_log = read_csv_flexible(path)
+            if df_log is None:
+                df_log = pd.DataFrame(columns=cols)
+        except Exception:
+            df_log = pd.DataFrame(columns=cols)
+
+        # 必須列を揃える
+        for c in cols:
+            if c not in df_log.columns:
+                df_log[c] = ""
+
+        # 既存行を更新（最初の一致）
+        mask = (df_log["timestamp"].astype(str) == str(timestamp)) & (df_log["question"].astype(str) == str(question))
+        idxs = df_log.index[mask].tolist()
+        if idxs:
+            i = idxs[0]
+            for k, v in (extra or {}).items():
+                if k in df_log.columns:
+                    df_log.at[i, k] = v
+            df_log.at[i, "channel"] = extra.get("channel", df_log.at[i, "channel"] or "web")
+        else:
+            # 無ければ追記
+            row = {c: "" for c in cols}
+            row["timestamp"] = timestamp
+            row["question"] = question
+            for k, v in (extra or {}).items():
+                if k in row:
+                    row[k] = v
+            if not row.get("channel"):
+                row["channel"] = "web"
+            df_log = pd.concat([df_log, pd.DataFrame([row])], ignore_index=True)
+
+        # UTF-8で書き戻す（Excel対応ならutf-8-sigでもOK）
+        try:
+            with path.open("w", encoding="utf-8", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(cols)
+                for _, r in df_log[cols].iterrows():
+                    w.writerow([str(r.get(c, "")) for c in cols])
+            persist_log_now(path)
+            return True
         except Exception:
             return False
 
-        body = req.get_data(as_text=True)
-        basestring = f"v0:{timestamp}:{body}"
-        my_signature = "v0=" + hmac.new(
-            SLACK_SIGNING_SECRET.encode("utf-8"),
-            basestring.encode("utf-8"),
-            hashlib.sha256,
-        ).hexdigest()
 
-        return hmac.compare_digest(my_signature, slack_signature)
-
-
-    def ask_helpdesk(question: str, user_name: str = "", channel_name: str = "") -> str:
-        payload: dict[str, Any] = {
-            "question": question,
-            "source": "slack",
-            "user_name": user_name,
-            "channel_name": channel_name,
-        }
-
-        r = requests.post(
-            HELP_DESK_ASK_URL,
-            json=payload,
-            timeout=REQUEST_TIMEOUT,
-        )
-        r.raise_for_status()
-
-        data = r.json()
-        answer = data.get("answer") or data.get("message") or "回答を取得できませんでした。"
-        return str(answer)
+    def seed_nohit_questions(n: int = 20) -> int:
+        """本番前のデモ用：情シス定番のnohit質問を今日のログに追加する。"""
+        seeds = [
+            "VPNにつながらない", "Outlookの送受信ができない", "Teamsにログインできない", "パスワードを忘れた",
+            "アカウントがロックされた", "共有フォルダにアクセスできない", "プリンタが印刷できない", "Wi-Fiが頻繁に切れる",
+            "PCが重い", "PCが固まる", "Excelが起動しない", "Excelがフリーズする", "OneDriveが同期しない",
+            "メール添付ファイルが開けない", "二段階認証が通らない", "カメラが映らない", "マイクが認識されない",
+            "ソフトのインストール申請方法が分からない", "Windows更新が終わらない", "画面が真っ黒になる",
+        ]
+        added = 0
+        for q in seeds[:n]:
+            ts = log_nohit(q, {"channel": "seed"})
+            if ts:
+                added += 1
+        return added
 
 
-    @app.get("/")
-    def health() -> tuple[str, int]:
-        return "ok", 200
 
-
-    @app.post("/slack/command")
-    def slack_command():
-        if not verify_slack_request(request):
-            return jsonify({"text": "署名検証に失敗しました。"}), 403
-
-        question = (request.form.get("text") or "").strip()
-        user_name = request.form.get("user_name", "")
-        channel_name = request.form.get("channel_name", "")
-
+    def log_interaction(question: str, matched: bool, best_score: float, category: str):
+        """全ての質問をログ化（削減時間の見える化用）: logs/interactions_YYYYMMDD.csv"""
         if not question:
-            return jsonify({
-                "response_type": "ephemeral",
-                "text": "質問文を入れてください。例: /helpdesk VPNがつながらない",
-            })
+            return
+        day = datetime.now().strftime("%Y%m%d")
+        path = LOG_DIR / f"interactions_{day}.csv"
+        try:
+            is_new = not path.exists()
+            with path.open("a", encoding="utf-8", newline="") as f:
+                w = csv.writer(f)
+                if is_new:
+                    w.writerow(["timestamp", "question", "matched", "best_score", "category"])
+                w.writerow([datetime.now().isoformat(timespec="seconds"), question, int(bool(matched)), float(best_score), category or ""])
+            persist_log_now(path)
+        except Exception:
+            pass
+
+
+
+
+    import json
+
+    def normalize_question(q: str) -> str:
+        q = (q or "").strip().lower()
+        q = re.sub(r"\s+", " ", q)
+        # 日本語も含めて記号類をざっくり除去
+        q = re.sub(r"[\u3000\s\t\r\n]+", " ", q)
+        q = re.sub(r"[!！?？。、,.，:：;；\-_=+~`'\"()（）\[\]{}<>＜＞/\\|@#%^&*]", "", q)
+        return q.strip()
+
+
+
+    def load_nohit_questions_from_logs(files, max_questions: int = 100) -> list[str]:
+        """nohit_*.csv から質問を収集（新しいログから優先）。文字コード/カラム揺れに強く読む。"""
+        questions: list[str] = []
+        seen: set[str] = set()
+        for p in files:
+            try:
+                _df = read_csv_flexible(Path(p))
+                if _df is None or len(_df) == 0:
+                    continue
+
+                qcol = pick_question_column(_df.columns)
+                if not qcol:
+                    continue
+
+                for q in _df[qcol].fillna("").astype(str).tolist():
+                    nq = normalize_question(q)
+                    if not nq:
+                        continue
+                    if nq in seen:
+                        continue
+                    seen.add(nq)
+                    questions.append(q.strip())
+                    if len(questions) >= max_questions:
+                        return questions
+            except Exception:
+                continue
+        return questions
+
+
+
+    def generate_faq_candidates(nohit_questions: list[str], n_items: int = 8) -> pd.DataFrame:
+        """該当なしログからFAQ案を生成してDataFrameで返す（category/question/answer）。"""
+        if not nohit_questions:
+            return pd.DataFrame(columns=["category", "question", "answer"])
+
+        # 入力が長すぎると落ちるので上限
+        max_in = min(len(nohit_questions), 80)
+        sample = nohit_questions[:max_in]
+        examples = "\n".join([f"- {q}" for q in sample])
+
+        prompt = f"""あなたは社内情シスのベテラン担当です。
+    以下は『FAQに該当なし』として蓄積された、社員からの問い合わせ例です。
+
+    【目的】
+    この問い合わせ例から、社内で使えるFAQ（Q&A）を {n_items} 件作成してください。
+
+    【要件】
+    - 日本語のみ
+    - 1件ごとに category / question / answer を作る
+    - answer は手順を箇条書きで（3〜7行）
+    - 個人情報や会社固有の秘密情報は作らない
+    - できるだけ汎用的（どの会社でも通用）に
+    - 出力は必ずJSONのみ（前後に説明文を入れない）
+    - コードブロック ``` は使わない
+
+    【出力JSON形式】
+    [
+      {{"category":"VPN", "question":"...", "answer":"- ...\n- ..."}},
+      ...
+    ]
+
+    【問い合わせ例】
+    {examples}
+    """
+
+        out = llm_chat(
+            [
+                {"role": "system", "content": "あなたは情シスのFAQ作成者です。出力はJSONのみ。"},
+                {"role": "user", "content": prompt},
+            ]
+        )
+
+        out_text = out if isinstance(out, str) else str(out)
+
+        json_text = extract_json_array(out_text) or out_text.strip()
 
         try:
-            answer = ask_helpdesk(question, user_name=user_name, channel_name=channel_name)
-            return jsonify({
-                "response_type": "in_channel",
-                "text": f"*質問:* {question}\n*回答:* {answer}",
-            })
-        except Exception as e:
-            return jsonify({
-                "response_type": "ephemeral",
-                "text": f"問い合わせAIへの接続に失敗しました: {e}",
-            }), 500
+            data = json.loads(json_text)
+            if not isinstance(data, list):
+                raise ValueError("JSON is not a list")
+        except Exception:
+            return pd.DataFrame(columns=["category", "question", "answer"])
+
+        rows = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            cat = str(item.get("category", "")).strip()
+            q = str(item.get("question", "")).strip()
+            a = str(item.get("answer", "")).strip()
+            if not q or not a:
+                continue
+            rows.append({"category": cat, "question": q, "answer": a})
+
+        return pd.DataFrame(rows, columns=["category", "question", "answer"])
+
+    def append_faq_csv(faq_path: Path, new_df: pd.DataFrame) -> int:
+        """faq.csv に追記。重複（question）をざっくり除外して追記件数を返す。"""
+        if new_df is None or len(new_df) == 0:
+            return 0
+
+        # 必須列を揃える
+        for col in ["question", "answer", "category"]:
+            if col not in new_df.columns:
+                new_df[col] = ""
+
+        new_df = new_df[["question", "answer", "category"]].copy()
+        new_df["question"] = new_df["question"].fillna("").astype(str).str.strip()
+        new_df["answer"] = new_df["answer"].fillna("").astype(str).str.strip()
+        new_df["category"] = new_df["category"].fillna("").astype(str).str.strip()
+        new_df = new_df[(new_df["question"] != "") & (new_df["answer"] != "")]
+        if len(new_df) == 0:
+            return 0
+
+        # 既存読み込み
+        if faq_path.exists():
+            try:
+                exist = normalize_faq_columns(read_csv_flexible(faq_path))
+            except Exception:
+                exist = pd.DataFrame(columns=["question", "answer", "category"])
+        else:
+            exist = pd.DataFrame(columns=["question", "answer", "category"])
+
+        exist_q = set(normalize_question(x) for x in exist.get("question", pd.Series(dtype=str)).fillna("").astype(str).tolist())
+
+        rows = []
+        for _, r in new_df.iterrows():
+            nq = normalize_question(str(r.get("question", "")))
+            if not nq:
+                continue
+            if nq in exist_q:
+                continue
+            exist_q.add(nq)
+            rows.append([r["question"], r["answer"], r.get("category", "")])
+
+        if not rows:
+            return 0
+
+        is_new = not faq_path.exists()
+        with faq_path.open("a", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            if is_new:
+                w.writerow(["question", "answer", "category"])
+            w.writerows(rows)
+
+        persist_faq_now()
+        return len(rows)
 
 
-    @app.post("/slack/events")
-    def slack_events():
-        if not verify_slack_request(request):
-            return jsonify({"error": "invalid signature"}), 403
+    # ======================
+    # 管理者ログイン
+    # ======================
+    if "is_admin" not in st.session_state:
+        st.session_state.is_admin = False
 
-        data = request.get_json(silent=True) or {}
-
-        if data.get("type") == "url_verification":
-            return jsonify({"challenge": data.get("challenge", "")})
-
-        event = data.get("event", {})
-        if event.get("type") == "app_mention":
-            text = event.get("text", "")
-            return jsonify({"ok": True, "note": f"mention received: {text}"})
-
-        return jsonify({"ok": True})
-
-
-    if __name__ == "__main__":
-        port = int(os.getenv("PORT", "3000"))
-        app.run(host="0.0.0.0", port=port)
-    """).strip() + "\n"
-
-    requirements_txt = textwrap.dedent("""    flask==3.0.3
-    requests==2.32.3
-    gunicorn==22.0.0
-    """).strip() + "\n"
-
-    render_yaml = textwrap.dedent("""    services:
-      - type: web
-        name: slack-helpdesk-bot
-        env: python
-        plan: free
-        buildCommand: pip install -r requirements.txt
-        startCommand: gunicorn slack_bot:app
-        autoDeploy: true
-    """).strip() + "\n"
-
-    env_example = textwrap.dedent(f"""    HELPDESK_ASK_URL={render_base}/ask
-    SLACK_SIGNING_SECRET=your_signing_secret
-    REQUEST_TIMEOUT=30
-    """).strip() + "\n"
-
-    readme_md = textwrap.dedent("""    # Slack Helpdesk Bot 完全版
-
-    このZIPは、既存の Streamlit アプリ本体とは別サービスとして Render に配置する想定です。
-
-    ## 含まれるファイル
-    - `slack_bot.py` : Slack Slash Command / Events 受信用 Flask アプリ
-    - `requirements.txt` : 必要ライブラリ
-    - `render.yaml` : Render デプロイ設定例
-    - `.env.example` : 環境変数の雛形
-
-    ## Slack 側設定
-    1. Slack API で App を作成
-    2. Slash Commands に `/helpdesk` を追加
-    3. Request URL に `https://あなたのRenderURL/slack/command` を設定
-    4. Event Subscriptions を使う場合は `https://あなたのRenderURL/slack/events` を設定
-    5. Signing Secret を Render の環境変数 `SLACK_SIGNING_SECRET` に設定
-
-    ## Render 側設定
-    1. このZIPを GitHub リポジトリに配置
-    2. Render で New + → Web Service
-    3. Build Command: `pip install -r requirements.txt`
-    4. Start Command: `gunicorn slack_bot:app`
-    5. `HELPDESK_ASK_URL` に既存問い合わせAIの API URL を設定
-
-    ## 重要
-    既存の Streamlit アプリに `/ask` API が無い場合は、別途 API 追加が必要です。
-    まずは Slack Bot コード一式を先に配布し、後から API 側を接続しても構いません。
-    """).strip() + "\n"
-
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("slack_bot.py", slack_bot_py)
-        zf.writestr("requirements.txt", requirements_txt)
-        zf.writestr("render.yaml", render_yaml)
-        zf.writestr(".env.example", env_example)
-        zf.writestr("README.md", readme_md)
-
-    buf.seek(0)
-    return buf.getvalue()
-
-
-# ======================
-# 管理者ログイン
-# ======================
-if "is_admin" not in st.session_state:
-    st.session_state.is_admin = False
-
-with st.sidebar:
-    st.markdown("## 🛠 管理者")
-    if not st.session_state.is_admin:
-        pwd = st.text_input("管理者パスワード", type="password")
-        if st.button("ログイン"):
-            if check_password(pwd):
-                st.session_state.is_admin = True
-                st.success("ログイン成功")
+    with st.sidebar:
+        st.markdown("## 🛠 管理者")
+        if not st.session_state.is_admin:
+            pwd = st.text_input("管理者パスワード", type="password")
+            if st.button("ログイン"):
+                if check_password(pwd):
+                    st.session_state.is_admin = True
+                    st.success("ログイン成功")
+                    st.rerun()
+                else:
+                    st.error("パスワードが違います")
+        else:
+            st.success("ログイン中")
+            if st.button("ログアウト"):
+                st.session_state.is_admin = False
                 st.rerun()
-            else:
-                st.error("パスワードが違います")
-    else:
-        st.success("ログイン中")
-        if st.button("ログアウト"):
-            st.session_state.is_admin = False
-            st.rerun()
 
-        with st.expander("💾 永続化ステータス（v13）", expanded=True):
-            st.caption(persistence_status_text())
-            st.code("""
-# Streamlit Cloud secrets.toml の例
-PERSIST_MODE = "github"
-GITHUB_REPO = "owner/repo"
-GITHUB_BRANCH = "main"
-GITHUB_BASE_PATH = "streamlit_data"
-GITHUB_TOKEN = "ghp_xxx"
-""".strip(), language="toml")
-            col_sync1, col_sync2 = st.columns(2)
-            with col_sync1:
-                if st.button("📥 GitHubからFAQ再読込", width="stretch", disabled=not _github_persistence_enabled()):
-                    ok = github_download_file("faq.csv", FAQ_PATH)
-                    if ok:
-                        try:
-                            load_faq_index.clear()
-                        except Exception:
-                            pass
-                        st.success("GitHub上の faq.csv を再読込しました。")
-                        st.rerun()
-                    else:
-                        st.warning("GitHubからFAQを取得できませんでした。設定を確認してください。")
-            with col_sync2:
-                if st.button("📤 FAQをGitHubへ保存", width="stretch", disabled=not _github_persistence_enabled()):
-                    ok = persist_faq_now()
-                    if ok:
-                        st.success("faq.csv を GitHub に保存しました。")
-                    else:
-                        st.warning("GitHubへの保存に失敗しました。設定を確認してください。")
-
-        with st.expander("🎯 検索精度設定（v14）", expanded=True):
-            st.caption("しきい値を管理者が調整できます。高いほど厳密一致寄り、低いほど似た質問も拾いやすくなります。")
-            st.info(f"現在値：自動回答 {current_search_threshold():.2f} / 候補表示 {current_suggest_threshold():.2f}")
-
-            admin_answer_threshold = st.slider(
-                "自動回答しきい値",
-                min_value=0.10,
-                max_value=1.20,
-                value=float(st.session_state.get("search_threshold", DEFAULT_SEARCH_THRESHOLD)),
-                step=0.01,
-                key="admin_answer_threshold_slider",
-                help="この値以上なら通常回答します。",
-            )
-            max_suggest_value = max(0.05, round(admin_answer_threshold - 0.05, 2))
-            suggest_default = min(float(st.session_state.get("suggest_threshold", DEFAULT_SUGGEST_THRESHOLD)), max_suggest_value)
-            admin_suggest_threshold = st.slider(
-                "候補表示しきい値",
-                min_value=0.05,
-                max_value=max_suggest_value,
-                value=suggest_default,
-                step=0.01,
-                key="admin_suggest_threshold_slider",
-                help="この値以上かつ自動回答しきい値未満なら『近いFAQ候補』として表示します。",
-            )
-
-            st.markdown("""- 自動回答以上: 通常回答
-- 候補表示以上: 近いFAQ候補を表示
-- 候補表示未満: 該当なしとして追加情報フォームへ""")
-
-            col_th1, col_th2 = st.columns(2)
-            with col_th1:
-                if st.button("💾 検索設定を保存", width="stretch"):
-                    ok, settings = save_search_settings(admin_answer_threshold, admin_suggest_threshold)
-                    st.session_state.search_threshold = settings["answer_threshold"]
-                    st.session_state.suggest_threshold = settings["suggest_threshold"]
-                    if ok:
-                        st.success(f"保存しました。自動回答={settings['answer_threshold']:.2f} / 候補表示={settings['suggest_threshold']:.2f}")
-                    else:
-                        st.warning("ローカル保存またはGitHub保存に失敗した可能性があります。設定値自体はこのセッションに反映しています。")
-                    st.rerun()
-            with col_th2:
-                if st.button("↩ 初期値に戻す", width="stretch"):
-                    ok, settings = save_search_settings(DEFAULT_SEARCH_THRESHOLD, DEFAULT_SUGGEST_THRESHOLD)
-                    st.session_state.search_threshold = settings["answer_threshold"]
-                    st.session_state.suggest_threshold = settings["suggest_threshold"]
-                    if ok:
-                        st.success("検索設定を初期値に戻しました。")
-                    else:
-                        st.warning("初期値に戻しましたが、外部保存に失敗した可能性があります。")
-                    st.rerun()
-
-        with st.expander("📂 FAQ管理（Excelダウンロード / アップロード）", expanded=True):
-            st.caption("管理者は FAQ を Excel(.xlsx) で一括入出力できます。500件以上でもまとめて置き換え可能です。推奨列名は『質問 / 回答 / カテゴリ』です。")
-
-            if st.session_state.get("faq_replace_result"):
-                st.success(st.session_state["faq_replace_result"])
-                st.session_state.pop("faq_replace_result", None)
-
-            current_faq_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
-            excel_bytes = faq_df_to_excel_bytes(current_faq_df)
-            st.download_button(
-                "⬇ 現在のFAQをExcelでダウンロード",
-                data=excel_bytes,
-                file_name="faq.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                width="stretch",
-            )
-            st.caption(f"現在登録中のFAQ件数: {len(current_faq_df)} 件")
-
-            uploaded_faq = st.file_uploader(
-                "FAQファイルをアップロード",
-                type=["xlsx", "xls", "csv"],
-                key="faq_excel_uploader_admin",
-                help="Excel(.xlsx) 推奨。質問 / 回答 / カテゴリ、または question / answer / category に対応。",
-            )
-
-            if uploaded_faq is not None:
-                try:
-                    incoming_df = read_faq_uploaded_file(uploaded_faq.name, uploaded_faq.getvalue())
-                    st.success(f"アップロード確認OK: {len(incoming_df)} 件のFAQを検出しました。")
-                    preview_df = incoming_df.rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"})
-                    st.dataframe(preview_df.head(20), width="stretch", height=420)
-                    if len(incoming_df) > 20:
-                        st.caption(f"先頭20件を表示中です。保存対象は全 {len(incoming_df)} 件です。")
-
-                    if st.button("📥 この内容でFAQを反映する", type="primary", key="replace_faq_excel_admin", width="stretch"):
-                        with st.spinner("FAQを保存しています..."):
-                            saved = save_faq_csv_full(FAQ_PATH, incoming_df)
-                            reloaded_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
-
+            with st.expander("💾 永続化ステータス（v13）", expanded=True):
+                st.caption(persistence_status_text())
+                st.code("""
+    # Streamlit Cloud secrets.toml の例
+    PERSIST_MODE = "github"
+    GITHUB_REPO = "owner/repo"
+    GITHUB_BRANCH = "main"
+    GITHUB_BASE_PATH = "streamlit_data"
+    GITHUB_TOKEN = "ghp_xxx"
+    """.strip(), language="toml")
+                col_sync1, col_sync2 = st.columns(2)
+                with col_sync1:
+                    if st.button("📥 GitHubからFAQ再読込", width="stretch", disabled=not _github_persistence_enabled()):
+                        ok = github_download_file("faq.csv", FAQ_PATH)
+                        if ok:
                             try:
                                 load_faq_index.clear()
                             except Exception:
                                 pass
-                            try:
-                                st.cache_resource.clear()
-                            except Exception:
-                                pass
-                            try:
-                                st.cache_data.clear()
-                            except Exception:
-                                pass
-
-                            if int(saved) != int(len(reloaded_df)):
-                                st.error(f"保存件数と再読込件数が一致しません。保存: {saved} 件 / 再読込: {len(reloaded_df)} 件")
-                            else:
-                                msg = f"FAQを {saved} 件反映しました。現在登録中のFAQ件数も {len(reloaded_df)} 件です。"
-                                st.session_state["faq_replace_result"] = msg
-                                st.success(msg)
-                                st.info("FAQの反映が完了しました。再読み込みは不要です。GitHub永続化ONなら自動で外部保存されます。")
-                                current_faq_df = reloaded_df
-                except Exception as e:
-                    st.error(f"FAQファイルの取込でエラー: {e}")
-
-        # ===== FAQ自動生成（該当なしログ → FAQ案）=====
-        
-        # =========================
-        # 管理者向け資料（PDF）ダウンロード
-        # =========================
-        with st.expander("📘 管理者向け資料（PDF）", expanded=False):
-            if not REPORTLAB_AVAILABLE:
-                st.warning("PDF出力には reportlab が必要です。requirements.txt に reportlab を追加してください。")
-            else:
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    ops_pdf = generate_ops_manual_pdf()
-                    st.download_button(
-                        "📄 操作説明書PDFをダウンロード",
-                        data=ops_pdf,
-                        file_name="操作説明書_情シス問い合わせAI.pdf",
-                        mime="application/pdf",
-                        width="stretch",
-                    )
-                with col_b:
-                    proposal_pdf = generate_sales_proposal_pdf()
-                    st.download_button(
-                        "📑 提案資料PDFをダウンロード",
-                        data=proposal_pdf,
-                        file_name="提案資料_情シス問い合わせAI.pdf",
-                        mime="application/pdf",
-                        width="stretch",
-                    )
-                st.caption("※ どちらもアプリの現状に合わせて自動生成されます（必要に応じて文面はカスタマイズ可能）。")
-
-        with st.expander("🤖 Slack Bot 完全版コード", expanded=False):
-            st.caption("既存機能はそのままに、Slack連携用の別サービス一式をZIPでダウンロードできます。")
-            st.code(
-                "Render URL（Slash Command）\n"
-                "https://あなたのRenderURL/slack/command\n\n"
-                "Render URL（Event Subscriptions）\n"
-                "https://あなたのRenderURL/slack/events",
-                language="text",
-            )
-            st.download_button(
-                "⬇️ Slack Bot 一式ZIPをダウンロード",
-                data=generate_slack_bot_zip_bytes(),
-                file_name="slack_bot_complete.zip",
-                mime="application/zip",
-                width="stretch",
-            )
-            st.caption("ZIPには slack_bot.py / requirements.txt / render.yaml / .env.example / README.md を同梱しています。")
-
-        st.markdown("---")
-        with st.expander("🧠 FAQ自動生成（該当なしログ → FAQ案）", expanded=False):
-            st.caption("『該当なし』ログからFAQを自動生成し、faq.csvへ追記できます。")
-
-            log_files = list_log_files()
-            if not log_files:
-                st.info("まだ nohit_*.csv がありません。まず質問して『該当なし』を発生させてください。")
-            else:
-                labels = [f.name for f in log_files[:15]]
-                pick = st.selectbox("参照するログファイル", labels, index=0)
-                picked_path = next((p for p in log_files if p.name == pick), log_files[0])
-
-                max_q = st.slider("生成に使う質問数（重複除外後）", 10, 200, 60, step=10)
-                n_items = st.slider("生成するFAQ件数", 3, 20, 8)
-
-                col_seed1, col_seed2 = st.columns([2, 3])
-                with col_seed1:
-                    if st.button("🧪 デモ用に定番質問を追加（20件）"):
-                        added = seed_nohit_questions(20)
-                        st.success(f"nohitログに {added} 件追加しました。")
-                        st.rerun()
-                with col_seed2:
-                    st.caption("※ 本番前にFAQ生成を試すためのテストデータです（channel=seedで記録）。")
-
-                if st.button("🤖 FAQ案を自動生成", type="primary"):
-                    with st.spinner("FAQ案を生成中..."):
-                        qs = load_nohit_questions_from_logs([picked_path], max_questions=max_q)
-
-                        # 生成前に「有効質問数」を可視化（原因切り分け）
-                        st.info(f"ログから抽出できた有効質問数（重複除外後）：{len(qs)} 件")
-                        if len(qs) < 5:
-                            st.session_state.generated_faq_df = pd.DataFrame(columns=["category", "question", "answer"])
-                            st.warning("有効な質問が少なすぎてFAQを生成できません。ログのCSV形式（カラム名/文字コード/区切り）を確認してください。")
+                            st.success("GitHub上の faq.csv を再読込しました。")
+                            st.rerun()
                         else:
-                            try:
-                                gen_df = generate_faq_candidates(qs, n_items=n_items)
-                            except Exception:
-                                gen_df = pd.DataFrame(columns=["category", "question", "answer"])
-                            st.session_state.generated_faq_df = gen_df
+                            st.warning("GitHubからFAQを取得できませんでした。設定を確認してください。")
+                with col_sync2:
+                    if st.button("📤 FAQをGitHubへ保存", width="stretch", disabled=not _github_persistence_enabled()):
+                        ok = persist_faq_now()
+                        if ok:
+                            st.success("faq.csv を GitHub に保存しました。")
+                        else:
+                            st.warning("GitHubへの保存に失敗しました。設定を確認してください。")
 
-                gen_df = st.session_state.get("generated_faq_df")
-                if isinstance(gen_df, pd.DataFrame) and len(gen_df) > 0:
-                    st.markdown("### ✅ 生成結果（編集して保存できます）")
-                    edited = st.data_editor(
-                        gen_df,
-                        num_rows="dynamic",
-                        width="stretch",
-                        key="faq_editor",
-                    )
+            with st.expander("🎯 検索精度設定（v14）", expanded=True):
+                st.caption("しきい値を管理者が調整できます。高いほど厳密一致寄り、低いほど似た質問も拾いやすくなります。")
+                st.info(f"現在値：自動回答 {current_search_threshold():.2f} / 候補表示 {current_suggest_threshold():.2f}")
 
+                admin_answer_threshold = st.slider(
+                    "自動回答しきい値",
+                    min_value=0.10,
+                    max_value=1.20,
+                    value=float(st.session_state.get("search_threshold", DEFAULT_SEARCH_THRESHOLD)),
+                    step=0.01,
+                    key="admin_answer_threshold_slider",
+                    help="この値以上なら通常回答します。",
+                )
+                max_suggest_value = max(0.05, round(admin_answer_threshold - 0.05, 2))
+                suggest_default = min(float(st.session_state.get("suggest_threshold", DEFAULT_SUGGEST_THRESHOLD)), max_suggest_value)
+                admin_suggest_threshold = st.slider(
+                    "候補表示しきい値",
+                    min_value=0.05,
+                    max_value=max_suggest_value,
+                    value=suggest_default,
+                    step=0.01,
+                    key="admin_suggest_threshold_slider",
+                    help="この値以上かつ自動回答しきい値未満なら『近いFAQ候補』として表示します。",
+                )
+
+                st.markdown("""- 自動回答以上: 通常回答
+    - 候補表示以上: 近いFAQ候補を表示
+    - 候補表示未満: 該当なしとして追加情報フォームへ""")
+
+                col_th1, col_th2 = st.columns(2)
+                with col_th1:
+                    if st.button("💾 検索設定を保存", width="stretch"):
+                        ok, settings = save_search_settings(admin_answer_threshold, admin_suggest_threshold)
+                        st.session_state.search_threshold = settings["answer_threshold"]
+                        st.session_state.suggest_threshold = settings["suggest_threshold"]
+                        if ok:
+                            st.success(f"保存しました。自動回答={settings['answer_threshold']:.2f} / 候補表示={settings['suggest_threshold']:.2f}")
+                        else:
+                            st.warning("ローカル保存またはGitHub保存に失敗した可能性があります。設定値自体はこのセッションに反映しています。")
+                        st.rerun()
+                with col_th2:
+                    if st.button("↩ 初期値に戻す", width="stretch"):
+                        ok, settings = save_search_settings(DEFAULT_SEARCH_THRESHOLD, DEFAULT_SUGGEST_THRESHOLD)
+                        st.session_state.search_threshold = settings["answer_threshold"]
+                        st.session_state.suggest_threshold = settings["suggest_threshold"]
+                        if ok:
+                            st.success("検索設定を初期値に戻しました。")
+                        else:
+                            st.warning("初期値に戻しましたが、外部保存に失敗した可能性があります。")
+                        st.rerun()
+
+            with st.expander("📂 FAQ管理（Excelダウンロード / アップロード）", expanded=True):
+                st.caption("管理者は FAQ を Excel(.xlsx) で一括入出力できます。500件以上でもまとめて置き換え可能です。推奨列名は『質問 / 回答 / カテゴリ』です。")
+
+                if st.session_state.get("faq_replace_result"):
+                    st.success(st.session_state["faq_replace_result"])
+                    st.session_state.pop("faq_replace_result", None)
+
+                current_faq_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
+                excel_bytes = faq_df_to_excel_bytes(current_faq_df)
+                st.download_button(
+                    "⬇ 現在のFAQをExcelでダウンロード",
+                    data=excel_bytes,
+                    file_name="faq.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    width="stretch",
+                )
+                st.caption(f"現在登録中のFAQ件数: {len(current_faq_df)} 件")
+
+                uploaded_faq = st.file_uploader(
+                    "FAQファイルをアップロード",
+                    type=["xlsx", "xls", "csv"],
+                    key="faq_excel_uploader_admin",
+                    help="Excel(.xlsx) 推奨。質問 / 回答 / カテゴリ、または question / answer / category に対応。",
+                )
+
+                if uploaded_faq is not None:
+                    try:
+                        incoming_df = read_faq_uploaded_file(uploaded_faq.name, uploaded_faq.getvalue())
+                        st.success(f"アップロード確認OK: {len(incoming_df)} 件のFAQを検出しました。")
+                        preview_df = incoming_df.rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"})
+                        st.dataframe(preview_df.head(20), width="stretch", height=420)
+                        if len(incoming_df) > 20:
+                            st.caption(f"先頭20件を表示中です。保存対象は全 {len(incoming_df)} 件です。")
+
+                        if st.button("📥 この内容でFAQを反映する", type="primary", key="replace_faq_excel_admin", width="stretch"):
+                            with st.spinner("FAQを保存しています..."):
+                                saved = save_faq_csv_full(FAQ_PATH, incoming_df)
+                                reloaded_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
+
+                                try:
+                                    load_faq_index.clear()
+                                except Exception:
+                                    pass
+                                try:
+                                    st.cache_resource.clear()
+                                except Exception:
+                                    pass
+                                try:
+                                    st.cache_data.clear()
+                                except Exception:
+                                    pass
+
+                                if int(saved) != int(len(reloaded_df)):
+                                    st.error(f"保存件数と再読込件数が一致しません。保存: {saved} 件 / 再読込: {len(reloaded_df)} 件")
+                                else:
+                                    msg = f"FAQを {saved} 件反映しました。現在登録中のFAQ件数も {len(reloaded_df)} 件です。"
+                                    st.session_state["faq_replace_result"] = msg
+                                    st.success(msg)
+                                    st.info("FAQの反映が完了しました。再読み込みは不要です。GitHub永続化ONなら自動で外部保存されます。")
+                                    current_faq_df = reloaded_df
+                    except Exception as e:
+                        st.error(f"FAQファイルの取込でエラー: {e}")
+
+            # ===== FAQ自動生成（該当なしログ → FAQ案）=====
+        
+            # =========================
+            # 管理者向け資料（PDF）ダウンロード
+            # =========================
+            with st.expander("📘 管理者向け資料（PDF）", expanded=False):
+                if not REPORTLAB_AVAILABLE:
+                    st.warning("PDF出力には reportlab が必要です。requirements.txt に reportlab を追加してください。")
+                else:
                     col_a, col_b = st.columns(2)
                     with col_a:
-                        if st.button("💾 faq.csv に追記"):
-                            added = append_faq_csv(FAQ_PATH, edited.rename(columns={"category": "category"}))
-                            if added > 0:
-                                st.success(f"faq.csv に {added} 件追記しました。")
-                                # 反映のため再読み込み
+                        ops_pdf = generate_ops_manual_pdf()
+                        st.download_button(
+                            "📄 操作説明書PDFをダウンロード",
+                            data=ops_pdf,
+                            file_name="操作説明書_情シス問い合わせAI.pdf",
+                            mime="application/pdf",
+                            width="stretch",
+                        )
+                    with col_b:
+                        proposal_pdf = generate_sales_proposal_pdf()
+                        st.download_button(
+                            "📑 提案資料PDFをダウンロード",
+                            data=proposal_pdf,
+                            file_name="提案資料_情シス問い合わせAI.pdf",
+                            mime="application/pdf",
+                            width="stretch",
+                        )
+                    st.caption("※ どちらもアプリの現状に合わせて自動生成されます（必要に応じて文面はカスタマイズ可能）。")
+
+            st.markdown("---")
+            with st.expander("🧠 FAQ自動生成（該当なしログ → FAQ案）", expanded=False):
+                st.caption("『該当なし』ログからFAQを自動生成し、faq.csvへ追記できます。")
+
+                log_files = list_log_files()
+                if not log_files:
+                    st.info("まだ nohit_*.csv がありません。まず質問して『該当なし』を発生させてください。")
+                else:
+                    labels = [f.name for f in log_files[:15]]
+                    pick = st.selectbox("参照するログファイル", labels, index=0)
+                    picked_path = next((p for p in log_files if p.name == pick), log_files[0])
+
+                    max_q = st.slider("生成に使う質問数（重複除外後）", 10, 200, 60, step=10)
+                    n_items = st.slider("生成するFAQ件数", 3, 20, 8)
+
+                    col_seed1, col_seed2 = st.columns([2, 3])
+                    with col_seed1:
+                        if st.button("🧪 デモ用に定番質問を追加（20件）"):
+                            added = seed_nohit_questions(20)
+                            st.success(f"nohitログに {added} 件追加しました。")
+                            st.rerun()
+                    with col_seed2:
+                        st.caption("※ 本番前にFAQ生成を試すためのテストデータです（channel=seedで記録）。")
+
+                    if st.button("🤖 FAQ案を自動生成", type="primary"):
+                        with st.spinner("FAQ案を生成中..."):
+                            qs = load_nohit_questions_from_logs([picked_path], max_questions=max_q)
+
+                            # 生成前に「有効質問数」を可視化（原因切り分け）
+                            st.info(f"ログから抽出できた有効質問数（重複除外後）：{len(qs)} 件")
+                            if len(qs) < 5:
+                                st.session_state.generated_faq_df = pd.DataFrame(columns=["category", "question", "answer"])
+                                st.warning("有効な質問が少なすぎてFAQを生成できません。ログのCSV形式（カラム名/文字コード/区切り）を確認してください。")
+                            else:
+                                try:
+                                    gen_df = generate_faq_candidates(qs, n_items=n_items)
+                                except Exception:
+                                    gen_df = pd.DataFrame(columns=["category", "question", "answer"])
+                                st.session_state.generated_faq_df = gen_df
+
+                    gen_df = st.session_state.get("generated_faq_df")
+                    if isinstance(gen_df, pd.DataFrame) and len(gen_df) > 0:
+                        st.markdown("### ✅ 生成結果（編集して保存できます）")
+                        edited = st.data_editor(
+                            gen_df,
+                            num_rows="dynamic",
+                            width="stretch",
+                            key="faq_editor",
+                        )
+
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            if st.button("💾 faq.csv に追記"):
+                                added = append_faq_csv(FAQ_PATH, edited.rename(columns={"category": "category"}))
+                                if added > 0:
+                                    st.success(f"faq.csv に {added} 件追記しました。")
+                                    # 反映のため再読み込み
+                                    st.session_state.generated_faq_df = pd.DataFrame()
+                                    st.rerun()
+                                else:
+                                    st.warning("追記できる新規FAQがありません（重複/空欄の可能性）。")
+
+                        with col_b:
+                            if st.button("🧹 生成結果をクリア"):
                                 st.session_state.generated_faq_df = pd.DataFrame()
                                 st.rerun()
-                            else:
-                                st.warning("追記できる新規FAQがありません（重複/空欄の可能性）。")
+                    elif isinstance(gen_df, pd.DataFrame) and len(gen_df) == 0 and st.session_state.get("generated_faq_df") is not None:
+                        st.warning("FAQ案が生成できませんでした。ログの内容が少ないか、出力形式が崩れています。")
+    # ======================
+    # セッション初期化
+    # ======================
+    if "used_hits" not in st.session_state:
+        st.session_state.used_hits = []
 
-                    with col_b:
-                        if st.button("🧹 生成結果をクリア"):
-                            st.session_state.generated_faq_df = pd.DataFrame()
-                            st.rerun()
-                elif isinstance(gen_df, pd.DataFrame) and len(gen_df) == 0 and st.session_state.get("generated_faq_df") is not None:
-                    st.warning("FAQ案が生成できませんでした。ログの内容が少ないか、出力形式が崩れています。")
-# ======================
-# セッション初期化
-# ======================
-if "used_hits" not in st.session_state:
-    st.session_state.used_hits = []
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+    if "pending_q" not in st.session_state:
+        st.session_state.pending_q = ""
 
-if "pending_q" not in st.session_state:
-    st.session_state.pending_q = ""
+    if "search_threshold" not in st.session_state:
+        st.session_state.search_threshold = float(SEARCH_SETTINGS.get("answer_threshold", DEFAULT_SEARCH_THRESHOLD))
 
-if "search_threshold" not in st.session_state:
-    st.session_state.search_threshold = float(SEARCH_SETTINGS.get("answer_threshold", DEFAULT_SEARCH_THRESHOLD))
-
-if "suggest_threshold" not in st.session_state:
-    st.session_state.suggest_threshold = float(SEARCH_SETTINGS.get("suggest_threshold", DEFAULT_SUGGEST_THRESHOLD))
+    if "suggest_threshold" not in st.session_state:
+        st.session_state.suggest_threshold = float(SEARCH_SETTINGS.get("suggest_threshold", DEFAULT_SUGGEST_THRESHOLD))
 
 
-# ======================
-# チャット履歴表示
-# ======================
-for m in st.session_state.messages:
-    with st.chat_message(m.get("role", "assistant")):
-        st.markdown(m.get("content", ""))
+    # ======================
+    # チャット履歴表示
+    # ======================
+    for m in st.session_state.messages:
+        with st.chat_message(m.get("role", "assistant")):
+            st.markdown(m.get("content", ""))
 
 
-# ======================
-# 「参照FAQ」表示
-# ======================
-with st.expander("参照したFAQ（根拠）を見る"):
-    used_hits = st.session_state.used_hits
-    if not used_hits:
-        st.markdown('<div class="refbox">該当なし（スコアが低いため問い合わせ誘導）</div>', unsafe_allow_html=True)
-    else:
-        for i, (row, score) in enumerate(used_hits, 1):
-            render_match_bar(score)
-            q_html = str(row.get("question", "")).replace("\n", "<br>")
-            a_html = str(row.get("answer", "")).replace("\n", "<br>")
-            cat = str(row.get("category", ""))
-            match_pct = int(max(0.0, min(1.0, float(score))) * 100)
-            st.markdown(
-                f"""
-<div class="refbox">
-<b>FAQ{i}</b>（一致度：{match_pct}% / category={cat}）<br>
-<b>Q:</b> {q_html}<br>
-<b>A:</b> {a_html}
-</div>
-""",
-                unsafe_allow_html=True,
-            )
-
-
-# ======================
-# おすすめ質問ボタン（3つ）
-# ======================
-st.markdown("### 💡 おすすめ質問（クリックで送信）")
-c1, c2, c3 = st.columns(3)
-
-if c1.button("🔐 パスワードを忘れた"):
-    st.session_state.pending_q = "パスワードを忘れました"
-    st.rerun()
-
-if c2.button("🧩 アカウントがロックされた"):
-    st.session_state.pending_q = "アカウントがロックされました"
-    st.rerun()
-
-if c3.button("🌐 VPNに接続できない"):
-    st.session_state.pending_q = "VPNに接続できません"
-    st.rerun()
-
-
-
-def build_suggest_answer(user_q: str, hits) -> str:
-    if not hits:
-        return nohit_template()
-    row, score = hits[0]
-    q = str(row.get("question", "")).strip()
-    a = str(row.get("answer", "")).strip()
-    cat = str(row.get("category", "")).strip()
-    parts = [
-        "入力内容に近いFAQ候補が見つかりました。完全一致ではありませんが、まずはこちらを確認してください。",
-    ]
-    if q:
-        parts.append(f"【候補FAQ】{q}")
-    if cat:
-        parts.append(f"【カテゴリ】{cat}")
-    if a:
-        parts.append(f"【回答】\n{a}")
-    parts.append("解決しない場合は、下の『追加情報を記録』から状況を補足してください。")
-    return "\n\n".join(parts)
-
-
-def render_nohit_extra_form(info: dict | None = None, expanded: bool = True):
-    """『該当なし』直後に表示する追加情報フォーム（端末/利用場所/ネットワーク等）。"""
-    info = info or (st.session_state.get("pending_nohit", {}) or {})
-    with st.expander("📝 追加情報を記録（任意）", expanded=expanded):
-        st.caption("該当なしのときだけ、状況を少しだけ補足するとFAQが育ちやすくなります。")
-        with st.form("nohit_extra_form", clear_on_submit=False):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                device = st.selectbox(
-                    "端末",
-                    ["", "Windows", "Mac", "iPhone/iPad", "Android", "不明"],
-                    index=0,
-                    key="nohit_device",
-                )
-            with c2:
-                location = st.selectbox(
-                    "利用場所",
-                    ["", "社内", "社外", "不明"],
-                    index=0,
-                    key="nohit_location",
-                )
-            with c3:
-                network = st.selectbox(
-                    "ネットワーク",
-                    ["", "Wi-Fi", "有線", "VPN", "モバイル回線", "不明"],
-                    index=0,
-                    key="nohit_network",
-                )
-
-            impact = st.selectbox(
-                "影響範囲",
-                ["", "自分のみ", "他の人も", "不明"],
-                index=0,
-                key="nohit_impact",
-            )
-            error_text = st.text_area(
-                "エラー内容（任意）",
-                placeholder="例：0x80190001 / '資格情報が無効です' など",
-                key="nohit_error_text",
-            )
-
-            submitted = st.form_submit_button("✅ この内容で記録")
-            if submitted:
-                ok = update_nohit_record(
-                    day=str(info.get("day", "")),
-                    timestamp=str(info.get("timestamp", "")),
-                    question=str(info.get("question", "")),
-                    extra={
-                        "device": device,
-                        "location": location,
-                        "network": network,
-                        "impact": impact,
-                        "error_text": error_text,
-                        "channel": "web",
-                    },
-                )
-                if ok:
-                    st.success("追加情報をログに保存しました。ありがとうございます！")
-                    # 次回以降はフォームを閉じる（保持は消す）
-                    st.session_state["pending_nohit_active"] = False
-                else:
-                    st.warning("保存に失敗しました（もう一度お試しください）。")
-
-
-# ======================
-# 入力 → 検索 → 回答
-# ======================
-# ===== 該当なし（nohit）の追加情報フォーム =====
-if st.session_state.get("pending_nohit_active"):
-    render_nohit_extra_form(expanded=True)
-
-# 先に chat_input を描画（画面下に固定されます）
-chat_typed = st.chat_input("質問を入力してください")
-
-# 入力が無いときは pending_q（おすすめボタン等）を使う
-user_q = (chat_typed or st.session_state.get("pending_q", ""))
-
-# 「おすすめ質問」など pending_q から来たかどうか
-used_pending = (not chat_typed) and bool(st.session_state.get("pending_q", ""))
-
-if user_q:
-    st.session_state.pending_q = ""
-
-    st.session_state.messages.append({"role": "user", "content": user_q})
-    with st.chat_message("user"):
-        st.markdown(user_q)
-
-    hits = retrieve_faq(user_q)
-    best_score = hits[0][1] if hits else 0.0
-
-    if hits:
-        render_match_bar(best_score)
-
-    answer_threshold = current_search_threshold()
-    suggest_threshold = current_suggest_threshold()
-
-    if best_score < suggest_threshold:
-        used_hits = []
-        answer = nohit_template()
-        ts_nohit = log_nohit(user_q)
-        st.session_state["last_nohit"] = {"day": datetime.now().strftime("%Y%m%d"), "timestamp": ts_nohit, "question": user_q}
-        was_nohit = True
-        was_suggest = False
-    elif best_score < answer_threshold:
-        used_hits = hits[:1]
-        answer = build_suggest_answer(user_q, used_hits)
-        was_nohit = False
-        was_suggest = True
-    else:
-        used_hits = hits
-        was_nohit = False
-        was_suggest = False
-        faq_answer = ""
-        try:
-            faq_answer = str(hits[0][0].get("answer", "")).strip()
-        except Exception:
-            faq_answer = ""
-        FAQ_DIRECT_SCORE = max(answer_threshold, 0.35)
-        if faq_answer and best_score >= FAQ_DIRECT_SCORE:
-            answer = faq_answer
+    # ======================
+    # 「参照FAQ」表示
+    # ======================
+    with st.expander("参照したFAQ（根拠）を見る"):
+        used_hits = st.session_state.used_hits
+        if not used_hits:
+            st.markdown('<div class="refbox">該当なし（スコアが低いため問い合わせ誘導）</div>', unsafe_allow_html=True)
         else:
-            prompt = build_prompt(user_q, hits)
-            try:
-                answer = llm_chat(
-                    [
-                        {"role": "system", "content": "あなたは情シス担当です。FAQの内容を優先し、必ず日本語で簡潔に回答してください。"},
-                        {"role": "user", "content": prompt},
-                    ]
+            for i, (row, score) in enumerate(used_hits, 1):
+                render_match_bar(score)
+                q_html = str(row.get("question", "")).replace("\n", "<br>")
+                a_html = str(row.get("answer", "")).replace("\n", "<br>")
+                cat = str(row.get("category", ""))
+                match_pct = int(max(0.0, min(1.0, float(score))) * 100)
+                st.markdown(
+                    f"""
+    <div class="refbox">
+    <b>FAQ{i}</b>（一致度：{match_pct}% / category={cat}）<br>
+    <b>Q:</b> {q_html}<br>
+    <b>A:</b> {a_html}
+    </div>
+    """,
+                    unsafe_allow_html=True,
                 )
-                if not str(answer).strip() and faq_answer:
-                    answer = faq_answer
+
+
+    # ======================
+    # おすすめ質問ボタン（3つ）
+    # ======================
+    st.markdown("### 💡 おすすめ質問（クリックで送信）")
+    c1, c2, c3 = st.columns(3)
+
+    if c1.button("🔐 パスワードを忘れた"):
+        st.session_state.pending_q = "パスワードを忘れました"
+        st.rerun()
+
+    if c2.button("🧩 アカウントがロックされた"):
+        st.session_state.pending_q = "アカウントがロックされました"
+        st.rerun()
+
+    if c3.button("🌐 VPNに接続できない"):
+        st.session_state.pending_q = "VPNに接続できません"
+        st.rerun()
+
+
+
+    def build_suggest_answer(user_q: str, hits) -> str:
+        if not hits:
+            return nohit_template()
+        row, score = hits[0]
+        q = str(row.get("question", "")).strip()
+        a = str(row.get("answer", "")).strip()
+        cat = str(row.get("category", "")).strip()
+        parts = [
+            "入力内容に近いFAQ候補が見つかりました。完全一致ではありませんが、まずはこちらを確認してください。",
+        ]
+        if q:
+            parts.append(f"【候補FAQ】{q}")
+        if cat:
+            parts.append(f"【カテゴリ】{cat}")
+        if a:
+            parts.append(f"【回答】\n{a}")
+        parts.append("解決しない場合は、下の『追加情報を記録』から状況を補足してください。")
+        return "\n\n".join(parts)
+
+
+    def render_nohit_extra_form(info: dict | None = None, expanded: bool = True):
+        """『該当なし』直後に表示する追加情報フォーム（端末/利用場所/ネットワーク等）。"""
+        info = info or (st.session_state.get("pending_nohit", {}) or {})
+        with st.expander("📝 追加情報を記録（任意）", expanded=expanded):
+            st.caption("該当なしのときだけ、状況を少しだけ補足するとFAQが育ちやすくなります。")
+            with st.form("nohit_extra_form", clear_on_submit=False):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    device = st.selectbox(
+                        "端末",
+                        ["", "Windows", "Mac", "iPhone/iPad", "Android", "不明"],
+                        index=0,
+                        key="nohit_device",
+                    )
+                with c2:
+                    location = st.selectbox(
+                        "利用場所",
+                        ["", "社内", "社外", "不明"],
+                        index=0,
+                        key="nohit_location",
+                    )
+                with c3:
+                    network = st.selectbox(
+                        "ネットワーク",
+                        ["", "Wi-Fi", "有線", "VPN", "モバイル回線", "不明"],
+                        index=0,
+                        key="nohit_network",
+                    )
+
+                impact = st.selectbox(
+                    "影響範囲",
+                    ["", "自分のみ", "他の人も", "不明"],
+                    index=0,
+                    key="nohit_impact",
+                )
+                error_text = st.text_area(
+                    "エラー内容（任意）",
+                    placeholder="例：0x80190001 / '資格情報が無効です' など",
+                    key="nohit_error_text",
+                )
+
+                submitted = st.form_submit_button("✅ この内容で記録")
+                if submitted:
+                    ok = update_nohit_record(
+                        day=str(info.get("day", "")),
+                        timestamp=str(info.get("timestamp", "")),
+                        question=str(info.get("question", "")),
+                        extra={
+                            "device": device,
+                            "location": location,
+                            "network": network,
+                            "impact": impact,
+                            "error_text": error_text,
+                            "channel": "web",
+                        },
+                    )
+                    if ok:
+                        st.success("追加情報をログに保存しました。ありがとうございます！")
+                        # 次回以降はフォームを閉じる（保持は消す）
+                        st.session_state["pending_nohit_active"] = False
+                    else:
+                        st.warning("保存に失敗しました（もう一度お試しください）。")
+
+
+    # ======================
+    # 入力 → 検索 → 回答
+    # ======================
+    # ===== 該当なし（nohit）の追加情報フォーム =====
+    if st.session_state.get("pending_nohit_active"):
+        render_nohit_extra_form(expanded=True)
+
+    # 先に chat_input を描画（画面下に固定されます）
+    chat_typed = st.chat_input("質問を入力してください")
+
+    # 入力が無いときは pending_q（おすすめボタン等）を使う
+    user_q = (chat_typed or st.session_state.get("pending_q", ""))
+
+    # 「おすすめ質問」など pending_q から来たかどうか
+    used_pending = (not chat_typed) and bool(st.session_state.get("pending_q", ""))
+
+    if user_q:
+        st.session_state.pending_q = ""
+
+        st.session_state.messages.append({"role": "user", "content": user_q})
+        with st.chat_message("user"):
+            st.markdown(user_q)
+
+        hits = retrieve_faq(user_q)
+        best_score = hits[0][1] if hits else 0.0
+
+        if hits:
+            render_match_bar(best_score)
+
+        answer_threshold = current_search_threshold()
+        suggest_threshold = current_suggest_threshold()
+
+        if best_score < suggest_threshold:
+            used_hits = []
+            answer = nohit_template()
+            ts_nohit = log_nohit(user_q)
+            st.session_state["last_nohit"] = {"day": datetime.now().strftime("%Y%m%d"), "timestamp": ts_nohit, "question": user_q}
+            was_nohit = True
+            was_suggest = False
+        elif best_score < answer_threshold:
+            used_hits = hits[:1]
+            answer = build_suggest_answer(user_q, used_hits)
+            was_nohit = False
+            was_suggest = True
+        else:
+            used_hits = hits
+            was_nohit = False
+            was_suggest = False
+            faq_answer = ""
+            try:
+                faq_answer = str(hits[0][0].get("answer", "")).strip()
             except Exception:
-                answer = faq_answer if faq_answer else "現在AIの回答機能でエラーが発生しています。しばらくしてから再度お試しください。"
+                faq_answer = ""
+            FAQ_DIRECT_SCORE = max(answer_threshold, 0.35)
+            if faq_answer and best_score >= FAQ_DIRECT_SCORE:
+                answer = faq_answer
+            else:
+                prompt = build_prompt(user_q, hits)
+                try:
+                    answer = llm_chat(
+                        [
+                            {"role": "system", "content": "あなたは情シス担当です。FAQの内容を優先し、必ず日本語で簡潔に回答してください。"},
+                            {"role": "user", "content": prompt},
+                        ]
+                    )
+                    if not str(answer).strip() and faq_answer:
+                        answer = faq_answer
+                except Exception:
+                    answer = faq_answer if faq_answer else "現在AIの回答機能でエラーが発生しています。しばらくしてから再度お試しください。"
 
-    st.session_state.used_hits = used_hits
+        st.session_state.used_hits = used_hits
 
-    # 利用ログ（削減時間の見える化用）
-    top_cat = ""
-    if used_hits:
-        try:
-            top_cat = str(used_hits[0][0].get("category", ""))
-        except Exception:
-            top_cat = ""
-    log_interaction(user_q, matched=(best_score >= answer_threshold), best_score=best_score, category=top_cat)
+        # 利用ログ（削減時間の見える化用）
+        top_cat = ""
+        if used_hits:
+            try:
+                top_cat = str(used_hits[0][0].get("category", ""))
+            except Exception:
+                top_cat = ""
+        log_interaction(user_q, matched=(best_score >= answer_threshold), best_score=best_score, category=top_cat)
 
-    with st.chat_message("assistant"):
-        answer_html = str(answer).replace("\n", "<br>")
-        st.markdown(f'<div class="answerbox">{answer_html}</div>', unsafe_allow_html=True)
+        with st.chat_message("assistant"):
+            answer_html = str(answer).replace("\n", "<br>")
+            st.markdown(f'<div class="answerbox">{answer_html}</div>', unsafe_allow_html=True)
 
-        if 'was_nohit' in locals() and was_nohit:
-            # 「該当なし」のとき、追加情報フォームを"次のrerunでも"表示できるように保持
-            st.session_state["pending_nohit_active"] = True
-            st.session_state["pending_nohit"] = st.session_state.get("last_nohit", {})
-            st.info("該当なしログに追加しました。必要なら下の『追加情報を記録』で状況を補足できます。")
-        elif 'was_suggest' in locals() and was_suggest:
-            st.info(f"近いFAQ候補を表示しています（スコア: {best_score:.2f} / 自動回答しきい値: {answer_threshold:.2f}）。")
-            st.caption("管理者はサイドバーの『検索精度設定』から判定基準を調整できます。")
+            if 'was_nohit' in locals() and was_nohit:
+                # 「該当なし」のとき、追加情報フォームを"次のrerunでも"表示できるように保持
+                st.session_state["pending_nohit_active"] = True
+                st.session_state["pending_nohit"] = st.session_state.get("last_nohit", {})
+                st.info("該当なしログに追加しました。必要なら下の『追加情報を記録』で状況を補足できます。")
+            elif 'was_suggest' in locals() and was_suggest:
+                st.info(f"近いFAQ候補を表示しています（スコア: {best_score:.2f} / 自動回答しきい値: {answer_threshold:.2f}）。")
+                st.caption("管理者はサイドバーの『検索精度設定』から判定基準を調整できます。")
 
-    st.session_state.messages.append({"role": "assistant", "content": str(answer)})
+        st.session_state.messages.append({"role": "assistant", "content": str(answer)})
 
-    # nohit はフォーム表示のために再描画
-    if "was_nohit" in locals() and was_nohit:
-        st.rerun()
+        # nohit はフォーム表示のために再描画
+        if "was_nohit" in locals() and was_nohit:
+            st.rerun()
 
-    # おすすめ質問ボタンから自動送信した場合は、もう一度 rerun して入力欄を確実に表示
-    if used_pending:
-        st.rerun()
+        # おすすめ質問ボタンから自動送信した場合は、もう一度 rerun して入力欄を確実に表示
+        if used_pending:
+            st.rerun()
+
+if IS_FLASK_MODE:
+    if __name__ == "__main__":
+        port = int(os.getenv("PORT", "3000"))
+        flask_app.run(host="0.0.0.0", port=port)
+else:
+    main_streamlit()
