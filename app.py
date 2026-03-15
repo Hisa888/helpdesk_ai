@@ -439,15 +439,6 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# sentence-transformers は任意。未導入でも既存機能だけで動くようにする
-SENTENCE_TRANSFORMERS_AVAILABLE = False
-try:
-    from sentence_transformers import SentenceTransformer  # type: ignore
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except Exception:
-    SentenceTransformer = None  # type: ignore
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
-
 from services.auth import check_password
 from services.llm_router import chat as llm_chat
 
@@ -800,169 +791,53 @@ def _pdf_draw_title(c, title: str, subtitle: str | None = None):
     c.line(20 * mm, h - 36 * mm, w - 20 * mm, h - 36 * mm)
 
 
-def _pdf_set_stroke_fill(c, stroke="#0F172A", fill="#FFFFFF"):
-    c.setStrokeColor(HexColor(stroke))
-    c.setFillColor(HexColor(fill))
-
-
-def _pdf_draw_box(c, x, y, w, h, title, subtitle=None, fill="#FFFFFF", stroke="#CBD5E1", title_color="#0F172A"):
-    _pdf_set_stroke_fill(c, stroke=stroke, fill=fill)
-    c.roundRect(x, y, w, h, 8, stroke=1, fill=1)
-    c.setFillColor(HexColor(title_color))
-    c.setFont("HeiseiKakuGo-W5", 10)
-    lines = _wrap_lines_for_pdf(title, "HeiseiKakuGo-W5", 10, w - 12)
-    yy = y + h - 14
-    for ln in lines[:3]:
-        c.drawString(x + 6, yy, ln)
-        yy -= 12
-    if subtitle:
-        c.setFillColor(HexColor("#475569"))
-        c.setFont("HeiseiKakuGo-W5", 8)
-        for ln in _wrap_lines_for_pdf(subtitle, "HeiseiKakuGo-W5", 8, w - 12)[:3]:
-            c.drawString(x + 6, yy, ln)
-            yy -= 10
-
-
-def _pdf_draw_arrow(c, x1, y1, x2, y2, color="#64748B"):
-    import math
-    c.setStrokeColor(HexColor(color))
-    c.setLineWidth(1.2)
-    c.line(x1, y1, x2, y2)
-    ang = math.atan2(y2 - y1, x2 - x1)
-    ah = 6
-    a1 = ang + math.pi * 0.86
-    a2 = ang - math.pi * 0.86
-    c.line(x2, y2, x2 + ah * math.cos(a1), y2 + ah * math.sin(a1))
-    c.line(x2, y2, x2 + ah * math.cos(a2), y2 + ah * math.sin(a2))
-
-
-def _pdf_draw_section_band(c, x, y, w, label, fill="#E0F2FE", text_color="#075985"):
-    _pdf_set_stroke_fill(c, stroke=fill, fill=fill)
-    c.roundRect(x, y - 4, w, 14, 6, stroke=0, fill=1)
-    c.setFillColor(HexColor(text_color))
-    c.setFont("HeiseiKakuGo-W5", 10)
-    c.drawString(x + 6, y, label)
-
-
-def _pdf_draw_bullet_list(c, x, y, items, max_width_pt, font_size=11, bullet_color="#0EA5E9", text_color="#0F172A", gap_after=2):
-    for item in items:
-        c.setFillColor(HexColor(bullet_color))
-        c.setFont("HeiseiKakuGo-W5", font_size)
-        c.drawString(x, y, "•")
-        c.setFillColor(HexColor(text_color))
-        y = _pdf_draw_paragraph(c, x + 10, y, str(item), "HeiseiKakuGo-W5", font_size, max_width_pt - 10)
-        y -= gap_after
-    return y
-
-
-def _pdf_draw_two_column_steps(c, x, y, col_w, left_title, left_items, right_title, right_items):
-    _pdf_draw_section_band(c, x, y, col_w, left_title)
-    _pdf_draw_section_band(c, x + col_w + 10 * mm, y, col_w, right_title, fill="#DCFCE7", text_color="#166534")
-    y_body = y - 16
-    y_left = _pdf_draw_bullet_list(c, x, y_body, left_items, col_w)
-    y_right = _pdf_draw_bullet_list(c, x + col_w + 10 * mm, y_body, right_items, col_w, bullet_color="#22C55E")
-    return min(y_left, y_right)
-
-
 def _pdf_draw_flow(c, x0, y0):
-    """PDFで崩れにくい、左基準の縦フロー図。本文はこの関数では描画しない。"""
-    box_w = 95 * mm
-    box_h = 18 * mm
-    gap = 8 * mm
+    """簡易運用フロー図（箱 + 矢印）"""
+    # box helper
+    def box(x, y, w, h, label):
+        c.setStrokeColor(HexColor("#0F172A"))
+        c.roundRect(x, y, w, h, 6, stroke=1, fill=0)
+        c.setFillColor(HexColor("#0F172A"))
+        c.setFont("HeiseiKakuGo-W5", 10)
+        # center-ish
+        lines = _wrap_lines_for_pdf(label, "HeiseiKakuGo-W5", 10, w - 10)
+        yy = y + h - 14
+        for ln in lines[:3]:
+            c.drawString(x + 6, yy, ln)
+            yy -= 12
 
-    steps = [
-        ("① ユーザーが質問", "チャット / おすすめ質問から入力", "#F8FAFC", "#CBD5E1", "#0F172A"),
-        ("② AIがFAQを検索", "登録済みのFAQから近い回答を探す", "#EFF6FF", "#60A5FA", "#1E3A8A"),
-        ("③ 回答を表示", "参考FAQもあわせて表示", "#ECFDF5", "#4ADE80", "#166534"),
-        ("④ 見つからない場合", "問い合わせテンプレートを表示", "#FEF3C7", "#F59E0B", "#92400E"),
-        ("⑤ 管理者がログ確認", "不足FAQを追加して次回に備える", "#DCFCE7", "#22C55E", "#166534"),
-    ]
+    def arrow(x1, y1, x2, y2):
+        c.line(x1, y1, x2, y2)
+        # arrow head
+        import math
+        ang = math.atan2(y2 - y1, x2 - x1)
+        ah = 6
+        a1 = ang + math.pi * 0.85
+        a2 = ang - math.pi * 0.85
+        c.line(x2, y2, x2 + ah * math.cos(a1), y2 + ah * math.sin(a1))
+        c.line(x2, y2, x2 + ah * math.cos(a2), y2 + ah * math.sin(a2))
+
+    w_box, h_box = 55 * mm, 16 * mm
+    gap_y = 10 * mm
 
     x = x0
     y = y0
-
-    for idx, (title, subtitle, fill, stroke, title_color) in enumerate(steps):
-        _pdf_draw_box(
-            c, x, y, box_w, box_h, title, subtitle,
-            fill=fill, stroke=stroke, title_color=title_color
-        )
-
-        if idx < len(steps) - 1:
-            arrow_x = x + box_w / 2
-            _pdf_draw_arrow(c, arrow_x, y, arrow_x, y - gap)
-
-            if idx == 2:
-                c.setFillColor(HexColor("#92400E"))
-                c.setFont("HeiseiKakuGo-W5", 9)
-                c.drawString(x, y - gap + 1.5 * mm, "解決しない場合は、問い合わせテンプレートへ進みます")
-
-        y -= (box_h + gap)
-
-    return y - 2 * mm
-
-def _pdf_draw_growth_cycle(c, x0, y0):
-    """FAQ育成サイクル図"""
-    box_w = 38 * mm
-    box_h = 15 * mm
-    gap = 9 * mm
-    coords = [
-        (x0, y0, "① 該当なしを記録"),
-        (x0 + box_w + gap, y0, "② ログを確認"),
-        (x0 + box_w + gap, y0 - box_h - gap, "③ FAQを追加"),
-        (x0, y0 - box_h - gap, "④ 次回から自動回答"),
-    ]
-    for x, y, label in coords:
-        _pdf_draw_box(c, x, y, box_w, box_h, label, fill="#F8FAFC")
-    _pdf_draw_arrow(c, x0 + box_w, y0 + box_h / 2, x0 + box_w + gap, y0 + box_h / 2)
-    _pdf_draw_arrow(c, x0 + box_w + gap + box_w / 2, y0, x0 + box_w + gap + box_w / 2, y0 - gap)
-    _pdf_draw_arrow(c, x0 + box_w + gap, y0 - box_h - gap + box_h / 2, x0 + box_w, y0 - box_h - gap + box_h / 2)
-    _pdf_draw_arrow(c, x0 + box_w / 2, y0 - box_h - gap + box_h, x0 + box_w / 2, y0 - 2)
-    return y0 - box_h - gap - 14 * mm
-
-
-def _pdf_draw_value_cards(c, x, y, cards, total_width):
-    """カード群を重なりなく描画する。上部ラベルは外に出し、カード内は見出し+説明だけにする。"""
-    gap = 5 * mm
-    label_gap = 3 * mm
-    card_w = (total_width - gap * (len(cards) - 1)) / len(cards)
-    card_h = 26 * mm
-    label_h = 6 * mm
-    side_pad = 6
-
-    for idx, (title, value, note, fill, stroke) in enumerate(cards):
-        cx = x + idx * (card_w + gap)
-        label_y = y - label_h
-        cy = label_y - label_gap - card_h
-
-        _pdf_set_stroke_fill(c, stroke=stroke, fill=fill)
-        c.roundRect(cx, label_y, card_w, label_h, 6, stroke=1, fill=1)
-        c.setFillColor(HexColor("#334155"))
-        c.setFont("HeiseiKakuGo-W5", 8)
-        for i, ln in enumerate(_wrap_lines_for_pdf(title, "HeiseiKakuGo-W5", 8, card_w - side_pad * 2)[:1]):
-            c.drawString(cx + side_pad, label_y + label_h - 10 - i * 8, ln)
-
-        _pdf_set_stroke_fill(c, stroke=stroke, fill="#FFFFFF")
-        c.roundRect(cx, cy, card_w, card_h, 8, stroke=1, fill=1)
-
-        c.setFillColor(HexColor("#0F172A"))
-        c.setFont("HeiseiKakuGo-W5", 14)
-        value_y = cy + card_h - 16
-        for ln in _wrap_lines_for_pdf(value, "HeiseiKakuGo-W5", 14, card_w - side_pad * 2)[:2]:
-            c.drawString(cx + side_pad, value_y, ln)
-            value_y -= 15
-
-        c.setFillColor(HexColor("#475569"))
-        c.setFont("HeiseiKakuGo-W5", 8)
-        note_y = cy + 12
-        for ln in _wrap_lines_for_pdf(note, "HeiseiKakuGo-W5", 8, card_w - side_pad * 2)[:2]:
-            c.drawString(cx + side_pad, note_y, ln)
-            note_y -= 9
-
-    return cy - 6 * mm
+    box(x, y, w_box, h_box, "① ユーザーが質問\n（チャット/おすすめ）")
+    arrow(x + w_box/2, y, x + w_box/2, y - gap_y + 2)
+    y2 = y - gap_y - h_box
+    box(x, y2, w_box, h_box, "② FAQ検索（TF-IDF）\n一致度を表示")
+    arrow(x + w_box/2, y2, x + w_box/2, y2 - gap_y + 2)
+    y3 = y2 - gap_y - h_box
+    box(x, y3, w_box, h_box, "③ 低一致なら\n『問い合わせテンプレ』")
+    arrow(x + w_box + 8, y2 + h_box/2, x + w_box + 28, y2 + h_box/2)
+    box(x + w_box + 32, y2, w_box, h_box, "④ 高一致なら\nAI回答（Groq等）")
+    arrow(x + w_box + 8, y3 + h_box/2, x + w_box + 28, y3 + h_box/2)
+    box(x + w_box + 32, y3, w_box, h_box, "⑤ 該当なしログ\n蓄積・集計")
+    return y3 - 10 * mm
 
 
 def generate_ops_manual_pdf() -> bytes:
-    """完全版の操作説明書PDF（誰でも理解できる説明 + 図解付き）"""
+    """機能一覧 + 操作説明書PDF（管理者向け）"""
     if not REPORTLAB_AVAILABLE:
         return b""
     buf = io.BytesIO()
@@ -970,185 +845,86 @@ def generate_ops_manual_pdf() -> bytes:
     pdfmetrics.registerFont(UnicodeCIDFont("HeiseiKakuGo-W5"))
 
     w, h = A4
-    margin = 18 * mm
+    margin = 20 * mm
     maxw = w - margin * 2
 
-    # Page 1: cover
-    _pdf_draw_title(c, "操作説明書_情シス問い合わせAI", "社員向け / 管理者向け / 誰でもわかる完全版")
-    y = h - 52 * mm
-    _pdf_draw_section_band(c, margin, y, 74 * mm, "この資料でわかること")
-    y -= 18
-    y = _pdf_draw_bullet_list(
-        c,
-        margin,
-        y,
-        [
-            "このAIで何ができるのか",
-            "社員がどの順番で使えばよいのか",
-            "回答が見つからない時にどう動けばよいのか",
-            "管理者がFAQを育てて精度を上げる方法",
-        ],
-        maxw,
-    )
-    y -= 3
-    _pdf_draw_section_band(c, margin, y, 90 * mm, "最初に知っておきたいこと", fill="#DCFCE7", text_color="#166534")
-    y -= 18
+    # --- Page 1: cover
+    _pdf_draw_title(c, "情シス問い合わせAI 操作説明書", "管理者向け / デモ用（Streamlit）")
+    y = h - 55 * mm
     y = _pdf_draw_paragraph(
         c,
         margin,
         y,
-        "このシステムは、社内のITに関するよくある質問へすぐに答えるための問い合わせAIです。\n"
-        "まずAIに質問し、解決できない場合だけ情シス担当者へ問い合わせる運用にすると、対応時間を減らしながら回答品質をそろえられます。",
+        "本資料は『情シス問い合わせAI』の機能一覧と、管理者・利用者の操作手順をまとめたものです。\n運用時は自社ルール（連絡先、受付時間、SLA、個人情報ポリシー）に合わせて調整してください。",
         "HeiseiKakuGo-W5",
         11,
         maxw,
     )
     c.setFont("HeiseiKakuGo-W5", 10)
-    c.setFillColor(HexColor("#64748B"))
-    c.drawString(margin, 18 * mm, f"生成日: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    c.drawString(margin, 20 * mm, f"生成日: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+
     c.showPage()
 
-    # Page 2: what it does
-    _pdf_draw_title(c, "1. このAIでできること", "まずは全体像をつかむ")
-    y = h - 52 * mm
-    cards = [
-        ("すぐに答える", "FAQ検索", "登録済みの質問と回答を探します", "#EFF6FF", "#93C5FD"),
-        ("根拠を見せる", "参考FAQ表示", "どのFAQを元にしたか確認できます", "#ECFEFF", "#67E8F9"),
-        ("迷った時を助ける", "テンプレ表示", "必要情報をそろえて問い合わせできます", "#FEFCE8", "#FDE68A"),
+    # --- Page 2: feature list
+    _pdf_draw_title(c, "1. 機能一覧", "このアプリでできること")
+    y = h - 55 * mm
+    features = [
+        "FAQ検索（TF-IDF）: faq.csv から近いQ/Aを抽出し、根拠として表示",
+        "一致度（スコア）表示: 上位候補の一致度をバーで可視化",
+        "低一致時の問い合わせテンプレ: 必要情報を自動で提示し、問い合わせ品質を平準化",
+        "おすすめ質問ボタン: 初見ユーザーでも迷わず入力できる導線",
+        "該当なしログ蓄積: 低一致/未該当の質問をログ保存（運用改善の材料）",
+        "ログ状況ダッシュボード: 今日/過去7日/累計の件数を表示",
+        "ログCSVダウンロード: 管理者がログを取得してFAQ改善に活用",
+        "管理者ログイン: 管理者機能（ログ確認/FAQ育成/資料DL）を保護",
+        "削減時間シミュレーター: 問い合わせ削減効果（時間/金額）を試算",
+        "効果レポートPDF出力: 試算結果をPDFで出力（営業・社内説明用）",
     ]
-    y = _pdf_draw_value_cards(c, margin, y, cards, maxw)
-    y = _pdf_draw_bullet_list(
-        c,
-        margin,
-        y,
-        [
-            "よくある問い合わせにすぐ回答します。",
-            "AIの答えとあわせて、参考にしたFAQ候補も表示します。",
-            "回答が見つからない場合は、問い合わせ時に必要な項目をテンプレートで案内します。",
-            "管理者はFAQファイルの入れ替え、問い合わせログの確認、PDF資料のダウンロードができます。",
-            "使われ方のログを見ながら、FAQを追加して精度を上げていけます。",
-        ],
-        maxw,
-    )
-    y -= 5
-    _pdf_draw_section_band(c, margin, y, 84 * mm, "利用イメージ", fill="#F8FAFC", text_color="#334155")
-    y -= 18
-    y = _pdf_draw_paragraph(
-        c,
-        margin,
-        y,
-        "例: 社員が『Wi-Fiがつながらない』と入力すると、AIはFAQを探して最も近い回答を表示します。\n"
-        "答えが見つからない時は、端末名・利用場所・発生時刻など、情シスが確認したい情報をそろえた問い合わせテンプレートを表示します。",
-        "HeiseiKakuGo-W5",
-        11,
-        maxw,
-    )
+    for i, f in enumerate(features, 1):
+        y = _pdf_draw_paragraph(c, margin, y, f"・{f}", "HeiseiKakuGo-W5", 11, maxw)
+        y -= 2
+        if y < 30 * mm:
+            c.showPage()
+            _pdf_draw_title(c, "1. 機能一覧（続き）", None)
+            y = h - 55 * mm
+
     c.showPage()
 
-    # Page 3: employee flow
-    _pdf_draw_title(c, "2. 社員の使い方", "まずはこの順番で使います")
-    y = h - 52 * mm
-    y = _pdf_draw_bullet_list(
-        c,
-        margin,
-        y,
-        [
-            "画面の入力欄に困っている内容をそのまま入力します。",
-            "表示された回答を読み、必要に応じて参考FAQも確認します。",
-            "その場で解決できたら完了です。",
-            "解決しない時は、問い合わせテンプレートに沿って情シスへ連絡します。",
-        ],
-        maxw,
+    # --- Page 3: user flow
+    _pdf_draw_title(c, "2. 利用者の操作手順", "通常ユーザーの使い方")
+    y = h - 55 * mm
+    steps = (
+        "1) 画面下の入力欄に質問を入力（または『おすすめ質問』ボタンをクリック）\n"
+        "2) 回答が表示されます。必要に応じて『参照したFAQ（根拠）』を開いて確認します。\n"
+        "3) 一致度が低い場合は『問い合わせテンプレ』が表示されるので、記載内容を添えて情シスへ連絡します。"
     )
+    y = _pdf_draw_paragraph(c, margin, y, steps, "HeiseiKakuGo-W5", 11, maxw)
     y -= 8
-
-    c.setFillColor(HexColor("#0F172A"))
     c.setFont("HeiseiKakuGo-W5", 11)
-    c.drawString(margin, y, "問い合わせ対応の流れ")
-    y -= 80
-    y = _pdf_draw_flow(c, margin, y)
-    y = _pdf_draw_paragraph(
-        c,
-        margin,
-        y,
-        "見つかった回答だけで解決できる質問は、情シスへ連絡せずにその場で自己解決できます。\n"
-        "回答が見つからない質問はログに残るため、後からFAQへ追加して再発防止につなげられます。",
-        "HeiseiKakuGo-W5",
-        10,
-        maxw,
-    )
-    c.showPage()
-
-    # Page 4: admin steps
-    _pdf_draw_title(c, "3. 管理者の使い方", "左メニューの管理者画面で行うこと")
-    y = h - 52 * mm
-    col_w = (maxw - 10 * mm) / 2
-    y = _pdf_draw_two_column_steps(
-        c,
-        margin,
-        y,
-        col_w,
-        "毎日または週次で確認すること",
-        [
-            "問い合わせログ状況を見て、該当なしの増減を確認する。",
-            "必要に応じてログCSVをダウンロードする。",
-            "利用状況や削減時間シミュレーションを確認する。",
-        ],
-        "FAQを改善する時に行うこと",
-        [
-            "FAQをExcelでダウンロードして現在内容を確認する。",
-            "不足しているQ&Aを追加したExcelまたはCSVをアップロードする。",
-            "反映後、必要に応じてキャッシュクリアや再確認を行う。",
-        ],
-    )
-    y -= 4
-    _pdf_draw_section_band(c, margin, y, 92 * mm, "管理者向けPDFでできること", fill="#FEF3C7", text_color="#92400E")
-    y -= 18
-    y = _pdf_draw_bullet_list(
-        c,
-        margin,
-        y,
-        [
-            "操作説明書PDF: 社員や管理者へ使い方を説明する時に利用します。",
-            "提案資料PDF: 導入効果や導入ステップを説明する営業資料として利用します。",
-            "導入効果レポートPDF: 実際のログを元に削減時間や削減額の試算を共有できます。",
-        ],
-        maxw,
-        bullet_color="#F59E0B",
-    )
-    c.showPage()
-
-    # Page 5: FAQ growth cycle and rules
-    _pdf_draw_title(c, "4. AIを育てる運用", "使うほど精度が上がる仕組み")
-    y = h - 52 * mm
-    c.setFillColor(HexColor("#0F172A"))
-    c.setFont("HeiseiKakuGo-W5", 11)
-    c.drawString(margin, y, "FAQ改善サイクル")
+    c.drawString(margin, y, "運用フロー（概要）")
     y -= 10
-    bottom = _pdf_draw_growth_cycle(c, margin, y - 28 * mm)
-    y = bottom + 10 * mm
-    y = _pdf_draw_bullet_list(
-        c,
-        margin,
-        y,
-        [
-            "該当なしの質問をためるだけで終わらせず、週1回など決めて確認します。",
-            "同じ内容が複数回出ているものは優先してFAQへ追加します。",
-            "回答文は短く、社内で実際に使う手順や連絡先まで書くと使いやすくなります。",
-            "個人情報・機密情報は入力しない運用ルールを明確にしてください。",
-            "FAQ更新後は、必要に応じて反映確認を行ってから社内へ案内します。",
-        ],
-        maxw,
-    )
+    _pdf_draw_flow(c, margin, y - 70 * mm)
+    c.showPage()
+
+    # --- Page 4: admin ops
+    _pdf_draw_title(c, "3. 管理者の操作手順", "ログ確認・FAQ育成・資料ダウンロード")
+    y = h - 55 * mm
+    admin_steps = [
+        "管理者パスワードでログインします（左サイドバー『管理者』）。",
+        "『問い合わせログ状況』で件数を確認し、必要に応じてログCSVをダウンロードします。",
+        "ログ内の『該当なし』質問を確認し、よくある内容は faq.csv にQ/Aとして追加します（運用改善）。",
+        "本操作説明書PDF・提案資料PDF・効果レポートPDFを、必要に応じてダウンロードします。",
+    ]
+    for s in admin_steps:
+        y = _pdf_draw_paragraph(c, margin, y, f"・{s}", "HeiseiKakuGo-W5", 11, maxw)
+        y -= 2
+
     y -= 6
-    _pdf_draw_section_band(c, margin, y, 70 * mm, "おすすめの社内周知文", fill="#E0F2FE", text_color="#075985")
-    y -= 18
     y = _pdf_draw_paragraph(
         c,
         margin,
         y,
-        "『まずは情シス問い合わせAIで確認してください。回答が見つからない場合だけ、表示されたテンプレートを添えて問い合わせしてください。』\n"
-        "この一文を社内ポータルやTeams/Slackの案内に載せると、自己解決の定着に役立ちます。",
+        "※ faq.csv の更新後はアプリを再起動（Reboot app）すると反映されます。\n※ 個人情報/機密情報を入力しない運用ルールを社内で明確化してください。",
         "HeiseiKakuGo-W5",
         10,
         maxw,
@@ -1160,7 +936,7 @@ def generate_ops_manual_pdf() -> bytes:
 
 
 def generate_sales_proposal_pdf() -> bytes:
-    """コンサルレベルの営業提案資料PDF（図解・導入効果・提案ストーリー付き）"""
+    """営業（副業）向け：提案資料っぽい章立てPDF"""
     if not REPORTLAB_AVAILABLE:
         return b""
     buf = io.BytesIO()
@@ -1168,204 +944,123 @@ def generate_sales_proposal_pdf() -> bytes:
     pdfmetrics.registerFont(UnicodeCIDFont("HeiseiKakuGo-W5"))
 
     w, h = A4
-    margin = 18 * mm
+    margin = 20 * mm
     maxw = w - margin * 2
 
     # Page 1: cover
-    _pdf_draw_title(c, "提案資料_情シス問い合わせAI", "社内問い合わせを減らし、対応品質をそろえるための提案書")
-    y = h - 54 * mm
-    _pdf_draw_section_band(c, margin, y, 78 * mm, "提案の結論")
-    y -= 18
+    _pdf_draw_title(c, "情シス問い合わせAI 提案資料", "副業デモ用 / FAQ×AIで問い合わせ対応を削減")
+    y = h - 60 * mm
     y = _pdf_draw_paragraph(
         c,
         margin,
         y,
-        "情シス問い合わせAIを導入することで、よくある問い合わせを自己解決へ誘導し、\n"
-        "情シス担当者は本当に人手が必要な問い合わせへ集中できるようになります。",
+        "目的：社内問い合わせ（情シス/総務/人事など）の一次対応を自動化し、担当者工数を削減しつつ回答品質を平準化します。\n\n構成：FAQ検索（根拠提示）＋AI補助（任意）＋『該当なし』の運用改善サイクル。",
         "HeiseiKakuGo-W5",
-        12,
+        11,
         maxw,
     )
-    y -= 6
-    cards = [
-        ("問い合わせ削減", "一次対応を自動化", "同じ質問への繰り返し対応を減らす", "#EFF6FF", "#93C5FD"),
-        ("品質平準化", "回答をそろえる", "担当者ごとの差を減らす", "#F0FDF4", "#86EFAC"),
-        ("ナレッジ蓄積", "FAQが育つ", "ログから不足FAQを追加できる", "#FEFCE8", "#FDE68A"),
-    ]
-    y = _pdf_draw_value_cards(c, margin, y, cards, maxw)
     c.setFont("HeiseiKakuGo-W5", 10)
-    c.setFillColor(HexColor("#64748B"))
-    c.drawString(margin, 18 * mm, f"生成日: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    c.drawString(margin, 20 * mm, f"生成日: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+
     c.showPage()
 
-    # Page 2: issues and solution
-    _pdf_draw_title(c, "1. 現状課題と解決方針", "よくある課題をどう解決するか")
-    y = h - 52 * mm
-    y = _pdf_draw_two_column_steps(
-        c,
-        margin,
-        y,
-        (maxw - 10 * mm) / 2,
-        "現場で起きがちな課題",
-        [
-            "同じ問い合わせが繰り返し発生している。",
-            "担当者によって回答内容やスピードがばらつく。",
-            "問い合わせ文に必要情報が不足し、切り分けに時間がかかる。",
-            "FAQが更新されず、知識が属人化する。",
-        ],
-        "本提案の解決方針",
-        [
-            "まずAIに聞く導線をつくり、よくある質問を自己解決へ導く。",
-            "FAQを元にした回答で、誰でも同じ案内ができる状態をつくる。",
-            "見つからない場合はテンプレートで必要情報をそろえる。",
-            "該当なしログからFAQを追加し、継続的に改善する。",
-        ],
-    )
-    y -= 4
-    _pdf_draw_section_band(c, margin, y, 85 * mm, "導入後の期待効果", fill="#DCFCE7", text_color="#166534")
-    y -= 18
-    y = _pdf_draw_bullet_list(
-        c,
-        margin,
-        y,
-        [
-            "一次対応の自動化により、情シス担当者の負荷を下げる。",
-            "回答品質を標準化し、新人や兼任担当でも案内しやすくする。",
-            "問い合わせログを改善材料に変え、FAQ資産を増やす。",
-        ],
-        maxw,
-        bullet_color="#22C55E",
-    )
-    c.showPage()
-
-    # Page 3: process diagram
-    _pdf_draw_title(c, "2. システムの仕組み", "問い合わせから改善までを1つの流れにする")
-    y = h - 52 * mm
-    c.setFillColor(HexColor("#0F172A"))
-    c.setFont("HeiseiKakuGo-W5", 11)
-    c.drawString(margin, y, "運用フロー図")
-    y -= 10
-    y = _pdf_draw_flow(c, margin, y)
-    y = _pdf_draw_paragraph(
-        c,
-        margin,
-        y,
-        "ポイントは、回答できた質問だけでなく、回答できなかった質問も価値あるデータとして残ることです。\n"
-        "この仕組みによって、導入直後はFAQが少なくても、使うほど回答範囲を広げられます。",
-        "HeiseiKakuGo-W5",
-        11,
-        maxw,
-    )
-    y -= 4
-    c.setFillColor(HexColor("#0F172A"))
-    c.setFont("HeiseiKakuGo-W5", 11)
-    c.drawString(margin, y, "FAQ育成サイクル")
-    _pdf_draw_growth_cycle(c, margin, y - 26 * mm)
-    c.showPage()
-
-    # Page 4: ROI and model case
-    _pdf_draw_title(c, "3. 導入効果の考え方", "削減時間を数字で説明する")
-    y = h - 52 * mm
-    cards = [
-        ("モデルケース", "100件/月", "月100件の問い合わせを想定", "#F8FAFC", "#CBD5E1"),
-        ("平均対応時間", "5分/件", "情シスが1件対応する平均", "#F8FAFC", "#CBD5E1"),
-        ("削減時間", "約8時間/月", "100件 x 5分 = 500分", "#ECFEFF", "#67E8F9"),
+    # Page 2: pain & solution
+    _pdf_draw_title(c, "1. 課題と解決アプローチ", "よくある現場の困りごと")
+    y = h - 55 * mm
+    pains = [
+        "同じ質問が繰り返され、担当者が都度対応している",
+        "回答品質が担当者の経験に依存し、新人が困る",
+        "問い合わせ文がバラバラで、切り分けに時間がかかる",
+        "FAQが更新されず、ナレッジが属人化する",
     ]
-    y = _pdf_draw_value_cards(c, margin, y, cards, maxw)
+    y = _pdf_draw_paragraph(c, margin, y, "【現状の課題】", "HeiseiKakuGo-W5", 11, maxw)
+    for p in pains:
+        y = _pdf_draw_paragraph(c, margin, y, f"・{p}", "HeiseiKakuGo-W5", 11, maxw)
+    y -= 8
+    y = _pdf_draw_paragraph(c, margin, y, "【本提案の解決】", "HeiseiKakuGo-W5", 11, maxw)
+    sols = [
+        "FAQ根拠提示で『まずここを見れば解決』を実現",
+        "低一致時はテンプレで必要情報を揃え、二次対応を短縮",
+        "該当なしログを蓄積し、FAQを継続改善できる運用に",
+    ]
+    for s in sols:
+        y = _pdf_draw_paragraph(c, margin, y, f"・{s}", "HeiseiKakuGo-W5", 11, maxw)
+
+    c.showPage()
+
+    # Page 3: flow diagram
+    _pdf_draw_title(c, "2. 運用フロー", "FAQ育成で精度が上がる仕組み")
+    y = h - 60 * mm
+    c.setFont("HeiseiKakuGo-W5", 11)
+    c.drawString(margin, y, "問い合わせ対応の流れ（図解）")
+    y -= 10
+    _pdf_draw_flow(c, margin, y - 70 * mm)
+    y -= 92 * mm
     y = _pdf_draw_paragraph(
         c,
         margin,
         y,
-        "例として、月100件・1件5分の問い合わせがある場合、単純計算で月500分の対応時間が発生しています。\n"
-        "このうち多くをAIで自己解決へ回せれば、月約8時間、年間では約96時間の削減余地があります。",
+        "ポイント：『該当なし』をログに残し、管理者が faq.csv に追記 → 次回から自動回答できる範囲が増えます。\nつまり運用するほど“育つ”ヘルプデスクになります。",
         "HeiseiKakuGo-W5",
         11,
         maxw,
     )
-    y -= 6
-    _pdf_draw_section_band(c, margin, y, 78 * mm, "経営層への説明ポイント", fill="#FEF3C7", text_color="#92400E")
-    y -= 18
-    y = _pdf_draw_bullet_list(
-        c,
-        margin,
-        y,
-        [
-            "削減時間 = 問い合わせ件数 x 1件あたり対応時間 x AIで自己解決できる割合",
-            "人件費換算を入れると、投資対効果を説明しやすくなる",
-            "数値効果に加えて、回答品質の標準化や問い合わせ品質向上も副次効果として大きい",
-        ],
-        maxw,
-        bullet_color="#F59E0B",
-    )
+
     c.showPage()
 
-    # Page 5: implementation plan
-    _pdf_draw_title(c, "4. 導入ステップ", "最短でデモから本運用まで進める")
-    y = h - 52 * mm
-    y = _pdf_draw_bullet_list(
-        c,
-        margin,
-        y,
-        [
-            "Step 1 現状確認: よくある問い合わせ、対応ルール、入力してはいけない情報を確認する。",
-            "Step 2 FAQ準備: まずは30〜100件程度のFAQをCSVまたはExcelで用意する。",
-            "Step 3 デモ公開: Streamlit上で社内向けに試験公開し、使い方を周知する。",
-            "Step 4 ログ改善: 該当なしログを確認し、足りないFAQを追加する。",
-            "Step 5 横展開: 総務、人事、経理など他部門の問い合わせへ拡張する。",
-        ],
-        maxw,
-    )
-    y -= 8
-    _pdf_draw_section_band(c, margin, y, 84 * mm, "初回提案時に確認したい項目", fill="#E0F2FE", text_color="#075985")
-    y -= 18
-    y = _pdf_draw_bullet_list(
-        c,
-        margin,
-        y,
-        [
-            "月間の問い合わせ件数",
-            "1件あたり平均対応時間",
-            "よくある問い合わせ上位10件",
-            "社内で利用する連絡手段（メール / Teams / Slack など）",
-            "個人情報や機密情報の取り扱いルール",
-        ],
-        maxw,
-        bullet_color="#0EA5E9",
-    )
-    c.showPage()
-
-    # Page 6: proposal closing
-    _pdf_draw_title(c, "5. ご提案のまとめ", "小さく始めて、着実に育てる")
-    y = h - 52 * mm
+    # Page 4: ROI / pricing guide
+    _pdf_draw_title(c, "3. 効果（削減時間）シミュレーション", "導入前に効果を数値化")
+    y = h - 55 * mm
     y = _pdf_draw_paragraph(
         c,
         margin,
         y,
-        "情シス問い合わせAIは、大規模なシステム刷新ではなく、既存のFAQ資産を活用しながら小さく始められる改善策です。\n"
-        "まずはよくある問い合わせから対象にし、回答できなかった質問をログから追加する運用にすることで、短期間でも効果を体感しやすい構成です。",
+        "本アプリには『削減時間シミュレーター』を搭載しています。\n例：問い合わせ 300件/月、1件あたり対応5分、削減率30% → 75時間/月の削減。\n削減時間×人件費単価で、投資対効果（ROI）を説明できます。",
         "HeiseiKakuGo-W5",
         11,
         maxw,
     )
     y -= 8
-    _pdf_draw_section_band(c, margin, y, 64 * mm, "次のアクション", fill="#DCFCE7", text_color="#166534")
-    y -= 18
-    y = _pdf_draw_bullet_list(
+    y = _pdf_draw_paragraph(
         c,
         margin,
         y,
-        [
-            "問い合わせ例を10件いただければ、デモFAQを作成できます。",
-            "月間件数・平均対応時間・単価がわかれば、削減効果の試算ができます。",
-            "社内向け説明用として、本資料と操作説明書PDFをそのまま活用できます。",
-        ],
+        "（提案用の価格例）\n・スターター：月3〜5万円（FAQ整備 + 初期設定）\n・スタンダード：月8〜12万円（ログ運用 + FAQ育成支援 + レポート）\n・プロ：月15万円〜（部門横断/権限/監査/連携）",
+        "HeiseiKakuGo-W5",
+        11,
         maxw,
-        bullet_color="#22C55E",
+    )
+
+    c.showPage()
+
+    # Page 5: next steps
+    _pdf_draw_title(c, "4. 導入ステップ", "最短で“動くデモ”まで")
+    y = h - 55 * mm
+    steps = [
+        "1) 現状ヒアリング（問い合わせ種別 / 運用ルール / NG事項）",
+        "2) FAQ（初期30〜100件）を用意（csv）",
+        "3) Streamlitでデモ共有（社内トライアル）",
+        "4) 該当なしログを週次で確認し、FAQを育成",
+        "5) 定着後に部門拡張（総務/人事/経理など）",
+    ]
+    for s in steps:
+        y = _pdf_draw_paragraph(c, margin, y, f"・{s}", "HeiseiKakuGo-W5", 11, maxw)
+        y -= 2
+    y -= 8
+    y = _pdf_draw_paragraph(
+        c,
+        margin,
+        y,
+        "次のアクション：\n・御社の問い合わせ例（10件）をご提供ください → 即日でデモFAQを作成できます。\n・効果試算に必要な『月間件数/平均対応時間/単価』を確認します。",
+        "HeiseiKakuGo-W5",
+        11,
+        maxw,
     )
 
     c.save()
     buf.seek(0)
     return buf.getvalue()
+
 
 def render_match_bar(score: float):
     """一致度（0-1）をバーで表示"""
@@ -2012,69 +1707,24 @@ def extract_concepts(text: str) -> set[str]:
 # 文字n-gramも混ぜて、日本語の部分一致に強くする
 WORD_VECTORIZER = TfidfVectorizer(ngram_range=(1, 2))
 CHAR_VECTORIZER = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
-SENTENCE_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-
-def _load_sentence_transformer_model():
-    if not SENTENCE_TRANSFORMERS_AVAILABLE or SentenceTransformer is None:
-        return None
-    cache_key = "_st_sentence_transformer_model"
-    try:
-        model = st.session_state.get(cache_key)
-        if model is not None:
-            return model
-    except Exception:
-        model = None
-    try:
-        model = SentenceTransformer(SENTENCE_MODEL_NAME)
-        try:
-            st.session_state[cache_key] = model
-        except Exception:
-            pass
-        return model
-    except Exception:
-        return None
-
-
-def _build_sentence_embeddings(model, texts: list[str]):
-    if model is None or not texts:
-        return None
-    try:
-        return model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
-    except Exception:
-        return None
-
-
-def _search_with_sentence_transformers(query_norm: str, faq_embeddings) -> list[float] | None:
-    if not query_norm or faq_embeddings is None:
-        return None
-    model = _load_sentence_transformer_model()
-    if model is None:
-        return None
-    try:
-        q_emb = model.encode([query_norm], normalize_embeddings=True, show_progress_bar=False)
-        sims_sem = cosine_similarity(q_emb, faq_embeddings).flatten()
-        return sims_sem.tolist()
-    except Exception:
-        return None
-
 
 def load_faq_index(faq_path: Path):
     if not faq_path.exists():
         empty = pd.DataFrame(columns=["question", "answer", "category"])
-        return empty, None, None, None, None, None
+        return empty, None, None, None, None
 
     try:
         df = normalize_faq_columns(read_csv_flexible(faq_path))
     except Exception:
         empty = pd.DataFrame(columns=["question", "answer", "category"])
-        return empty, None, None, None, None, None
+        return empty, None, None, None, None
 
     df["question"] = df["question"].fillna("").astype(str)
     df["answer"] = df["answer"].fillna("").astype(str)
     df["category"] = df["category"].fillna("").astype(str)
 
     if len(df) == 0:
-        return df, None, None, None, None, None
+        return df, None, None, None, None
 
     df["question_norm"] = df["question"].apply(normalize_search_text)
     df["answer_norm"] = df["answer"].apply(normalize_search_text)
@@ -2089,17 +1739,12 @@ def load_faq_index(faq_path: Path):
         X_word = word_vectorizer.fit_transform(df["qa_text_norm"])
         X_char = char_vectorizer.fit_transform(df["qa_text_norm"])
     except Exception:
-        return df, None, None, None, None, None
+        return df, None, None, None, None
 
-    faq_embeddings = None
-    if SENTENCE_TRANSFORMERS_AVAILABLE:
-        model = _load_sentence_transformer_model()
-        faq_embeddings = _build_sentence_embeddings(model, df["qa_text_norm"].tolist())
-
-    return df, word_vectorizer, X_word, char_vectorizer, X_char, faq_embeddings
+    return df, word_vectorizer, X_word, char_vectorizer, X_char
 
 
-df, vectorizer, X, char_vectorizer, X_char, faq_embeddings = load_faq_index(FAQ_PATH)
+df, vectorizer, X, char_vectorizer, X_char = load_faq_index(FAQ_PATH)
 
 if df is None or len(df) == 0 or vectorizer is None or X is None or char_vectorizer is None or X_char is None:
     st.warning("faq.csv が未配置/空/不正のため、FAQ検索は無効です。まず faq.csv を配置してください。")
@@ -2121,11 +1766,6 @@ def retrieve_faq(query: str):
 
         # 単語一致と文字部分一致を合成して、表記ゆれに強くする
         sims = (sims_word * 0.52) + (sims_char * 0.48)
-
-        # sentence-transformers による意味検索を追加（未導入時は自動スキップ）
-        sims_sem = _search_with_sentence_transformers(query_norm, faq_embeddings)
-        if sims_sem is not None and len(sims_sem) == len(sims):
-            sims = sims + (pd.Series(sims_sem).fillna(0.0).to_numpy() * 0.35)
 
         # 完全一致に近い正規化結果は少し加点
         exact_bonus = (df["question_norm"] == query_norm).astype(float).to_numpy() * 0.22
@@ -2534,193 +2174,6 @@ def append_faq_csv(faq_path: Path, new_df: pd.DataFrame) -> int:
 
     persist_faq_now()
     return len(rows)
-
-
-
-def generate_slack_bot_zip_bytes():
-    """Slack Bot 完全版コード一式をZIPで返す。既存アプリ本体とは分離し、Render等に別サービスとして配置する想定。"""
-    import textwrap
-
-    render_base = "https://your-render-url.onrender.com"
-
-    slack_bot_py = textwrap.dedent("""    import os
-    import hmac
-    import hashlib
-    import time
-    import json
-    from typing import Any
-
-    import requests
-    from flask import Flask, request, jsonify
-
-    app = Flask(__name__)
-
-    HELP_DESK_ASK_URL = os.getenv("HELPDESK_ASK_URL", "https://your-streamlit-or-api-url/ask")
-    SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "")
-    REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
-
-
-    def verify_slack_request(req) -> bool:
-        if not SLACK_SIGNING_SECRET:
-            return True
-
-        timestamp = req.headers.get("X-Slack-Request-Timestamp", "")
-        slack_signature = req.headers.get("X-Slack-Signature", "")
-        if not timestamp or not slack_signature:
-            return False
-
-        try:
-            if abs(time.time() - int(timestamp)) > 60 * 5:
-                return False
-        except Exception:
-            return False
-
-        body = req.get_data(as_text=True)
-        basestring = f"v0:{timestamp}:{body}"
-        my_signature = "v0=" + hmac.new(
-            SLACK_SIGNING_SECRET.encode("utf-8"),
-            basestring.encode("utf-8"),
-            hashlib.sha256,
-        ).hexdigest()
-
-        return hmac.compare_digest(my_signature, slack_signature)
-
-
-    def ask_helpdesk(question: str, user_name: str = "", channel_name: str = "") -> str:
-        payload: dict[str, Any] = {
-            "question": question,
-            "source": "slack",
-            "user_name": user_name,
-            "channel_name": channel_name,
-        }
-
-        r = requests.post(
-            HELP_DESK_ASK_URL,
-            json=payload,
-            timeout=REQUEST_TIMEOUT,
-        )
-        r.raise_for_status()
-
-        data = r.json()
-        answer = data.get("answer") or data.get("message") or "回答を取得できませんでした。"
-        return str(answer)
-
-
-    @app.get("/")
-    def health() -> tuple[str, int]:
-        return "ok", 200
-
-
-    @app.post("/slack/command")
-    def slack_command():
-        if not verify_slack_request(request):
-            return jsonify({"text": "署名検証に失敗しました。"}), 403
-
-        question = (request.form.get("text") or "").strip()
-        user_name = request.form.get("user_name", "")
-        channel_name = request.form.get("channel_name", "")
-
-        if not question:
-            return jsonify({
-                "response_type": "ephemeral",
-                "text": "質問文を入れてください。例: /helpdesk VPNがつながらない",
-            })
-
-        try:
-            answer = ask_helpdesk(question, user_name=user_name, channel_name=channel_name)
-            return jsonify({
-                "response_type": "in_channel",
-                "text": f"*質問:* {question}\n*回答:* {answer}",
-            })
-        except Exception as e:
-            return jsonify({
-                "response_type": "ephemeral",
-                "text": f"問い合わせAIへの接続に失敗しました: {e}",
-            }), 500
-
-
-    @app.post("/slack/events")
-    def slack_events():
-        if not verify_slack_request(request):
-            return jsonify({"error": "invalid signature"}), 403
-
-        data = request.get_json(silent=True) or {}
-
-        if data.get("type") == "url_verification":
-            return jsonify({"challenge": data.get("challenge", "")})
-
-        event = data.get("event", {})
-        if event.get("type") == "app_mention":
-            text = event.get("text", "")
-            return jsonify({"ok": True, "note": f"mention received: {text}"})
-
-        return jsonify({"ok": True})
-
-
-    if __name__ == "__main__":
-        port = int(os.getenv("PORT", "3000"))
-        app.run(host="0.0.0.0", port=port)
-    """).strip() + "\n"
-
-    requirements_txt = textwrap.dedent("""    flask==3.0.3
-    requests==2.32.3
-    gunicorn==22.0.0
-    """).strip() + "\n"
-
-    render_yaml = textwrap.dedent("""    services:
-      - type: web
-        name: slack-helpdesk-bot
-        env: python
-        plan: free
-        buildCommand: pip install -r requirements.txt
-        startCommand: gunicorn slack_bot:app
-        autoDeploy: true
-    """).strip() + "\n"
-
-    env_example = textwrap.dedent(f"""    HELPDESK_ASK_URL={render_base}/ask
-    SLACK_SIGNING_SECRET=your_signing_secret
-    REQUEST_TIMEOUT=30
-    """).strip() + "\n"
-
-    readme_md = textwrap.dedent("""    # Slack Helpdesk Bot 完全版
-
-    このZIPは、既存の Streamlit アプリ本体とは別サービスとして Render に配置する想定です。
-
-    ## 含まれるファイル
-    - `slack_bot.py` : Slack Slash Command / Events 受信用 Flask アプリ
-    - `requirements.txt` : 必要ライブラリ
-    - `render.yaml` : Render デプロイ設定例
-    - `.env.example` : 環境変数の雛形
-
-    ## Slack 側設定
-    1. Slack API で App を作成
-    2. Slash Commands に `/helpdesk` を追加
-    3. Request URL に `https://あなたのRenderURL/slack/command` を設定
-    4. Event Subscriptions を使う場合は `https://あなたのRenderURL/slack/events` を設定
-    5. Signing Secret を Render の環境変数 `SLACK_SIGNING_SECRET` に設定
-
-    ## Render 側設定
-    1. このZIPを GitHub リポジトリに配置
-    2. Render で New + → Web Service
-    3. Build Command: `pip install -r requirements.txt`
-    4. Start Command: `gunicorn slack_bot:app`
-    5. `HELPDESK_ASK_URL` に既存問い合わせAIの API URL を設定
-
-    ## 重要
-    既存の Streamlit アプリに `/ask` API が無い場合は、別途 API 追加が必要です。
-    まずは Slack Bot コード一式を先に配布し、後から API 側を接続しても構いません。
-    """).strip() + "\n"
-
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("slack_bot.py", slack_bot_py)
-        zf.writestr("requirements.txt", requirements_txt)
-        zf.writestr("render.yaml", render_yaml)
-        zf.writestr(".env.example", env_example)
-        zf.writestr("README.md", readme_md)
-
-    buf.seek(0)
-    return buf.getvalue()
 
 
 # ======================
@@ -3249,3 +2702,448 @@ if user_q:
     # おすすめ質問ボタンから自動送信した場合は、もう一度 rerun して入力欄を確実に表示
     if used_pending:
         st.rerun()
+
+# ======================
+# v25 販売強化セット（既存機能を削除せず追加）
+# ======================
+
+def _safe_sum(series):
+    try:
+        return float(pd.to_numeric(series, errors='coerce').fillna(0).sum())
+    except Exception:
+        return 0.0
+
+
+def calculate_roi_metrics(df: pd.DataFrame, avg_min: float, deflect: float, hourly_cost_yen: int) -> dict:
+    total = int(len(df)) if df is not None else 0
+    matched = int(_safe_sum(df['matched'])) if total and 'matched' in df.columns else 0
+    auto_rate = (matched / total * 100.0) if total else 0.0
+    saved_min = matched * float(avg_min) * float(deflect)
+    saved_hours = saved_min / 60.0
+    saved_yen = int(round(saved_hours * int(hourly_cost_yen))) if hourly_cost_yen else 0
+    return {
+        'total': total,
+        'matched': matched,
+        'auto_rate': auto_rate,
+        'saved_min': saved_min,
+        'saved_hours': saved_hours,
+        'saved_yen': saved_yen,
+    }
+
+
+def summarize_recent_categories(df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
+    if df is None or len(df) == 0 or 'category' not in df.columns:
+        return pd.DataFrame(columns=['category', 'count'])
+    work = df.copy()
+    work['category'] = work['category'].fillna('').astype(str).str.strip()
+    work.loc[work['category'] == '', 'category'] = '未分類'
+    out = (
+        work.groupby('category', as_index=False)
+        .size()
+        .rename(columns={'size': 'count'})
+        .sort_values('count', ascending=False)
+        .head(top_n)
+    )
+    return out
+
+
+def build_channel_quickstart(channel_name: str) -> str:
+    return (
+        f"【{channel_name}連携の進め方】\n"
+        f"1. まずは現在のWeb版でFAQ精度と運用フローを固めます。\n"
+        f"2. 次に {channel_name} の専用窓口を1つ用意し、このAIへ質問を送る導線を作ります。\n"
+        f"3. 回答できなかった質問は nohit ログへ保存し、FAQへ追加して再発防止します。\n"
+        f"4. 本番導入時は認証、利用ログ、問い合わせ先、運用ルールを社内向けに明文化します。\n"
+        f"5. 定着後に Web / {channel_name} / Teams など複数チャネルへ広げます。"
+    )
+
+
+def build_sales_copy(company_name: str = '御社') -> str:
+    return (
+        f"{company_name}の社内IT問い合わせをAIで一次対応し、情シス担当者の工数削減と回答品質の平準化を支援します。\n"
+        f"FAQ検索、回答根拠表示、該当なしログ蓄積、FAQ育成サイクルまでを一体で提供できるため、\n"
+        f"導入初期から『まずAIで確認する』運用を定着させやすい構成です。"
+    )
+
+
+def _pdf_draw_center_box(c, x, y, w_box, h_box, title, body, stroke='#94A3B8', fill='#FFFFFF', title_color='#0F172A'):
+    c.setStrokeColor(HexColor(stroke))
+    c.setFillColor(HexColor(fill))
+    c.roundRect(x, y, w_box, h_box, 6, stroke=1, fill=1)
+    c.setFillColor(HexColor(title_color))
+    c.setFont('HeiseiKakuGo-W5', 11)
+    yy = y + h_box - 12
+    for ln in _wrap_lines_for_pdf(title, 'HeiseiKakuGo-W5', 11, w_box - 10)[:2]:
+        c.drawString(x + 5, yy, ln)
+        yy -= 12
+    c.setFillColor(HexColor('#334155'))
+    c.setFont('HeiseiKakuGo-W5', 9)
+    for ln in _wrap_lines_for_pdf(body, 'HeiseiKakuGo-W5', 9, w_box - 10)[:3]:
+        c.drawString(x + 5, yy, ln)
+        yy -= 10
+
+
+def _pdf_draw_down_arrow(c, x_center, y_top, y_bottom):
+    c.setStrokeColor(HexColor('#64748B'))
+    c.setLineWidth(1.2)
+    c.line(x_center, y_top, x_center, y_bottom)
+    ah = 5
+    c.line(x_center, y_bottom, x_center - ah/2, y_bottom + ah)
+    c.line(x_center, y_bottom, x_center + ah/2, y_bottom + ah)
+
+
+def _pdf_draw_architecture_stack(c, x, y, width_pt):
+    box_h = 18 * mm
+    gap = 7 * mm
+    box_w = min(width_pt, 100 * mm)
+    items = [
+        ('① 社員 / 利用者', 'Web画面、Slack、Teams などから質問'),
+        ('② 情シス問い合わせAI', 'FAQ検索・候補提示・AI回答・問い合わせ誘導'),
+        ('③ FAQ / ナレッジ', 'faq.csv を元に根拠付きで回答'),
+        ('④ 利用ログ / nohitログ', '解決率、未回答、よくある質問を蓄積'),
+        ('⑤ FAQ改善', 'ログから不足FAQを追加して再発防止'),
+    ]
+    x_box = x + (width_pt - box_w) / 2
+    cur_y = y
+    for idx, (title, body) in enumerate(items):
+        fill = '#FFFFFF' if idx % 2 == 0 else '#F8FAFC'
+        _pdf_draw_center_box(c, x_box, cur_y - box_h, box_w, box_h, title, body, fill=fill)
+        if idx < len(items) - 1:
+            _pdf_draw_down_arrow(c, x_box + box_w / 2, cur_y - box_h, cur_y - box_h - gap + 2)
+        cur_y -= (box_h + gap)
+    return cur_y
+
+
+def generate_sales_proposal_pdf_v25() -> bytes:
+    if not REPORTLAB_AVAILABLE:
+        return b''
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    pdfmetrics.registerFont(UnicodeCIDFont('HeiseiKakuGo-W5'))
+    w, h = A4
+    margin = 18 * mm
+    maxw = w - margin * 2
+
+    avg_min = float(st.session_state.get('avg_min', 5))
+    deflect = float(st.session_state.get('deflect', 0.7))
+    hourly_cost = int(st.session_state.get('hourly_cost', 4000))
+    df30 = read_interactions(days=30)
+    roi = calculate_roi_metrics(df30, avg_min, deflect, hourly_cost)
+    faq_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=['question','answer','category'])
+
+    _pdf_draw_title(c, '提案資料_情シス問い合わせAI v25', '販売レベル / Web・Slack・Teams展開を見据えた完全版')
+    y = h - 52 * mm
+    y = _pdf_draw_paragraph(c, margin, y, build_sales_copy(COMPANY_NAME), 'HeiseiKakuGo-W5', 11, maxw)
+    y -= 4
+    y = _pdf_draw_paragraph(c, margin, y, 'この提案書では、課題、解決方法、システム構成、導入効果、導入ステップ、運用改善サイクルを一気通貫で説明します。', 'HeiseiKakuGo-W5', 11, maxw)
+    c.setFont('HeiseiKakuGo-W5', 10)
+    c.setFillColor(HexColor('#64748B'))
+    c.drawString(margin, 18 * mm, f"生成日: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    c.showPage()
+
+    _pdf_draw_title(c, '1. よくある課題', '導入前の困りごとを明確化する')
+    y = h - 52 * mm
+    y = _pdf_draw_bullet_list(c, margin, y, [
+        '同じ問い合わせが繰り返され、情シス担当者が何度も同じ説明をしている。',
+        '回答品質が担当者の経験に依存し、新人や兼務担当だと対応に時間がかかる。',
+        'FAQはあるが、探されずに問い合わせへ流れてしまう。',
+        '未解決の質問が記録されず、再発防止の材料が残らない。',
+    ], maxw)
+    y -= 6
+    y = _pdf_draw_paragraph(c, margin, y, '本システムは、まずAIへ聞く導線を作り、解決できない質問だけを情シスへ渡すことで、対応件数そのものを減らします。', 'HeiseiKakuGo-W5', 11, maxw)
+    c.showPage()
+
+    _pdf_draw_title(c, '2. システム構成', 'Web / Slack / Teams に広げやすい構成')
+    y = h - 50 * mm
+    _pdf_draw_architecture_stack(c, margin, y, maxw)
+    c.showPage()
+
+    _pdf_draw_title(c, '3. 導入効果（直近30日サンプル）', 'ログから投資対効果を説明する')
+    y = h - 52 * mm
+    metrics_text = (
+        f"FAQ登録件数: {len(faq_df)} 件\n"
+        f"直近30日 問い合わせ: {roi['total']} 件\n"
+        f"直近30日 自動対応件数: {roi['matched']} 件\n"
+        f"自動対応率: {roi['auto_rate']:.1f}%\n"
+        f"推定削減時間: {roi['saved_hours']:.1f} 時間\n"
+        f"推定削減額: {roi['saved_yen']:,} 円（{hourly_cost:,} 円/時間）"
+    )
+    y = _pdf_draw_paragraph(c, margin, y, metrics_text, 'HeiseiKakuGo-W5', 12, maxw)
+    y -= 6
+    y = _pdf_draw_paragraph(c, margin, y, '前提値はアプリ内シミュレーターと連動しています。問い合わせ件数・平均対応時間・解決率を変えれば、企業ごとの試算へそのまま使えます。', 'HeiseiKakuGo-W5', 11, maxw)
+    c.showPage()
+
+    _pdf_draw_title(c, '4. 導入ステップ', '最短で動くデモから本番運用へ')
+    y = h - 52 * mm
+    y = _pdf_draw_bullet_list(c, margin, y, [
+        '初期FAQ（30〜100件）を準備する。',
+        'Web版で社内トライアルを行い、よくある質問を集める。',
+        'nohitログを確認し、FAQを週次で追加する。',
+        '必要に応じて Slack / Teams の窓口へ展開する。',
+        'ダッシュボードと効果レポートで定着状況を見える化する。',
+    ], maxw)
+    y -= 6
+    y = _pdf_draw_paragraph(c, margin, y, '小さく始めて、ログを見ながらFAQを育てるのが成功パターンです。最初から完璧なFAQを作る必要はありません。', 'HeiseiKakuGo-W5', 11, maxw)
+    c.showPage()
+
+    _pdf_draw_title(c, '5. 提案プラン例', '副業提案・クラウドワークス向けの価格整理')
+    y = h - 52 * mm
+    y = _pdf_draw_bullet_list(c, margin, y, [
+        'スターター: 初期FAQ整備 + Web版導入 + 操作説明書 / 提案資料作成',
+        'スタンダード: ログ確認 + FAQ育成 + 月次レポート運用',
+        'プロ: Slack / Teams 展開、権限設計、運用ルール整備、部門横断展開',
+    ], maxw)
+    y -= 6
+    y = _pdf_draw_paragraph(c, margin, y, '次のアクション例: ①現状FAQの受領 ②問い合わせ例10件の確認 ③デモ画面共有 ④導入効果試算の提示', 'HeiseiKakuGo-W5', 11, maxw)
+
+    c.save()
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def build_v25_runtime_summary() -> pd.DataFrame:
+    df30 = read_interactions(days=30)
+    faq_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=['question','answer','category'])
+    log_files = list_log_files()
+    avg_min = float(st.session_state.get('avg_min', 5))
+    deflect = float(st.session_state.get('deflect', 0.7))
+    hourly_cost = int(st.session_state.get('hourly_cost', 4000))
+    roi = calculate_roi_metrics(df30, avg_min, deflect, hourly_cost)
+    rows = [
+        ['登録FAQ件数', len(faq_df)],
+        ['直近30日 問い合わせ', roi['total']],
+        ['直近30日 自動対応件数', roi['matched']],
+        ['自動対応率', f"{roi['auto_rate']:.1f}%"],
+        ['推定削減時間', f"{roi['saved_hours']:.1f} 時間"],
+        ['推定削減額', f"{roi['saved_yen']:,} 円"],
+        ['nohitログファイル数', len(log_files)],
+    ]
+    return pd.DataFrame(rows, columns=['指標', '値'])
+
+
+if st.session_state.get('is_admin'):
+    st.markdown('---')
+    st.markdown('## 🚀 v25 販売強化セット')
+    v25_tabs = st.tabs(['営業ダッシュボード', 'v25資料ダウンロード', 'Slack / Teams展開メモ', 'Bot実装コード'])
+
+    with v25_tabs[0]:
+        df30 = read_interactions(days=30)
+        faq_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=['question','answer','category'])
+        avg_min = float(st.session_state.get('avg_min', 5))
+        deflect = float(st.session_state.get('deflect', 0.7))
+        hourly_cost = int(st.session_state.get('hourly_cost', 4000))
+        roi = calculate_roi_metrics(df30, avg_min, deflect, hourly_cost)
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric('登録FAQ', len(faq_df))
+        k2.metric('直近30日 問い合わせ', roi['total'])
+        k3.metric('自動対応率', f"{roi['auto_rate']:.1f}%")
+        k4.metric('推定削減額', f"{roi['saved_yen']:,}円")
+
+        st.caption('問い合わせ数・FAQ件数・ROIを営業説明用にまとめた追加ダッシュボードです。既存KPIはそのまま残しています。')
+
+        if df30 is not None and len(df30) > 0:
+            work = df30.copy()
+            if 'timestamp' in work.columns:
+                work['date'] = pd.to_datetime(work['timestamp'], errors='coerce').dt.date.astype(str)
+                trend = work.groupby('date', as_index=False).size().rename(columns={'size': 'count'}).sort_values('date')
+                st.markdown('#### 直近30日 問い合わせ推移')
+                st.line_chart(trend.set_index('date')['count'])
+
+            cat_df = summarize_recent_categories(work, top_n=8)
+            if len(cat_df) > 0:
+                st.markdown('#### よく使われるカテゴリ')
+                st.bar_chart(cat_df.set_index('category')['count'])
+        else:
+            st.info('まだ十分な利用ログがありません。質問を増やすと営業ダッシュボードが育ちます。')
+
+        st.markdown('#### 営業でそのまま使える説明文')
+        st.code(build_sales_copy(COMPANY_NAME), language='markdown')
+        st.dataframe(build_v25_runtime_summary(), width='stretch', hide_index=True)
+
+    with v25_tabs[1]:
+        if not REPORTLAB_AVAILABLE:
+            st.warning('reportlab が未導入のため、v25 PDFは生成できません。requirements.txt に reportlab を追加してください。')
+        else:
+            v25_pdf = generate_sales_proposal_pdf_v25()
+            st.download_button(
+                '📑 提案資料PDF v25 をダウンロード',
+                data=v25_pdf,
+                file_name='提案資料_情シス問い合わせAI_v25.pdf',
+                mime='application/pdf',
+                width='stretch',
+            )
+        runtime_csv = build_v25_runtime_summary().to_csv(index=False, encoding='utf-8-sig')
+        st.download_button(
+            '📊 営業サマリーCSVをダウンロード',
+            data=runtime_csv,
+            file_name='sales_summary_v25.csv',
+            mime='text/csv',
+            width='stretch',
+        )
+        st.caption('既存の操作説明書PDF・提案資料PDFは残したまま、販売向けのv25資料を追加しています。')
+
+    
+
+# ======================
+# v26 Bot / Teams Bot 実装コード生成（既存機能を削除せず追加）
+# ======================
+
+def build_slack_bot_requirements_text() -> str:
+    return """slack-bolt>=1.21.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+python-dotenv>=1.0.0
+"""
+
+
+def build_teams_bot_requirements_text() -> str:
+    return """aiohttp>=3.9.0
+botbuilder-core>=4.15.0
+botbuilder-integration-aiohttp>=4.15.0
+botbuilder-schema>=4.15.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+python-dotenv>=1.0.0
+"""
+
+
+def build_bot_env_sample_text() -> str:
+    return """# ===== 共通 =====
+FAQ_CSV_PATH=runtime_data/faq.csv
+MATCH_THRESHOLD=0.42
+TOP_K=3
+
+# ===== Slack Socket Mode =====
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_APP_TOKEN=xapp-your-app-level-token
+
+# ===== Teams Bot =====
+MICROSOFT_APP_ID=your-bot-app-id
+MICROSOFT_APP_PASSWORD=your-bot-app-password
+PORT=3978
+"""
+
+
+def build_shared_faq_engine_text() -> str:
+    return 'from __future__ import annotations\n\nimport io\nfrom pathlib import Path\nfrom dataclasses import dataclass\n\nimport pandas as pd\nfrom sklearn.feature_extraction.text import TfidfVectorizer\nfrom sklearn.metrics.pairwise import cosine_similarity\n\n\ndef read_csv_flexible(path: Path) -> pd.DataFrame:\n    raw = path.read_bytes()\n    encs = ["utf-8", "utf-8-sig", "cp932", "shift_jis"]\n    text = None\n    for enc in encs:\n        try:\n            text = raw.decode(enc)\n            break\n        except Exception:\n            continue\n    if text is None:\n        text = raw.decode("latin1", errors="ignore")\n    try:\n        return pd.read_csv(io.StringIO(text), engine="python", on_bad_lines="skip")\n    except Exception:\n        return pd.DataFrame()\n\n\ndef normalize_faq_columns(df: pd.DataFrame) -> pd.DataFrame:\n    if df is None or len(df) == 0:\n        return pd.DataFrame(columns=["question", "answer", "category"])\n    out = df.copy()\n    rename_map = {}\n    for c in out.columns:\n        s = str(c).strip()\n        k = s.lower()\n        if s in ["質問", "問い合わせ", "問合せ"] or k in ["question", "query"]:\n            rename_map[c] = "question"\n        elif s in ["回答"] or k in ["answer", "reply", "answer_text"]:\n            rename_map[c] = "answer"\n        elif s in ["カテゴリ", "分類"] or k in ["category"]:\n            rename_map[c] = "category"\n    out = out.rename(columns=rename_map)\n    for col in ["question", "answer", "category"]:\n        if col not in out.columns:\n            out[col] = ""\n    out = out[["question", "answer", "category"]].copy()\n    for col in ["question", "answer", "category"]:\n        out[col] = out[col].fillna("").astype(str).str.replace("\n", " ").str.replace("\r", " ")\n    out = out[(out["question"] != "") & (out["answer"] != "")].reset_index(drop=True)\n    return out\n\n\n@dataclass\nclass MatchResult:\n    matched: bool\n    score: float\n    answer: str\n    category: str\n    references: list[tuple[str, str, float]]\n\n\nclass FAQEngine:\n    def __init__(self, faq_path: str | Path, threshold: float = 0.42, top_k: int = 3):\n        self.faq_path = Path(faq_path)\n        self.threshold = float(threshold)\n        self.top_k = int(top_k)\n        self.df = pd.DataFrame(columns=["question", "answer", "category"])\n        self.vectorizer: TfidfVectorizer | None = None\n        self.matrix = None\n        self.reload()\n\n    def reload(self):\n        if self.faq_path.exists():\n            self.df = normalize_faq_columns(read_csv_flexible(self.faq_path))\n        else:\n            self.df = pd.DataFrame(columns=["question", "answer", "category"])\n        corpus = self.df["question"].fillna("").astype(str).tolist()\n        if corpus:\n            self.vectorizer = TfidfVectorizer(ngram_range=(1, 2))\n            self.matrix = self.vectorizer.fit_transform(corpus)\n        else:\n            self.vectorizer = None\n            self.matrix = None\n\n    def search(self, query: str) -> MatchResult:\n        q = str(query or "").strip()\n        if not q or self.vectorizer is None or self.matrix is None or len(self.df) == 0:\n            return MatchResult(False, 0.0, "現在回答できるFAQがありません。", "", [])\n        q_vec = self.vectorizer.transform([q])\n        scores = cosine_similarity(q_vec, self.matrix)[0]\n        order = scores.argsort()[::-1][: max(1, self.top_k)]\n        refs = []\n        for idx in order:\n            row = self.df.iloc[int(idx)]\n            refs.append((str(row.get("question", "")), str(row.get("answer", "")), float(scores[int(idx)])))\n        best_row = self.df.iloc[int(order[0])]\n        best_q, best_a, best_s = refs[0]\n        matched = float(best_s) >= float(self.threshold)\n        return MatchResult(\n            matched=matched,\n            score=float(best_s),\n            answer=str(best_a),\n            category=str(best_row.get("category", "")),\n            references=refs,\n        )\n\n\ndef format_match_response(result: MatchResult) -> str:\n    head = "【AI回答】\n" + result.answer\n    score_line = f"\n\n一致度: {int(result.score * 100)}%"\n    refs = "\n".join([f"・{q} ({int(s*100)}%)" for q, _, s in result.references[:3]])\n    if result.matched:\n        return head + score_line + "\n\n参考FAQ候補\n" + refs\n    return (\n        "該当するFAQが見つかりませんでした。\n"\n        "次の情報を添えて情シスへ連絡してください。\n"\n        "・利用者名\n・端末名\n・発生日時\n・利用場所\n・ネットワーク\n・やりたいこと / エラーメッセージ\n\n"\n        "近いFAQ候補\n" + refs\n    )\n'
+
+
+def build_slack_bot_code() -> str:
+    return 'from __future__ import annotations\n\nimport os\nfrom pathlib import Path\nfrom dotenv import load_dotenv\nfrom slack_bolt import App\nfrom slack_bolt.adapter.socket_mode import SocketModeHandler\n\nfrom faq_engine import FAQEngine, format_match_response\n\nload_dotenv()\n\nSLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]\nSLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]\nFAQ_CSV_PATH = os.environ.get("FAQ_CSV_PATH", "runtime_data/faq.csv")\nMATCH_THRESHOLD = float(os.environ.get("MATCH_THRESHOLD", "0.42"))\nTOP_K = int(os.environ.get("TOP_K", "3"))\n\napp = App(token=SLACK_BOT_TOKEN)\nengine = FAQEngine(Path(FAQ_CSV_PATH), threshold=MATCH_THRESHOLD, top_k=TOP_K)\n\nWELCOME = (\n    "こんにちは。情シス問い合わせAIです。\n"\n    "例: Wi-Fiがつながらない / Outlook送受信ができない / Teamsにログインできない"\n)\n\n@app.event("app_mention")\ndef handle_app_mention(event, say, logger):\n    try:\n        text = str(event.get("text", ""))\n        cleaned = text.strip()\n        if not cleaned:\n            say(WELCOME)\n            return\n        result = engine.search(cleaned)\n        say(format_match_response(result))\n    except Exception as e:\n        logger.exception("Slack bot error")\n        say(f"エラーが発生しました: {e}")\n\n@app.message("")\ndef handle_dm(message, say, logger):\n    try:\n        if message.get("channel_type") != "im":\n            return\n        text = str(message.get("text", "")).strip()\n        if not text:\n            say(WELCOME)\n            return\n        result = engine.search(text)\n        say(format_match_response(result))\n    except Exception as e:\n        logger.exception("Slack DM error")\n        say(f"エラーが発生しました: {e}")\n\nif __name__ == "__main__":\n    SocketModeHandler(app, SLACK_APP_TOKEN).start()\n'
+
+
+def build_teams_bot_code() -> str:
+    return 'from __future__ import annotations\n\nimport os\nfrom pathlib import Path\nfrom aiohttp import web\nfrom dotenv import load_dotenv\n\nfrom botbuilder.core import TurnContext\nfrom botbuilder.integration.aiohttp import CloudAdapter, ConfigurationBotFrameworkAuthentication\nfrom botbuilder.core.teams import TeamsActivityHandler\nfrom botbuilder.schema import Activity\n\nfrom faq_engine import FAQEngine, format_match_response\n\nload_dotenv()\n\nFAQ_CSV_PATH = os.environ.get("FAQ_CSV_PATH", "runtime_data/faq.csv")\nMATCH_THRESHOLD = float(os.environ.get("MATCH_THRESHOLD", "0.42"))\nTOP_K = int(os.environ.get("TOP_K", "3"))\nPORT = int(os.environ.get("PORT", "3978"))\n\nSETTINGS = {\n    "MicrosoftAppId": os.environ.get("MICROSOFT_APP_ID", ""),\n    "MicrosoftAppPassword": os.environ.get("MICROSOFT_APP_PASSWORD", ""),\n}\nAUTH = ConfigurationBotFrameworkAuthentication(SETTINGS)\nADAPTER = CloudAdapter(AUTH)\nENGINE = FAQEngine(Path(FAQ_CSV_PATH), threshold=MATCH_THRESHOLD, top_k=TOP_K)\n\nclass HelpdeskTeamsBot(TeamsActivityHandler):\n    async def on_message_activity(self, turn_context: TurnContext):\n        text = (turn_context.activity.text or "").strip()\n        if not text:\n            await turn_context.send_activity(\n                "情シス問い合わせAIです。例: Wi-Fiがつながらない / Outlook送受信ができない / Teamsにログインできない"\n            )\n            return\n        result = ENGINE.search(text)\n        await turn_context.send_activity(format_match_response(result))\n\n    async def on_members_added_activity(self, members_added, turn_context: TurnContext):\n        for member in members_added:\n            if member.id != turn_context.activity.recipient.id:\n                await turn_context.send_activity(\n                    "情シス問い合わせAIへようこそ。困っていることをそのまま入力してください。"\n                )\n\nBOT = HelpdeskTeamsBot()\n\nasync def on_error(context: TurnContext, error: Exception):\n    print(f"[on_turn_error] {error}")\n    await context.send_activity("エラーが発生しました。設定を確認してください。")\n\nADAPTER.on_turn_error = on_error\n\nasync def messages(req: web.Request) -> web.Response:\n    body = await req.json()\n    activity = Activity().deserialize(body)\n    auth_header = req.headers.get("Authorization", "")\n    response = await ADAPTER.process_activity(auth_header, activity, BOT.on_turn)\n    if response:\n        return web.json_response(data=response.body, status=response.status)\n    return web.Response(status=201)\n\napp = web.Application()\napp.router.add_post("/api/messages", messages)\n\nif __name__ == "__main__":\n    web.run_app(app, host="0.0.0.0", port=PORT)\n'
+
+
+def build_teams_manifest_json() -> str:
+    return '{\n  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.19/MicrosoftTeams.schema.json",\n  "manifestVersion": "1.19",\n  "version": "1.0.0",\n  "id": "REPLACE-WITH-YOUR-APP-ID",\n  "packageName": "com.example.helpdeskbot",\n  "developer": {\n    "name": "Your Company",\n    "websiteUrl": "https://example.com",\n    "privacyUrl": "https://example.com/privacy",\n    "termsOfUseUrl": "https://example.com/terms"\n  },\n  "name": {\n    "short": "情シス問い合わせAI",\n    "full": "情シス問い合わせAI Teams Bot"\n  },\n  "description": {\n    "short": "社内IT問い合わせに回答するTeams Bot",\n    "full": "FAQ検索ベースで社内IT問い合わせに一次対応するTeams Botです。"\n  },\n  "icons": {\n    "outline": "outline.png",\n    "color": "color.png"\n  },\n  "accentColor": "#0EA5E9",\n  "bots": [\n    {\n      "botId": "REPLACE-WITH-YOUR-APP-ID",\n      "scopes": ["personal", "team"],\n      "supportsFiles": false,\n      "isNotificationOnly": false,\n      "commandLists": [\n        {\n          "scopes": ["personal", "team"],\n          "commands": [\n            {"title": "help", "description": "使い方を表示"},\n            {"title": "faq", "description": "FAQを検索"}\n          ]\n        }\n      ]\n    }\n  ],\n  "permissions": ["identity", "messageTeamMembers"],\n  "validDomains": []\n}\n'
+
+
+def build_bot_deploy_guide() -> str:
+    return """【Bot実装の考え方】
+1. Streamlit本体はそのまま維持し、Botは別プロセス / 別サービスで動かします。
+2. どちらのBotも同じ faq.csv を参照するため、Web版と回答ロジックを揃えやすくなります。
+3. Slack版は Socket Mode、Teams版は /api/messages を受ける bot サービス構成です。
+4. 先にWeb版でFAQ精度を固め、その後Botを展開する流れが安全です。
+"""
+
+
+def make_bot_bundle_zip() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('faq_engine.py', build_shared_faq_engine_text())
+        zf.writestr('slack_bot.py', build_slack_bot_code())
+        zf.writestr('teams_bot.py', build_teams_bot_code())
+        zf.writestr('requirements_slack.txt', build_slack_bot_requirements_text())
+        zf.writestr('requirements_teams.txt', build_teams_bot_requirements_text())
+        zf.writestr('.env.example', build_bot_env_sample_text())
+        zf.writestr('teams_manifest/manifest.json', build_teams_manifest_json())
+        zf.writestr('README_BOT_SETUP.txt', build_bot_deploy_guide())
+    buf.seek(0)
+    return buf.getvalue()
+    with v25_tabs[2]:
+        st.markdown('#### Slack展開メモ')
+        st.code(build_channel_quickstart('Slack'), language='markdown')
+        st.markdown('#### Teams展開メモ')
+        st.code(build_channel_quickstart('Teams'), language='markdown')
+        st.markdown('#### 導入時に確認する項目')
+        st.markdown(
+            '- 利用チャネル（Web / Slack / Teams）\n'
+            '- 認証方式（社内のみ / SSO / パスワード）\n'
+            '- FAQ更新の担当者と更新頻度\n'
+            '- 個人情報・機密情報の入力ルール\n'
+            '- 問い合わせ先、SLA、エスカレーション条件'
+        )
+
+    with v25_tabs[3]:
+        st.info('既存のWeb版はそのまま残し、Slack Bot / Teams Bot は別プロセスで動かす前提の実装コードを追加しています。')
+        st.markdown('#### 導入ガイド')
+        st.code(build_bot_deploy_guide(), language='markdown')
+
+        bot_zip = make_bot_bundle_zip()
+        st.download_button(
+            '🤖 Slack / Teams Bot 実装コード一式ZIPをダウンロード',
+            data=bot_zip,
+            file_name='helpdesk_ai_bot_bundle_v26.zip',
+            mime='application/zip',
+            width='stretch',
+        )
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown('#### slack_bot.py')
+            st.code(build_slack_bot_code(), language='python')
+            st.download_button(
+                'Slack Botコードをダウンロード',
+                data=build_slack_bot_code().encode('utf-8'),
+                file_name='slack_bot.py',
+                mime='text/x-python',
+                width='stretch',
+            )
+            st.markdown('#### requirements_slack.txt')
+            st.code(build_slack_bot_requirements_text(), language='text')
+
+        with c2:
+            st.markdown('#### teams_bot.py')
+            st.code(build_teams_bot_code(), language='python')
+            st.download_button(
+                'Teams Botコードをダウンロード',
+                data=build_teams_bot_code().encode('utf-8'),
+                file_name='teams_bot.py',
+                mime='text/x-python',
+                width='stretch',
+            )
+            st.markdown('#### requirements_teams.txt')
+            st.code(build_teams_bot_requirements_text(), language='text')
+
+        st.markdown('#### 共通FAQエンジン')
+        st.code(build_shared_faq_engine_text(), language='python')
+        st.download_button(
+            'faq_engine.py をダウンロード',
+            data=build_shared_faq_engine_text().encode('utf-8'),
+            file_name='faq_engine.py',
+            mime='text/x-python',
+            width='stretch',
+        )
+
+        st.markdown('#### .env.example')
+        st.code(build_bot_env_sample_text(), language='dotenv')
+        st.download_button(
+            '.env.example をダウンロード',
+            data=build_bot_env_sample_text().encode('utf-8'),
+            file_name='.env.example',
+            mime='text/plain',
+            width='stretch',
+        )
+
+        st.markdown('#### Teams manifest.json')
+        st.code(build_teams_manifest_json(), language='json')
+        st.download_button(
+            'Teams manifest.json をダウンロード',
+            data=build_teams_manifest_json().encode('utf-8'),
+            file_name='manifest.json',
+            mime='application/json',
+            width='stretch',
+        )
