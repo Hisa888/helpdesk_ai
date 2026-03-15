@@ -2966,6 +2966,24 @@ GITHUB_TOKEN = "ghp_xxx"
                     )
                 st.caption("※ どちらもアプリの現状に合わせて自動生成されます（必要に応じて文面はカスタマイズ可能）。")
 
+        with st.expander("🤖 Slack Bot 完全版コード", expanded=False):
+            st.caption("既存機能はそのままに、Slack連携用の別サービス一式をZIPでダウンロードできます。")
+            st.code(
+                "Render URL（Slash Command）\n"
+                "https://あなたのRenderURL/slack/command\n\n"
+                "Render URL（Event Subscriptions）\n"
+                "https://あなたのRenderURL/slack/events",
+                language="text",
+            )
+            st.download_button(
+                "⬇️ Slack Bot 一式ZIPをダウンロード",
+                data=generate_slack_bot_zip_bytes(),
+                file_name="slack_bot_complete.zip",
+                mime="application/zip",
+                width="stretch",
+            )
+            st.caption("ZIPには slack_bot.py / requirements.txt / render.yaml / .env.example / README.md を同梱しています。")
+
         st.markdown("---")
         with st.expander("🧠 FAQ自動生成（該当なしログ → FAQ案）", expanded=False):
             st.caption("『該当なし』ログからFAQを自動生成し、faq.csvへ追記できます。")
