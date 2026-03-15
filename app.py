@@ -1051,8 +1051,8 @@ def generate_ops_manual_pdf() -> bytes:
         ],
         maxw,
     )
-    #y -= 8　#TEST
-    y -= 13　#TEST
+    #y -= 8
+    y -= 13
 
     c.setFillColor(HexColor("#0F172A"))
     c.setFont("HeiseiKakuGo-W5", 11)
