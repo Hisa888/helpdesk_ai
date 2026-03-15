@@ -1,0 +1,15 @@
+name: Render Keep Alive
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake Render app
+        run: |
+          echo "Pinging https://helpdesk-ai-96pl.onrender.com"
+          curl -L --fail --silent --show-error --max-time 60 "https://helpdesk-ai-96pl.onrender.com" > /dev/null
