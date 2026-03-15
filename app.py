@@ -1051,13 +1051,12 @@ def generate_ops_manual_pdf() -> bytes:
         ],
         maxw,
     )
-    #y -= 8
-    y -= 13
+    y -= 8
 
     c.setFillColor(HexColor("#0F172A"))
     c.setFont("HeiseiKakuGo-W5", 11)
     c.drawString(margin, y, "問い合わせ対応の流れ")
-    y -= 10
+    y -= 30
     y = _pdf_draw_flow(c, margin, y)
     y = _pdf_draw_paragraph(
         c,
