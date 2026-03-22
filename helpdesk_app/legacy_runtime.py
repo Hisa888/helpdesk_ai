@@ -1007,13 +1007,40 @@ def run_app():
             return []
 
 
+    def _csv_bytes_as_utf8_sig(path: Path) -> bytes:
+        """CSVをExcelで開きやすい UTF-8 BOM 付き bytes にそろえる。"""
+        try:
+            raw = path.read_bytes()
+        except Exception:
+            return b""
+        # すでにUTF-8 BOM付きならそのまま返す
+        if raw.startswith(b"\xef\xbb\xbf"):
+            return raw
+        # 文字コード揺れ込みで読んで、UTF-8 BOM付きへ正規化
+        try:
+            df = read_csv_flexible(path)
+            if df is not None and len(df.columns) > 0:
+                sio = io.StringIO()
+                df.to_csv(sio, index=False, encoding="utf-8-sig")
+                return sio.getvalue().encode("utf-8-sig")
+        except Exception:
+            pass
+        # 最後の手段: 生テキストを BOM 付き UTF-8 として返す
+        for enc in ("utf-8", "utf-8-sig", "cp932", "shift_jis", "latin1"):
+            try:
+                text_value = raw.decode(enc, errors="ignore")
+                return text_value.encode("utf-8-sig")
+            except Exception:
+                continue
+        return raw
+
     def make_logs_zip(files):
-        """指定されたCSVをZIP化してbytesで返す"""
+        """指定されたCSVをZIP化してbytesで返す（ZIP内CSVもExcel向けBOM付き）。"""
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for p in files:
                 try:
-                    zf.write(p, arcname=p.name)
+                    zf.writestr(p.name, _csv_bytes_as_utf8_sig(p))
                 except Exception:
                     pass
         buf.seek(0)
@@ -2495,10 +2522,7 @@ def run_app():
             st.caption("まだログはありません。")
         else:
             latest = log_files[0]
-            try:
-                latest_bytes = latest.read_bytes()
-            except Exception:
-                latest_bytes = b""
+            latest_bytes = _csv_bytes_as_utf8_sig(latest)
             st.download_button(
                 "⬇ 最新ログCSVをダウンロード",
                 data=latest_bytes,
@@ -3210,7 +3234,7 @@ def run_app():
 
         if len(old_df) == 0:
             # 空なら新ヘッダで作り直す
-            with path.open("w", encoding="utf-8", newline="") as f:
+            with path.open("w", encoding="utf-8-sig", newline="") as f:
                 w = csv.writer(f)
                 w.writerow(cols)
             return cols
@@ -3226,7 +3250,7 @@ def run_app():
                 continue
             rows.append([ts, q, "", "", "", "", "", ""])
 
-        with path.open("w", encoding="utf-8", newline="") as f:
+        with path.open("w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
             w.writerow(cols)
             w.writerows(rows)
@@ -3257,7 +3281,7 @@ def run_app():
 
         try:
             is_new = not path.exists()
-            with path.open("a", encoding="utf-8", newline="") as f:
+            with path.open("a", encoding="utf-8-sig", newline="") as f:
                 w = csv.writer(f)
                 if is_new:
                     w.writerow(cols)
@@ -3310,7 +3334,7 @@ def run_app():
 
         # UTF-8で書き戻す（Excel対応ならutf-8-sigでもOK）
         try:
-            with path.open("w", encoding="utf-8", newline="") as f:
+            with path.open("w", encoding="utf-8-sig", newline="") as f:
                 w = csv.writer(f)
                 w.writerow(cols)
                 for _, r in df_log[cols].iterrows():
