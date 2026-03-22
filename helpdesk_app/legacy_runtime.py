@@ -2741,12 +2741,47 @@ def run_app():
 
     def ensure_faq_index_loaded():
         global df, vectorizer, X, char_vectorizer, X_char, faq_embeddings
-        if df is not None and vectorizer is not None and X is not None and char_vectorizer is not None and X_char is not None:
+
+        # すでにメモリ上に読み込まれている場合はそのまま返す
+        if (
+            df is not None
+            and vectorizer is not None
+            and X is not None
+            and char_vectorizer is not None
+            and X_char is not None
+        ):
             return df, vectorizer, X, char_vectorizer, X_char, faq_embeddings
+
+        # 失敗時でも NameError にならないよう、必ず既知の初期値を持たせる
+        local_df = None
+        local_vectorizer = None
+        local_X = None
+        local_char_vectorizer = None
+        local_X_char = None
+        local_faq_embeddings = None
+
         try:
-            df, vectorizer, X, char_vectorizer, X_char, faq_embeddings = get_faq_index_state(str(FAQ_PATH))
+            state = get_faq_index_state(str(FAQ_PATH))
+            if isinstance(state, tuple) and len(state) >= 5:
+                local_df = state[0]
+                local_vectorizer = state[1]
+                local_X = state[2]
+                local_char_vectorizer = state[3]
+                local_X_char = state[4]
+                local_faq_embeddings = state[5] if len(state) >= 6 else None
         except Exception:
+            pass
+
+        df = local_df
+        vectorizer = local_vectorizer
+        X = local_X
+        char_vectorizer = local_char_vectorizer
+        X_char = local_X_char
+        faq_embeddings = local_faq_embeddings
+
+        if df is None:
             reset_faq_index_runtime()
+
         return df, vectorizer, X, char_vectorizer, X_char, faq_embeddings
 
     def get_faq_index_cached():
