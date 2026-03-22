@@ -1,0 +1,10 @@
+streamlit>=1.41
+pandas>=2.2
+requests>=2.31
+scikit-learn>=1.5
+reportlab>=4.2
+sentence-transformers>=3.4
+torch
+flask>=3.0
+gunicorn>=22.0
+openpyxl>=3.1
