@@ -2723,6 +2723,8 @@ def run_app():
 
 
     # 起動時にFAQインデックスを作らず、初回検索時に遅延ロードする
+    # nested 関数群では global を使って参照しているため、ここで module global として初期化する
+    global df, vectorizer, X, char_vectorizer, X_char, faq_embeddings
     df = None
     vectorizer = None
     X = None
@@ -2742,17 +2744,27 @@ def run_app():
     def ensure_faq_index_loaded():
         global df, vectorizer, X, char_vectorizer, X_char, faq_embeddings
 
-        # すでにメモリ上に読み込まれている場合はそのまま返す
-        if (
-            df is not None
-            and vectorizer is not None
-            and X is not None
-            and char_vectorizer is not None
-            and X_char is not None
-        ):
-            return df, vectorizer, X, char_vectorizer, X_char, faq_embeddings
+        # 既に利用可能なら再生成しない
+        try:
+            if (
+                df is not None
+                and vectorizer is not None
+                and X is not None
+                and char_vectorizer is not None
+                and X_char is not None
+            ):
+                return df, vectorizer, X, char_vectorizer, X_char, faq_embeddings
+        except NameError:
+            pass
 
-        # 失敗時でも NameError にならないよう、必ず既知の初期値を持たせる
+        # NameError 回避のため globals から安全取得
+        df = globals().get("df", None)
+        vectorizer = globals().get("vectorizer", None)
+        X = globals().get("X", None)
+        char_vectorizer = globals().get("char_vectorizer", None)
+        X_char = globals().get("X_char", None)
+        faq_embeddings = globals().get("faq_embeddings", None)
+
         local_df = None
         local_vectorizer = None
         local_X = None
@@ -2760,6 +2772,7 @@ def run_app():
         local_X_char = None
         local_faq_embeddings = None
 
+        # まずキャッシュ済み FAQ インデックスを試す
         try:
             state = get_faq_index_state(str(FAQ_PATH))
             if isinstance(state, tuple) and len(state) >= 5:
@@ -2771,6 +2784,47 @@ def run_app():
                 local_faq_embeddings = state[5] if len(state) >= 6 else None
         except Exception:
             pass
+
+        # キャッシュが取れない/壊れている場合のフォールバック
+        if local_df is None:
+            try:
+                local_df = load_faq_data()
+            except Exception:
+                local_df = None
+
+            try:
+                if local_df is not None and len(local_df) > 0:
+                    questions = local_df["question"].fillna("").astype(str).tolist()
+                else:
+                    questions = []
+            except Exception:
+                questions = []
+
+            if questions:
+                try:
+                    local_vectorizer = TfidfVectorizer()
+                    local_X = local_vectorizer.fit_transform(questions)
+                except Exception:
+                    local_vectorizer = None
+                    local_X = None
+
+                try:
+                    local_char_vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
+                    local_X_char = local_char_vectorizer.fit_transform(questions)
+                except Exception:
+                    local_char_vectorizer = None
+                    local_X_char = None
+
+                try:
+                    local_faq_embeddings = build_faq_embeddings(questions)
+                except Exception:
+                    local_faq_embeddings = None
+            else:
+                local_vectorizer = None
+                local_X = None
+                local_char_vectorizer = None
+                local_X_char = None
+                local_faq_embeddings = None
 
         df = local_df
         vectorizer = local_vectorizer
