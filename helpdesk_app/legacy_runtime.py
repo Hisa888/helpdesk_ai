@@ -2350,22 +2350,12 @@ def run_app():
 
 
     with st.sidebar:
-        st.markdown(
-            """
-            <div style="background:linear-gradient(135deg, rgba(14,165,233,0.20), rgba(59,130,246,0.10));
-                        border:1px solid rgba(125,211,252,0.28); border-radius:16px; padding:14px 16px; margin-bottom:12px;">
-              <div style="font-size:1.05rem; font-weight:800; margin-bottom:8px; color:#f8fafc;">📌 このAIでできること</div>
-              <div style="font-size:0.94rem; line-height:1.85; color:#e2e8f0;">
-                このAIは、社内のIT問い合わせを自己解決につなげるための
-                <span style="color:#7dd3fc; font-weight:700;">情シス問い合わせ支援AI</span>です。
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        st.markdown("### 📌 このAIでできること")
         st.markdown(
         """
-        <div style="color:#e2e8f0; font-weight:700; margin:6px 0 8px 0;">主な機能</div>
+        このAIは、社内のIT問い合わせを自己解決につなげるための **情シス問い合わせ支援AI** です。
+
+        主な機能
 
         ・FAQデータを検索し、最も近い回答を自動表示  
         ・RAG検索により、表現が少し違う質問でも近いFAQを提示  
@@ -2373,28 +2363,18 @@ def run_app():
         ・該当するFAQがない場合は問い合わせテンプレートを提示  
         ・問い合わせログを自動記録し、未整備FAQを可視化  
 
-        <div style="color:#fef08a; font-weight:700; margin:14px 0 8px 0;">管理者機能</div>
+        管理者機能
 
         ・FAQを **Excelでダウンロード / アップロード / 更新反映**  
         ・問い合わせログの確認  
         ・削減時間シミュレーション  
         ・導入効果レポートPDFの出力  
         ・操作説明書 / 提案資料PDFのダウンロード
-        """,
-        unsafe_allow_html=True,
+        """
         )
 
 
-        st.markdown(
-            """
-            <div style="background:linear-gradient(135deg, rgba(16,185,129,0.18), rgba(59,130,246,0.10));
-                        border:1px solid rgba(110,231,183,0.25); border-radius:16px; padding:12px 16px; margin:14px 0 10px 0;">
-              <div style="font-size:1.02rem; font-weight:800; color:#dbeafe;">📈 想定効果（例）</div>
-              <div style="font-size:0.9rem; color:#d1fae5; margin-top:6px;">導入効果をイメージしやすいように、削減時間の目安も表示します。</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        st.markdown("### 📈 想定効果（例）")
         st.markdown(
         """
         このAIを導入すると、次のような効果が期待できます。
@@ -2416,16 +2396,7 @@ def run_app():
         )
 
 
-        st.markdown(
-            """
-            <div style="background:linear-gradient(135deg, rgba(245,158,11,0.18), rgba(239,68,68,0.10));
-                        border:1px solid rgba(253,186,116,0.25); border-radius:16px; padding:12px 16px; margin:14px 0 10px 0;">
-              <div style="font-size:1.02rem; font-weight:800; color:#fff7ed;">🧭 使い方</div>
-              <div style="font-size:0.9rem; color:#ffedd5; margin-top:6px;">営業デモでも説明しやすいように、利用の流れを左メニューに残しています。</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        st.markdown("### 🧭 使い方")
         st.markdown(
         """
         ① 質問を入力します  
@@ -2771,6 +2742,14 @@ def run_app():
     def ensure_faq_index_loaded():
         global df, vectorizer, X, char_vectorizer, X_char, faq_embeddings
 
+        # globals() 経由で取得し、未定義でも NameError にならないようにする
+        df = globals().get("df", None)
+        vectorizer = globals().get("vectorizer", None)
+        X = globals().get("X", None)
+        char_vectorizer = globals().get("char_vectorizer", None)
+        X_char = globals().get("X_char", None)
+        faq_embeddings = globals().get("faq_embeddings", None)
+
         # すでにメモリ上に読み込まれている場合はそのまま返す
         if (
             df is not None
@@ -2781,7 +2760,7 @@ def run_app():
         ):
             return df, vectorizer, X, char_vectorizer, X_char, faq_embeddings
 
-        # 失敗時でも NameError にならないよう、必ず既知の初期値を持たせる
+        # まずキャッシュ済み状態の取得を試す
         local_df = None
         local_vectorizer = None
         local_X = None
@@ -2801,6 +2780,45 @@ def run_app():
         except Exception:
             pass
 
+        # キャッシュが空なら、FAQファイルから安全に再構築する
+        if local_df is None:
+            try:
+                loaded_df = load_faq_df()
+            except Exception:
+                loaded_df = None
+
+            if loaded_df is not None and len(loaded_df) > 0:
+                try:
+                    local_df = prepare_faq_dataframe(loaded_df)
+                except Exception:
+                    local_df = loaded_df
+
+                try:
+                    questions = local_df["question_norm"].fillna("").astype(str).tolist() if "question_norm" in local_df.columns else local_df["question"].fillna("").astype(str).tolist()
+                except Exception:
+                    questions = []
+
+                if questions:
+                    try:
+                        local_vectorizer = TfidfVectorizer(analyzer="word", ngram_range=(1, 2))
+                        local_X = local_vectorizer.fit_transform(questions)
+                    except Exception:
+                        local_vectorizer = None
+                        local_X = None
+
+                    try:
+                        local_char_vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
+                        local_X_char = local_char_vectorizer.fit_transform(questions)
+                    except Exception:
+                        local_char_vectorizer = None
+                        local_X_char = None
+
+                    try:
+                        qa_texts = local_df["qa_text_norm"].tolist() if "qa_text_norm" in local_df.columns else questions
+                        local_faq_embeddings = _get_sentence_embeddings_cached(tuple(qa_texts)) if qa_texts else None
+                    except Exception:
+                        local_faq_embeddings = None
+
         df = local_df
         vectorizer = local_vectorizer
         X = local_X
@@ -2808,8 +2826,12 @@ def run_app():
         X_char = local_X_char
         faq_embeddings = local_faq_embeddings
 
-        if df is None:
-            reset_faq_index_runtime()
+        globals()["df"] = df
+        globals()["vectorizer"] = vectorizer
+        globals()["X"] = X
+        globals()["char_vectorizer"] = char_vectorizer
+        globals()["X_char"] = X_char
+        globals()["faq_embeddings"] = faq_embeddings
 
         return df, vectorizer, X, char_vectorizer, X_char, faq_embeddings
 
