@@ -4031,53 +4031,6 @@ def run_app():
                 })
                 st.session_state["ui_theme_settings"] = live_theme
 
-                components.html(f"""
-                <script>
-                (function() {{
-                  const doc = window.parent.document;
-                  const root = doc.documentElement;
-                  const theme = {json.dumps(live_theme, ensure_ascii=False)};
-                  const vars = {{
-                    '--user-sidebar-bg-start': theme.sidebar_bg_start,
-                    '--user-sidebar-bg-end': theme.sidebar_bg_end,
-                    '--user-sidebar-text': theme.sidebar_text,
-                    '--user-sidebar-text-muted': theme.sidebar_text_muted,
-                    '--user-sidebar-panel-bg': theme.sidebar_panel_bg,
-                    '--user-sidebar-panel-border': theme.sidebar_panel_border,
-                    '--user-button-bg': theme.button_bg,
-                    '--user-button-text': theme.button_text,
-                    '--user-button-border': theme.button_border,
-                    '--user-button-hover-bg': theme.button_hover_bg,
-                    '--user-button-hover-text': theme.button_hover_text,
-                    '--user-button-disabled-bg': theme.button_disabled_bg,
-                    '--user-button-disabled-text': theme.button_disabled_text,
-                    '--user-main-bg-start': theme.main_bg_start,
-                    '--user-main-bg-mid': theme.main_bg_mid,
-                    '--user-main-bg-end': theme.main_bg_end,
-                    '--user-card-bg': theme.card_bg,
-                    '--user-card-border': theme.card_border,
-                    '--user-resizer-line': theme.resizer_line,
-                    '--user-resizer-knob': theme.resizer_knob,
-                  }};
-                  Object.entries(vars).forEach(([k, v]) => root.style.setProperty(k, String(v || '')));
-
-                  const sidebar = doc.querySelector('[data-testid="stSidebar"]');
-                  if (sidebar) {{
-                    sidebar.style.background = `linear-gradient(180deg, ${theme.sidebar_bg_start} 0%, ${theme.sidebar_bg_end} 100%)`;
-                  }}
-
-                  const forceColor = (selector, color) => {{
-                    doc.querySelectorAll(selector).forEach((el) => {{
-                      el.style.setProperty('color', color, 'important');
-                      el.querySelectorAll('*').forEach((child) => child.style.setProperty('color', color, 'important'));
-                    }});
-                  }};
-                  forceColor('[data-testid="stSidebar"] label, [data-testid="stSidebar"] div[role="radiogroup"] *, [data-testid="stSidebar"] div[data-baseweb="select"] *, [data-testid="stSidebar"] .stCheckbox *, [data-testid="stSidebar"] .stRadio *', theme.sidebar_text);
-                  forceColor('[data-testid="stSidebar"] small, [data-testid="stSidebar"] .small, [data-testid="stSidebar"] .stCaption, [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p', theme.sidebar_text_muted);
-                }})();
-                </script>
-                """, height=0)
-
                 col_ui1, col_ui2 = st.columns(2)
                 with col_ui1:
                     if st.button("💾 UI配色を保存", width="stretch", key="save_ui_theme"):
