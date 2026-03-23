@@ -2003,11 +2003,6 @@ def run_app():
     .badge {background: rgba(255,255,255,0.16); border: 1px solid rgba(255,255,255,0.22); padding: 7px 11px; border-radius: 999px; font-size: 12px; backdrop-filter: blur(6px);}
     .cta-row {display:flex; gap:10px; flex-wrap:wrap; margin-top:14px;}
     .cta {background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.20); padding: 10px 12px; border-radius: 14px; font-size: 13px; backdrop-filter: blur(6px);}
-    .hero-meta-grid {display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px;}
-    .hero-meta-card {background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.20); border-radius: 18px; padding: 14px 14px 12px 14px; backdrop-filter: blur(8px);}
-    .hero-meta-label {font-size: 11px; letter-spacing: .05em; opacity: .9; margin-bottom: 6px;}
-    .hero-meta-value {font-size: 24px; font-weight: 800; letter-spacing: -0.03em; margin: 0 0 4px 0;}
-    .hero-meta-sub {font-size: 12px; opacity: .95;}
 
     .topbar-card {
       background: rgba(255,255,255,0.88);
@@ -2036,12 +2031,6 @@ def run_app():
     .query-panel .eyebrow {font-size: 12px; color: #0369a1; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;}
     .query-panel h3 {margin: 5px 0 6px 0; font-size: 22px; color: var(--text-main);}
     .query-panel p {margin: 0; color: var(--text-sub); font-size: 14px;}
-    .sales-strip {display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:12px; margin: 14px 0 18px 0;}
-    .sales-card {background: rgba(255,255,255,0.90); border: 1px solid var(--border); border-radius: 20px; padding: 16px 18px; box-shadow: var(--shadow);}
-    .sales-card .eyebrow {font-size: 11px; color:#0369a1; font-weight:700; letter-spacing:0.08em; text-transform: uppercase; margin-bottom: 8px;}
-    .sales-card h4 {margin:0 0 8px 0; font-size:18px; color: var(--text-main);}
-    .sales-card p {margin:0; color: var(--text-sub); font-size: 13px; line-height:1.65;}
-    .demo-actions-note {font-size: 12px; color:#475569; margin: 8px 0 0 0;}
 
     .kpi-grid {display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 14px 0 18px 0;}
     @media (max-width: 1100px){ .kpi-grid {grid-template-columns: repeat(2, minmax(0, 1fr));} }
@@ -2077,7 +2066,7 @@ def run_app():
       .block-container {padding-top: 1.2rem !important; padding-bottom: 8rem !important;}
       .hero-shell {padding: 20px 18px; border-radius: 20px;}
       .hero h1 {font-size: 30px;}
-      .hero-meta-grid, .sales-strip, .kpi-grid {grid-template-columns: 1fr;}
+      .kpi-grid {grid-template-columns: 1fr;}
     }
     </style>
     """,
@@ -2299,32 +2288,15 @@ def run_app():
     st.markdown('</div>', unsafe_allow_html=True)
 
     # ===== ヒーローヘッダー =====
-    st.markdown(f"""
+    st.markdown("""
     <div class="hero-shell">
     <div class="hero">
     <h1>情シス問い合わせAI</h1>
-    <p>{COMPANY_NAME} の社内サポートを想定した、FAQ根拠付きのAIヘルプデスクです。問い合わせ一次対応を自動化し、導入デモ・管理者運用・効果レポートまで1画面で見せられる営業仕様に仕上げています。</p>
+    <p>FAQ根拠付きで即回答し、問い合わせ対応を削減する社内ヘルプデスクAI。導入デモ、管理者運用、効果レポートまで1画面で見せられる営業仕様です。</p>
     <div class="cta-row">
     <span class="cta">🎯 導入効果：問い合わせ削減 / 品質平準化 / ナレッジ蓄積</span>
     <span class="cta">🧩 既存FAQ（CSV / Excel）で即導入</span>
     <span class="cta">📄 効果レポートPDF・提案資料を同梱</span>
-    </div>
-    <div class="hero-meta-grid">
-      <div class="hero-meta-card">
-        <div class="hero-meta-label">対応チャネル</div>
-        <div class="hero-meta-value">Web</div>
-        <div class="hero-meta-sub">社内ポータル / 受付デモにそのまま利用可能</div>
-      </div>
-      <div class="hero-meta-card">
-        <div class="hero-meta-label">FAQ運用</div>
-        <div class="hero-meta-value">Excel</div>
-        <div class="hero-meta-sub">管理者が入替・追加しやすい実務向け構成</div>
-      </div>
-      <div class="hero-meta-card">
-        <div class="hero-meta-label">見せられる価値</div>
-        <div class="hero-meta-value">KPI</div>
-        <div class="hero-meta-sub">削減時間・ヒット率・ログ可視化まで一括提示</div>
-      </div>
     </div>
     <div class="badges">
     <span class="badge">✅ FAQ参照（根拠表示）</span>
@@ -2334,47 +2306,6 @@ def run_app():
     <span class="badge">📊 KPI・導入効果可視化</span>
     </div>
     </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    demo_col1, demo_col2, demo_col3, demo_col4 = st.columns([1, 1, 1, 1])
-    with demo_col1:
-        if st.button("🔐 パスワード忘れを試す", width="stretch", key="hero_demo_pwd"):
-            st.session_state.pending_q = "パスワードを忘れました"
-            st.rerun()
-    with demo_col2:
-        if st.button("🌐 VPN障害を試す", width="stretch", key="hero_demo_vpn"):
-            st.session_state.pending_q = "VPNに接続できません"
-            st.rerun()
-    with demo_col3:
-        if st.button("🧩 アカウントロックを試す", width="stretch", key="hero_demo_lock"):
-            st.session_state.pending_q = "アカウントがロックされました"
-            st.rerun()
-    with demo_col4:
-        if contact_link:
-            st.link_button("📩 導入相談", contact_link, width="stretch")
-        else:
-            st.button("📩 導入相談（未設定）", disabled=True, width="stretch", key="hero_contact_disabled")
-
-    st.caption("デモ質問ボタンから、営業時に見せやすい代表シナリオをすぐ再生できます。")
-
-    st.markdown("""
-    <div class="sales-strip">
-      <div class="sales-card">
-        <div class="eyebrow">Point 01</div>
-        <h4>現場が迷わず使える</h4>
-        <p>質問をそのまま入力するだけで、FAQ根拠付きの回答と参考候補を表示します。ITに詳しくない社員でも使いやすい導線です。</p>
-      </div>
-      <div class="sales-card">
-        <div class="eyebrow">Point 02</div>
-        <h4>管理者が育てやすい</h4>
-        <p>FAQはExcel/CSVで一括更新でき、該当なしログも蓄積されます。運用しながら精度を上げやすい構成を維持しています。</p>
-      </div>
-      <div class="sales-card">
-        <div class="eyebrow">Point 03</div>
-        <h4>導入効果を説明しやすい</h4>
-        <p>KPI、効果レポートPDF、提案資料PDFまで備えており、社内説明・営業デモ・PoC提案までつなげやすいUIです。</p>
-      </div>
     </div>
     """, unsafe_allow_html=True)
 
