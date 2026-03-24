@@ -14,13 +14,6 @@ def run_app():
     import zipfile
     import base64
     import threading
-    from .modules.admin_panels import (
-        render_search_settings_panel,
-        render_ui_theme_panel,
-        render_ui_layout_panel,
-        render_faq_admin_panel,
-        render_pdf_panels,
-    )
 
     # ===== CSV読み込みを頑丈にする（文字コード/区切り/カラム揺れ対策）=====
     def read_csv_flexible(path: Path) -> pd.DataFrame:
@@ -3794,12 +3787,15 @@ def run_app():
     #                     else:
     #                         st.warning("GitHubへの保存に失敗しました。設定を確認してください。")
 
+            from helpdesk_app.modules.search_settings_panel import render_search_settings_panel
+            from helpdesk_app.modules.ui_theme_panel import render_ui_theme_panel
+            from helpdesk_app.modules.ui_layout_panel import render_ui_layout_panel
+            from helpdesk_app.modules.faq_admin_panel import render_faq_admin_panel
+            from helpdesk_app.modules.pdf_panels import render_pdf_panels
+
             render_search_settings_panel(locals())
-
             render_ui_theme_panel(locals())
-
             render_ui_layout_panel(locals())
-
             render_faq_admin_panel(locals())
 
             # ===== FAQ自動生成（該当なしログ → FAQ案）=====
