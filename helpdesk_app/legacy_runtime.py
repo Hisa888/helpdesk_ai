@@ -2375,6 +2375,67 @@ def run_app():
     except Exception:
         pass
 
+    # ===== KPIダッシュボード詳細（営業向け） =====
+    try:
+        _df30 = read_interactions(days=30)
+        if _df30 is not None and len(_df30) > 0:
+            _df30 = _df30.copy()
+            _df30["timestamp_dt"] = pd.to_datetime(_df30.get("timestamp"), errors="coerce")
+            _month_start = pd.Timestamp.now().normalize().replace(day=1)
+            _df_month = _df30[_df30["timestamp_dt"] >= _month_start].copy()
+            _month_total = int(len(_df_month))
+            _month_matched = int(_df_month["matched"].sum()) if "matched" in _df_month.columns else 0
+            _month_rate = (_month_matched / _month_total * 100.0) if _month_total else 0.0
+            _avg_min_dash = float(st.session_state.get("avg_min", 5))
+            _deflect_dash = float(st.session_state.get("deflect", 0.7))
+            _hourly_cost_dash = int(st.session_state.get("hourly_cost", 4000))
+            _month_saved_min = _month_matched * _avg_min_dash * _deflect_dash
+            _month_saved_yen = int(round((_month_saved_min / 60.0) * _hourly_cost_dash)) if _hourly_cost_dash else 0
+
+            st.markdown('<div class="section-title">📈 KPIダッシュボード</div>', unsafe_allow_html=True)
+            _d1, _d2, _d3 = st.columns(3)
+            _d1.metric("今月の問い合わせ", f"{_month_total}件")
+            _d2.metric("今月の自動対応率", f"{_month_rate:.1f}%")
+            _d3.metric("今月の削減額（推定）", f"{_month_saved_yen:,}円")
+
+            _left, _right = st.columns([1.35, 1.0])
+            with _left:
+                _trend = _df30.dropna(subset=["timestamp_dt"]).copy()
+                if len(_trend) > 0:
+                    _trend["date"] = _trend["timestamp_dt"].dt.date
+                    _daily = (
+                        _trend.groupby("date", dropna=True)
+                        .agg(total=("question", "count"), matched=("matched", "sum"))
+                        .reset_index()
+                        .sort_values("date")
+                    )
+                    _daily["auto_rate"] = (_daily["matched"] / _daily["total"]).replace([pd.NA, float("inf")], 0.0) * 100.0
+                    st.caption("📅 直近30日の問い合わせ件数")
+                    st.line_chart(_daily.set_index("date")[["total"]], height=220)
+            with _right:
+                _cat = _df30.copy()
+                if "category" in _cat.columns:
+                    _cat["category"] = _cat["category"].fillna("").astype(str).replace("", "未分類")
+                    _top_cat = _cat.groupby("category").size().sort_values(ascending=False).head(5)
+                    if len(_top_cat) > 0:
+                        st.caption("🏷️ 問い合わせカテゴリ 上位5件")
+                        st.bar_chart(_top_cat, height=220)
+
+            _recent = _df30.dropna(subset=["timestamp_dt"]).sort_values("timestamp_dt", ascending=False).head(10).copy()
+            if len(_recent) > 0:
+                _recent["日時"] = _recent["timestamp_dt"].dt.strftime("%Y-%m-%d %H:%M")
+                _recent["質問"] = _recent["question"].fillna("").astype(str)
+                _recent["判定"] = _recent["matched"].apply(lambda x: "自動対応" if int(x) == 1 else "該当なし")
+                _show_cols = [c for c in ["日時", "質問", "判定", "category"] if c in _recent.columns or c == "category"]
+                if "category" in _recent.columns:
+                    _recent = _recent.rename(columns={"category": "カテゴリ"})
+                    _show_cols = ["日時", "質問", "判定", "カテゴリ"]
+                st.caption("🕒 最近の問い合わせ")
+                st.dataframe(_recent[_show_cols], use_container_width=True, hide_index=True)
+        else:
+            st.caption("（KPIダッシュボードはログ蓄積後に表示されます）")
+    except Exception:
+        pass
 
     with st.sidebar:
         st.markdown("### 📌 このAIでできること")
