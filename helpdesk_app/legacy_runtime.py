@@ -2314,156 +2314,100 @@ def run_app():
     except Exception:
         pass
 
-    render_kpi_dashboard_main()
-
     # ==== サイドバー ========
 
 
-    # ===== KPI（直近7日）=====
-    try:
-        _df7 = read_interactions(days=7)
-        if _df7 is not None and len(_df7) > 0:
-            _total7 = int(len(_df7))
-            _matched7 = int(_df7["matched"].sum()) if "matched" in _df7.columns else 0
-            _rate7 = (_matched7 / _total7 * 100.0) if _total7 else 0.0
-            _today_prefix = datetime.now().strftime("%Y-%m-%d")
-            _today = _df7[_df7["timestamp"].astype(str).str.startswith(_today_prefix)]
-            _total_today = int(len(_today))
+    # ===== KPI（メイン表示）=====
+    def render_kpi_dashboard_main():
+        try:
+            _df30 = read_interactions(days=30)
+        except Exception:
+            _df30 = pd.DataFrame()
 
-            # 営業用：削減時間（推定）KPI（サイドバー入力と連動）
-            _avg_min_kpi = float(st.session_state.get("avg_min", 5))
-            _deflect_kpi = float(st.session_state.get("deflect", 0.7))
-            _hourly_cost_kpi = int(st.session_state.get("hourly_cost", 4000))
-            _saved_min7 = _matched7 * _avg_min_kpi * _deflect_kpi
-            _saved_h7 = _saved_min7 / 60.0
-            _saved_yen7 = int(round(_saved_h7 * _hourly_cost_kpi)) if _hourly_cost_kpi else 0
+        try:
+            _df7 = read_interactions(days=7)
+        except Exception:
+            _df7 = pd.DataFrame()
 
-            # 営業用：KPIカード（中央に大きく）
-            st.markdown('<div class="section-title">📊 直近の利用状況</div>', unsafe_allow_html=True)
-            st.markdown(
-                f'''
-    <div class="kpi-grid">
-      <div class="kpi">
-        <div class="label">直近7日 問い合わせ</div>
-        <div class="value">{_total7}</div>
-        <div class="sub">ログベース</div>
-      </div>
-      <div class="kpi">
-        <div class="label">直近7日 自動対応率</div>
-        <div class="value">{_rate7:.1f}%</div>
-        <div class="sub">FAQヒット率</div>
-      </div>
-      <div class="kpi">
-        <div class="label">直近7日 自動対応件数</div>
-        <div class="value">{_matched7}</div>
-        <div class="sub">自己解決に寄与</div>
-      </div>
-      <div class="kpi">
-        <div class="label">推定削減（直近7日）</div>
-        <div class="value">{_saved_h7:.1f}h</div>
-        <div class="sub">約{_saved_yen7:,}円（{_hourly_cost_kpi:,}円/時間）</div>
-      </div>
-      <div class="kpi">
-        <div class="label">今日の問い合わせ</div>
-        <div class="value">{_total_today}</div>
-        <div class="sub">当日分</div>
-      </div>
-    </div>
-    ''',
-                unsafe_allow_html=True,
-            )
-        else:
+        if _df30 is None:
+            _df30 = pd.DataFrame()
+        if _df7 is None:
+            _df7 = pd.DataFrame()
+
+        if len(_df30) == 0 and len(_df7) == 0:
             st.caption("（利用ログがまだありません。質問するとKPIが表示されます）")
-    except Exception:
-        pass
+            return
 
-    # ===== KPIダッシュボード詳細（営業向け） =====
-    try:
-        _df30 = read_interactions(days=30)
-        if _df30 is not None and len(_df30) > 0:
-            _df30 = _df30.copy()
-            _df30["timestamp_dt"] = pd.to_datetime(_df30.get("timestamp"), errors="coerce")
-            _month_start = pd.Timestamp.now().normalize().replace(day=1)
-            _df_month = _df30[_df30["timestamp_dt"] >= _month_start].copy()
-            _month_total = int(len(_df_month))
-            _month_matched = int(_df_month["matched"].sum()) if "matched" in _df_month.columns else 0
-            _month_rate = (_month_matched / _month_total * 100.0) if _month_total else 0.0
-            _avg_min_dash = float(st.session_state.get("avg_min", 5))
-            _deflect_dash = float(st.session_state.get("deflect", 0.7))
-            _hourly_cost_dash = int(st.session_state.get("hourly_cost", 4000))
-            _month_saved_min = _month_matched * _avg_min_dash * _deflect_dash
-            _month_saved_yen = int(round((_month_saved_min / 60.0) * _hourly_cost_dash)) if _hourly_cost_dash else 0
+        _base = _df30 if len(_df30) > 0 else _df7
+        _total30 = int(len(_df30)) if len(_df30) > 0 else int(len(_base))
+        _matched30 = int(_df30["matched"].sum()) if len(_df30) > 0 and "matched" in _df30.columns else 0
+        _rate30 = (_matched30 / _total30 * 100.0) if _total30 else 0.0
 
-            st.markdown('<div class="section-title">📈 KPIダッシュボード</div>', unsafe_allow_html=True)
-            _d1, _d2, _d3 = st.columns(3)
-            _d1.metric("今月の問い合わせ", f"{_month_total}件")
-            _d2.metric("今月の自動対応率", f"{_month_rate:.1f}%")
-            _d3.metric("今月の削減額（推定）", f"{_month_saved_yen:,}円")
+        _today_prefix = datetime.now().strftime("%Y-%m-%d")
+        try:
+            _today = _base[_base["timestamp"].astype(str).str.startswith(_today_prefix)] if "timestamp" in _base.columns else pd.DataFrame()
+        except Exception:
+            _today = pd.DataFrame()
+        _total_today = int(len(_today))
 
-            _left, _right = st.columns([1.35, 1.0])
-            with _left:
-                st.caption("📅 直近30日の問い合わせ件数")
-                _trend = _df30.dropna(subset=["timestamp_dt"]).copy()
-                if len(_trend) > 0:
-                    _trend["date"] = _trend["timestamp_dt"].dt.floor("D")
-                    _daily = (
-                        _trend.groupby("date", dropna=True)
-                        .size()
-                        .reset_index(name="total")
-                        .sort_values("date")
-                    )
-                    if "matched" in _trend.columns:
-                        _matched_daily = (
-                            _trend.groupby("date", dropna=True)["matched"]
-                            .sum(min_count=1)
-                            .reset_index(name="matched")
-                            .sort_values("date")
-                        )
-                        _daily = _daily.merge(_matched_daily, on="date", how="left")
-                    else:
-                        _daily["matched"] = 0
-                    _daily["matched"] = _daily["matched"].fillna(0)
-                    _start_date = (pd.Timestamp.now().normalize() - pd.Timedelta(days=29))
-                    _all_dates = pd.date_range(start=_start_date, end=pd.Timestamp.now().normalize(), freq="D")
-                    _daily = (
-                        pd.DataFrame({"date": _all_dates})
-                        .merge(_daily, on="date", how="left")
-                        .fillna({"total": 0, "matched": 0})
-                    )
-                    _daily["total"] = _daily["total"].astype(int)
-                    _daily["matched"] = _daily["matched"].astype(int)
-                    _daily["auto_rate"] = (_daily["matched"] / _daily["total"].replace(0, pd.NA)).fillna(0.0) * 100.0
-                    st.line_chart(_daily.set_index("date")[["total"]], height=220)
-                else:
-                    st.info("30日以内の問い合わせログがまだないため、グラフは表示されません。")
-            with _right:
-                _cat = _df30.copy()
-                st.caption("🏷️ 問い合わせカテゴリ 上位5件")
-                if "category" in _cat.columns:
-                    _cat["category"] = _cat["category"].fillna("").astype(str).replace("", "未分類")
-                    _top_cat = _cat.groupby("category").size().sort_values(ascending=False).head(5)
-                    if len(_top_cat) > 0:
-                        st.bar_chart(_top_cat, height=220)
-                    else:
-                        st.info("カテゴリ付きログがまだありません。")
-                else:
-                    st.info("カテゴリ情報がないため、棒グラフは表示されません。")
+        _avg_min_kpi = float(st.session_state.get("avg_min", 5))
+        _deflect_kpi = float(st.session_state.get("deflect", 0.7))
+        _hourly_cost_kpi = int(st.session_state.get("hourly_cost", 4000))
+        _saved_min30 = _matched30 * _avg_min_kpi * _deflect_kpi
+        _saved_h30 = _saved_min30 / 60.0
+        _saved_yen30 = int(round(_saved_h30 * _hourly_cost_kpi)) if _hourly_cost_kpi else 0
 
-            _recent = _df30.dropna(subset=["timestamp_dt"]).sort_values("timestamp_dt", ascending=False).head(10).copy()
-            if len(_recent) > 0:
-                _recent["日時"] = _recent["timestamp_dt"].dt.strftime("%Y-%m-%d %H:%M")
-                _recent["質問"] = _recent["question"].fillna("").astype(str)
-                _recent["判定"] = _recent["matched"].apply(lambda x: "自動対応" if int(x) == 1 else "該当なし")
-                _show_cols = [c for c in ["日時", "質問", "判定", "category"] if c in _recent.columns or c == "category"]
-                if "category" in _recent.columns:
-                    _recent = _recent.rename(columns={"category": "カテゴリ"})
-                    _show_cols = ["日時", "質問", "判定", "カテゴリ"]
-                st.caption("🕒 最近の問い合わせ")
-                st.dataframe(_recent[_show_cols], use_container_width=True, hide_index=True)
+        st.markdown('<div class="section-title">📊 導入効果ダッシュボード</div>', unsafe_allow_html=True)
+        st.markdown(
+            f"""
+<div class="kpi-grid">
+  <div class="kpi">
+    <div class="label">直近30日 問い合わせ</div>
+    <div class="value">{_total30}</div>
+    <div class="sub">ログベース</div>
+  </div>
+  <div class="kpi">
+    <div class="label">直近30日 自動対応率</div>
+    <div class="value">{_rate30:.1f}%</div>
+    <div class="sub">FAQヒット率</div>
+  </div>
+  <div class="kpi">
+    <div class="label">今日の問い合わせ</div>
+    <div class="value">{_total_today}</div>
+    <div class="sub">当日分</div>
+  </div>
+  <div class="kpi">
+    <div class="label">推定削減（直近30日）</div>
+    <div class="value">{_saved_h30:.1f}h</div>
+    <div class="sub">約{_saved_yen30:,}円（{_hourly_cost_kpi:,}円/時間）</div>
+  </div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+        if len(_df30) > 0 and "timestamp" in _df30.columns:
+            _plot = _df30.copy()
+            _plot["timestamp"] = pd.to_datetime(_plot["timestamp"], errors="coerce")
+            _plot = _plot.dropna(subset=["timestamp"])
+            if len(_plot) > 0:
+                _plot["date"] = _plot["timestamp"].dt.floor("D")
+                _daily = _plot.groupby("date").size().rename("count").reset_index()
+                _end = pd.Timestamp.now().floor("D")
+                _start = _end - pd.Timedelta(days=29)
+                _full_dates = pd.DataFrame({"date": pd.date_range(_start, _end, freq="D")})
+                _daily = _full_dates.merge(_daily, on="date", how="left").fillna({"count": 0})
+                _daily["count"] = _daily["count"].astype(int)
+
+                st.markdown("### 📅 直近30日の問い合わせ件数")
+                st.line_chart(_daily.set_index("date")[["count"]], width="stretch")
+            else:
+                st.info("直近30日のグラフを表示できる有効なtimestampログがまだありません。")
         else:
-            st.caption("（KPIダッシュボードはログ蓄積後に表示されます）")
-    except Exception:
-        pass
+            st.info("直近30日のログがまだありません。")
+
+    render_kpi_dashboard_main()
+
 
     with st.sidebar:
         st.markdown("### 📌 このAIでできること")
@@ -3876,23 +3820,381 @@ def run_app():
     #                     else:
     #                         st.warning("GitHubへの保存に失敗しました。設定を確認してください。")
 
-            from helpdesk_app.modules.search_settings_panel import render_search_settings_panel
-            from helpdesk_app.modules.ui_theme_panel import render_ui_theme_panel
-            from helpdesk_app.modules.ui_layout_panel import render_ui_layout_panel
-            from helpdesk_app.modules.faq_admin_panel import render_faq_admin_panel
-            from helpdesk_app.modules.pdf_panels import render_pdf_panels
+            with st.expander("🎯 検索精度設定", expanded=False):
+                current_cfg = current_search_settings()
+                st.caption("管理者が検索の厳しさを分かりやすく調整できます。まずは上の基本設定だけ触れば十分です。")
+                st.info(
+                    f"現在値：自動回答 {current_cfg['answer_threshold']:.2f} / 候補表示 {current_cfg['suggest_threshold']:.2f} / "
+                    f"単語重視 {int(current_cfg['word_weight'] * 100)}% / 文字重視 {int(current_cfg['char_weight'] * 100)}%"
+                )
 
-            render_search_settings_panel(locals())
-            render_ui_theme_panel(locals())
-            render_ui_layout_panel(locals())
-            render_faq_admin_panel(locals())
+                st.markdown("#### ① 基本設定（通常はここだけ）")
+                admin_answer_threshold = st.slider(
+                    "自動回答しきい値",
+                    min_value=0.10,
+                    max_value=1.20,
+                    value=float(current_cfg["answer_threshold"]),
+                    step=0.01,
+                    key="admin_answer_threshold_slider",
+                    help="この値以上ならそのまま回答します。高いほど慎重、低いほど積極的です。",
+                )
+                max_suggest_value = max(0.05, round(admin_answer_threshold - 0.05, 2))
+                suggest_default = min(float(current_cfg["suggest_threshold"]), max_suggest_value)
+                admin_suggest_threshold = st.slider(
+                    "候補表示しきい値",
+                    min_value=0.05,
+                    max_value=max_suggest_value,
+                    value=suggest_default,
+                    step=0.01,
+                    key="admin_suggest_threshold_slider",
+                    help="この値以上かつ自動回答未満なら『近いFAQ候補』として表示します。",
+                )
+
+                search_balance = st.radio(
+                    "検索バランス",
+                    options=["バランス型", "単語重視", "表記ゆれ重視"],
+                    index=0 if abs(float(current_cfg["word_weight"]) - 0.54) < 0.03 else (1 if float(current_cfg["word_weight"]) >= 0.60 else 2),
+                    horizontal=True,
+                    help="単語重視は意味の近い語句に強く、表記ゆれ重視は細かな言い回し違いに強くなります。",
+                )
+                if search_balance == "単語重視":
+                    word_weight, char_weight = 0.65, 0.35
+                elif search_balance == "表記ゆれ重視":
+                    word_weight, char_weight = 0.40, 0.60
+                else:
+                    word_weight, char_weight = 0.54, 0.46
+
+                answer_gap = round(admin_answer_threshold - admin_suggest_threshold, 2)
+                if answer_gap >= 0.18:
+                    st.success("判定差は広めです。誤回答を抑えやすい設定です。")
+                elif answer_gap >= 0.10:
+                    st.info("判定差は標準です。迷ったときは候補表示へ回しやすい設定です。")
+                else:
+                    st.warning("判定差が狭めです。自動回答と候補表示の境目が近くなります。")
+
+                st.markdown("""- 自動回答以上: 通常回答
+    - 候補表示以上: 近いFAQ候補を表示
+    - 候補表示未満: 該当なしとして追加情報フォームへ""")
+
+                with st.expander("🔧 詳細設定（上級者向け）", expanded=False):
+                    st.caption("より細かく精度を触りたい場合だけ使ってください。未設定なら基本設定のままでも十分です。")
+
+                    c_adv1, c_adv2 = st.columns(2)
+                    with c_adv1:
+                        exact_bonus = st.slider("完全一致ボーナス", 0.00, 0.80, float(current_cfg["exact_bonus"]), 0.01, key="search_exact_bonus")
+                        contains_bonus = st.slider("部分一致ボーナス", 0.00, 0.60, float(current_cfg["contains_bonus"]), 0.01, key="search_contains_bonus")
+                        token_bonus_max = st.slider("単語一致ボーナス上限", 0.00, 0.80, float(current_cfg["token_bonus_max"]), 0.01, key="search_token_bonus")
+                        concept_bonus_max = st.slider("概念一致ボーナス上限", 0.00, 0.80, float(current_cfg["concept_bonus_max"]), 0.01, key="search_concept_bonus")
+                        prefix_bonus = st.slider("書き出し一致ボーナス", 0.00, 0.30, float(current_cfg["prefix_bonus"]), 0.01, key="search_prefix_bonus")
+                        top_k = st.slider("候補として保持する件数", 1, 5, int(current_cfg["top_k"]), 1, key="search_top_k")
+                    with c_adv2:
+                        semantic_enabled = st.checkbox("意味検索を使う", value=bool(current_cfg["semantic_enabled"]), key="search_semantic_enabled")
+                        semantic_skip_fastlane = st.checkbox("頻出問い合わせでは意味検索を省略", value=bool(current_cfg["semantic_skip_fastlane"]), key="search_semantic_skip_fastlane")
+                        semantic_boost = st.slider("意味検索の補正強さ", 0.00, 0.80, float(current_cfg["semantic_boost"]), 0.01, key="search_semantic_boost")
+                        semantic_candidate_count = st.slider("意味検索をかける候補数", 1, 20, int(current_cfg["semantic_candidate_count"]), 1, key="search_semantic_candidate_count")
+                        semantic_min_query_len = st.slider("意味検索を始める最小文字数", 1, 50, int(current_cfg["semantic_min_query_len"]), 1, key="search_semantic_min_query_len")
+                        semantic_trigger_min = st.slider("意味検索を始める下限スコア", 0.00, 1.20, float(current_cfg["semantic_trigger_min"]), 0.01, key="search_semantic_trigger_min")
+                        semantic_trigger_max = st.slider("意味検索を始める上限スコア", max(semantic_trigger_min, 0.00), 1.50, float(max(current_cfg["semantic_trigger_max"], semantic_trigger_min)), 0.01, key="search_semantic_trigger_max")
+
+                col_th1, col_th2 = st.columns(2)
+                with col_th1:
+                    if st.button("💾 検索設定を保存", width="stretch"):
+                        ok, settings = save_search_settings(
+                            admin_answer_threshold,
+                            admin_suggest_threshold,
+                            extra_settings={
+                                "word_weight": word_weight,
+                                "char_weight": char_weight,
+                                "exact_bonus": exact_bonus,
+                                "contains_bonus": contains_bonus,
+                                "token_bonus_max": token_bonus_max,
+                                "concept_bonus_max": concept_bonus_max,
+                                "prefix_bonus": prefix_bonus,
+                                "semantic_enabled": semantic_enabled,
+                                "semantic_skip_fastlane": semantic_skip_fastlane,
+                                "semantic_boost": semantic_boost,
+                                "semantic_candidate_count": semantic_candidate_count,
+                                "semantic_min_query_len": semantic_min_query_len,
+                                "semantic_trigger_min": semantic_trigger_min,
+                                "semantic_trigger_max": semantic_trigger_max,
+                                "top_k": top_k,
+                            },
+                        )
+                        st.session_state.search_threshold = settings["answer_threshold"]
+                        st.session_state.suggest_threshold = settings["suggest_threshold"]
+                        st.session_state.search_settings = settings
+                        if ok:
+                            st.success(
+                                f"保存しました。自動回答={settings['answer_threshold']:.2f} / 候補表示={settings['suggest_threshold']:.2f} / "
+                                f"単語重視={int(settings['word_weight'] * 100)}%"
+                            )
+                        else:
+                            st.warning("ローカル保存またはGitHub保存に失敗した可能性があります。設定値自体はこのセッションに反映しています。")
+                        st.rerun()
+                with col_th2:
+                    if st.button("↩ 初期値に戻す", width="stretch"):
+                        ok, settings = save_search_settings(extra_settings=default_search_settings())
+                        st.session_state.search_threshold = settings["answer_threshold"]
+                        st.session_state.suggest_threshold = settings["suggest_threshold"]
+                        st.session_state.search_settings = settings
+                        if ok:
+                            st.success("検索設定を初期値に戻しました。")
+                        else:
+                            st.warning("初期値に戻しましたが、外部保存に失敗した可能性があります。")
+                        st.rerun()
+
+            with st.expander("🎨 UI配色設定", expanded=False):
+                current_theme = current_ui_theme_settings()
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    sidebar_bg_start = st.color_picker("左メニュー背景（開始色）", current_theme["sidebar_bg_start"], key="ui_sidebar_bg_start")
+                    sidebar_text = st.color_picker("左メニュー文字色", current_theme["sidebar_text"], key="ui_sidebar_text")
+                    sidebar_text_muted = st.color_picker("左メニュー補助文字色", current_theme["sidebar_text_muted"], key="ui_sidebar_text_muted")
+                    button_bg = st.color_picker("ボタン背景色", current_theme["button_bg"], key="ui_button_bg")
+                    button_text = st.color_picker("ボタン文字色", current_theme["button_text"], key="ui_button_text")
+                    button_border = st.color_picker("ボタン枠線色", current_theme["button_border"], key="ui_button_border")
+                    button_hover_bg = st.color_picker("ボタンホバー背景", current_theme["button_hover_bg"], key="ui_button_hover_bg")
+                    button_hover_text = st.color_picker("ボタンホバー文字", current_theme["button_hover_text"], key="ui_button_hover_text")
+                    button_disabled_bg = st.color_picker("無効ボタン背景色", current_theme["button_disabled_bg"], key="ui_button_disabled_bg")
+                    button_disabled_text = st.color_picker("無効ボタン文字色", current_theme["button_disabled_text"], key="ui_button_disabled_text")
+                with c2:
+                    sidebar_bg_end = st.color_picker("左メニュー背景（終了色）", current_theme["sidebar_bg_end"], key="ui_sidebar_bg_end")
+                    main_bg_start = st.color_picker("メイン背景（開始色）", current_theme["main_bg_start"], key="ui_main_bg_start")
+                    main_bg_mid = st.color_picker("メイン背景（中央色）", current_theme["main_bg_mid"], key="ui_main_bg_mid")
+                    main_bg_end = st.color_picker("メイン背景（終了色）", current_theme["main_bg_end"], key="ui_main_bg_end")
+                    card_border = st.color_picker("カード枠線色", current_theme["card_border"], key="ui_card_border")
+                    resizer_knob = st.color_picker("ドラッグつまみ色", current_theme["resizer_knob"], key="ui_resizer_knob")
+
+                sidebar_panel_bg = st.text_input("左メニューパネル背景（hex または rgba）", value=current_theme["sidebar_panel_bg"], key="ui_sidebar_panel_bg")
+                sidebar_panel_border = st.text_input("左メニューパネル枠線（hex または rgba）", value=current_theme["sidebar_panel_border"], key="ui_sidebar_panel_border")
+                card_bg = st.text_input("カード背景色（hex または rgba）", value=current_theme["card_bg"], key="ui_card_bg")
+                resizer_line = st.text_input("ドラッグライン色（hex または rgba）", value=current_theme["resizer_line"], key="ui_resizer_line")
+
+                live_theme = sanitize_ui_theme_settings({
+                    "sidebar_bg_start": sidebar_bg_start,
+                    "sidebar_bg_end": sidebar_bg_end,
+                    "sidebar_text": sidebar_text,
+                    "sidebar_text_muted": sidebar_text_muted,
+                    "sidebar_panel_bg": sidebar_panel_bg,
+                    "sidebar_panel_border": sidebar_panel_border,
+                    "button_bg": button_bg,
+                    "button_text": button_text,
+                    "button_border": button_border,
+                    "button_hover_bg": button_hover_bg,
+                    "button_hover_text": button_hover_text,
+                    "button_disabled_bg": button_disabled_bg,
+                    "button_disabled_text": button_disabled_text,
+                    "main_bg_start": main_bg_start,
+                    "main_bg_mid": main_bg_mid,
+                    "main_bg_end": main_bg_end,
+                    "card_bg": card_bg,
+                    "card_border": card_border,
+                    "resizer_line": resizer_line,
+                    "resizer_knob": resizer_knob,
+                })
+                st.session_state["ui_theme_settings"] = live_theme
+
+                col_ui1, col_ui2 = st.columns(2)
+                with col_ui1:
+                    if st.button("💾 UI配色を保存", width="stretch", key="save_ui_theme"):
+                        ok, _ = save_ui_theme_settings(live_theme)
+                        st.success("UI配色を保存しました。" if ok else "UI配色は反映済みですが、保存に失敗した可能性があります。")
+                with col_ui2:
+                    if st.button("↩ UI配色を初期値に戻す", width="stretch", key="reset_ui_theme"):
+                        default_theme = default_ui_theme_settings()
+                        save_ui_theme_settings(default_theme)
+                        for k, v in default_theme.items():
+                            st.session_state[f"ui_{k}"] = v
+                        st.session_state["ui_theme_settings"] = default_theme
+                        st.rerun()
+
+            with st.expander("📐 UIレイアウト設定", expanded=False):
+                current_layout = current_ui_layout_settings()
+                sidebar_width = st.slider("左メニュー幅", 240, 620, int(current_layout["sidebar_width"]), key="ui_layout_sidebar_width")
+                main_max_width = st.slider("メイン画面の最大幅", 760, 2000, int(current_layout["main_max_width"]), step=10, key="ui_layout_main_max_width")
+                main_padding_top = st.slider("上余白", 4, 96, int(current_layout["main_padding_top"]), key="ui_layout_main_padding_top")
+                main_padding_bottom = st.slider("下余白", 72, 280, int(current_layout["main_padding_bottom"]), key="ui_layout_main_padding_bottom")
+                card_radius = st.slider("フレーム角丸", 8, 40, int(current_layout["card_radius"]), key="ui_layout_card_radius")
+                card_shadow_blur = st.slider("フレーム影のぼかし", 0, 80, int(current_layout["card_shadow_blur"]), key="ui_layout_card_shadow_blur")
+                card_shadow_alpha_pct = st.slider("フレーム影の濃さ", 0, 40, int(round(float(current_layout["card_shadow_alpha"]) * 100)), key="ui_layout_card_shadow_alpha")
+
+                live_layout = sanitize_ui_layout_settings({
+                    "sidebar_width": sidebar_width,
+                    "main_max_width": main_max_width,
+                    "main_padding_top": main_padding_top,
+                    "main_padding_bottom": main_padding_bottom,
+                    "card_radius": card_radius,
+                    "card_shadow_blur": card_shadow_blur,
+                    "card_shadow_alpha": card_shadow_alpha_pct,
+                })
+                st.session_state["ui_layout_settings"] = live_layout
+
+                components.html(f"""
+                <script>
+                (function() {{
+                  const doc = window.parent.document;
+                  const root = doc.documentElement;
+                  root.style.setProperty('--user-sidebar-width', '{live_layout['sidebar_width']}px');
+                  root.style.setProperty('--user-main-max-width', '{live_layout['main_max_width']}px');
+                  root.style.setProperty('--user-main-padding-top', '{live_layout['main_padding_top']}px');
+                  root.style.setProperty('--user-main-padding-bottom', '{live_layout['main_padding_bottom']}px');
+                  root.style.setProperty('--user-card-radius', '{live_layout['card_radius']}px');
+                  root.style.setProperty('--user-card-shadow', '0 10px {live_layout['card_shadow_blur']}px rgba(15, 23, 42, {live_layout['card_shadow_alpha']:.2f})');
+                  window.localStorage.setItem('oai_sidebar_width', '{live_layout['sidebar_width']}');
+                  window.localStorage.setItem('oai_main_max_width', '{live_layout['main_max_width']}');
+                }})();
+                </script>
+                """, height=0, width=0)
+
+                col_layout1, col_layout2 = st.columns(2)
+                with col_layout1:
+                    if st.button("💾 UIレイアウトを保存", width="stretch", key="save_ui_layout"):
+                        ok, _ = save_ui_layout_settings(live_layout)
+                        st.success("UIレイアウトを保存しました。" if ok else "UIレイアウトは反映済みですが、保存に失敗した可能性があります。")
+                with col_layout2:
+                    if st.button("↩ UIレイアウトを初期値に戻す", width="stretch", key="reset_ui_layout"):
+                        default_layout = default_ui_layout_settings()
+                        save_ui_layout_settings(default_layout)
+                        st.session_state["ui_layout_settings"] = default_layout
+                        window_local_js = f"""<script>(function(){{const doc=window.parent.document;const root=doc.documentElement;root.style.setProperty('--user-sidebar-width','{default_layout['sidebar_width']}px');root.style.setProperty('--user-main-max-width','{default_layout['main_max_width']}px');localStorage.removeItem('oai_sidebar_width');localStorage.removeItem('oai_main_max_width');}})();</script>"""
+                        components.html(window_local_js, height=0, width=0)
+                        st.rerun()
+
+            with st.expander("📂 FAQ管理（Excelダウンロード / アップロード）", expanded=False):
+                st.caption("管理者は FAQ を Excel(.xlsx) で一括入出力できます。500件以上でもまとめて置き換え可能です。推奨列名は『質問 / 回答 / カテゴリ』です。")
+
+                if st.session_state.get("faq_replace_result"):
+                    st.success(st.session_state["faq_replace_result"])
+                    st.session_state.pop("faq_replace_result", None)
+
+                current_faq_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
+                excel_bytes = faq_df_to_excel_bytes(current_faq_df)
+                st.download_button(
+                    "⬇ 現在のFAQをExcelでダウンロード",
+                    data=excel_bytes,
+                    file_name="faq.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    width="stretch",
+                )
+                st.caption(f"現在登録中のFAQ件数: {len(current_faq_df)} 件")
+
+                uploaded_faq = st.file_uploader(
+                    "FAQファイルをアップロード",
+                    type=["xlsx", "xls", "csv"],
+                    key="faq_excel_uploader_admin",
+                    help="Excel(.xlsx) 推奨。質問 / 回答 / カテゴリ、または question / answer / category に対応。",
+                )
+
+                if uploaded_faq is not None:
+                    try:
+                        incoming_df = read_faq_uploaded_file(uploaded_faq.name, uploaded_faq.getvalue())
+                        st.success(f"アップロード確認OK: {len(incoming_df)} 件のFAQを検出しました。")
+                        preview_df = incoming_df.rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"})
+                        st.dataframe(preview_df.head(20), width="stretch", height=420)
+                        if len(incoming_df) > 20:
+                            st.caption(f"先頭20件を表示中です。保存対象は全 {len(incoming_df)} 件です。")
+
+                        if st.button("📥 この内容でFAQを反映する", type="primary", key="replace_faq_excel_admin", width="stretch"):
+                            with st.spinner("FAQを保存しています..."):
+                                saved = save_faq_csv_full(FAQ_PATH, incoming_df)
+                                reloaded_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
+
+                                try:
+                                    load_faq_index.clear()
+                                    get_faq_index_state.clear()
+                                    reset_faq_index_runtime()
+                                except Exception:
+                                    pass
+                                try:
+                                    st.cache_resource.clear()
+                                except Exception:
+                                    pass
+                                try:
+                                    st.cache_data.clear()
+                                except Exception:
+                                    pass
+
+                                if int(saved) != int(len(reloaded_df)):
+                                    st.error(f"保存件数と再読込件数が一致しません。保存: {saved} 件 / 再読込: {len(reloaded_df)} 件")
+                                else:
+                                    msg = f"FAQを {saved} 件反映しました。現在登録中のFAQ件数も {len(reloaded_df)} 件です。"
+                                    st.session_state["faq_replace_result"] = msg
+                                    st.success(msg)
+                                    st.info("FAQの反映が完了しました。再読み込みは不要です。GitHub永続化ONなら自動で外部保存されます。")
+                                    current_faq_df = reloaded_df
+                    except Exception as e:
+                        st.error(f"FAQファイルの取込でエラー: {e}")
 
             # ===== FAQ自動生成（該当なしログ → FAQ案）=====
 
             # =========================
             # 管理者向け資料（PDF）ダウンロード
             # =========================
-            render_pdf_panels(locals())
+            with st.expander("📘 管理者向け資料（PDF）", expanded=False):
+                if not REPORTLAB_AVAILABLE:
+                    st.warning("PDF出力には reportlab が必要です。requirements.txt に reportlab を追加してください。")
+                else:
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        ops_pdf = generate_ops_manual_pdf()
+                        st.download_button(
+                            "📄 操作説明書PDFをダウンロード",
+                            data=ops_pdf,
+                            file_name="操作説明書_情シス問い合わせAI.pdf",
+                            mime="application/pdf",
+                            width="stretch",
+                        )
+                    with col_b:
+                        proposal_pdf = generate_sales_proposal_pdf()
+                        st.download_button(
+                            "📑 提案資料PDFをダウンロード",
+                            data=proposal_pdf,
+                            file_name="提案資料_情シス問い合わせAI.pdf",
+                            mime="application/pdf",
+                            width="stretch",
+                        )
+                    st.caption("※ どちらもアプリの現状に合わせて自動生成されます（必要に応じて文面はカスタマイズ可能）。")
+
+            with st.expander("📄 効果レポート（PDF）", expanded=False):
+                if not REPORTLAB_AVAILABLE:
+                    st.warning("PDF出力には reportlab が必要です。requirements.txt に reportlab を追加してください。")
+                else:
+                    hourly_cost = st.number_input(
+                        "想定人件費（円/時間）",
+                        min_value=0,
+                        max_value=20000,
+                        value=int(st.session_state.get("hourly_cost", 4000)),
+                        step=500,
+                        key="admin_hourly_cost",
+                    )
+                    df_month_all = read_interactions(days=60)
+                    if df_month_all is None or len(df_month_all) == 0:
+                        st.caption("今月の利用ログがまだありません。質問すると自動で蓄積します。")
+                    else:
+                        try:
+                            ts = pd.to_datetime(df_month_all["timestamp"], errors="coerce")
+                            month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                            df_month = df_month_all[ts >= month_start]
+                        except Exception:
+                            df_month = df_month_all
+
+                        try:
+                            pdf_bytes = generate_effect_report_pdf(
+                                df=df_month,
+                                avg_min=float(avg_min),
+                                deflect=float(deflect),
+                                hourly_cost_yen=int(hourly_cost),
+                            )
+                            st.download_button(
+                                "📄 今月の導入効果レポートをダウンロード",
+                                data=pdf_bytes,
+                                file_name=f"effect_report_{datetime.now().strftime('%Y%m')}.pdf",
+                                mime="application/pdf",
+                                width="stretch",
+                            )
+                        except Exception as e:
+                            st.error(f"PDF生成でエラー: {e}")
 
             # with st.expander("⏰ Render無料プラン常時起動支援", expanded=False):
             #     st.caption("Render無料プランのスリープを減らすため、GitHub Actionsから一定間隔でRender URLへアクセスする設定を生成します。")
