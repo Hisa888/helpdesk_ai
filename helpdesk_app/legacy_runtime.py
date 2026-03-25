@@ -2400,26 +2400,52 @@ def run_app():
 
             _left, _right = st.columns([1.35, 1.0])
             with _left:
+                st.caption("📅 直近30日の問い合わせ件数")
                 _trend = _df30.dropna(subset=["timestamp_dt"]).copy()
                 if len(_trend) > 0:
-                    _trend["date"] = _trend["timestamp_dt"].dt.date
+                    _trend["date"] = _trend["timestamp_dt"].dt.floor("D")
                     _daily = (
                         _trend.groupby("date", dropna=True)
-                        .agg(total=("question", "count"), matched=("matched", "sum"))
-                        .reset_index()
+                        .size()
+                        .reset_index(name="total")
                         .sort_values("date")
                     )
-                    _daily["auto_rate"] = (_daily["matched"] / _daily["total"]).replace([pd.NA, float("inf")], 0.0) * 100.0
-                    st.caption("📅 直近30日の問い合わせ件数")
+                    if "matched" in _trend.columns:
+                        _matched_daily = (
+                            _trend.groupby("date", dropna=True)["matched"]
+                            .sum(min_count=1)
+                            .reset_index(name="matched")
+                            .sort_values("date")
+                        )
+                        _daily = _daily.merge(_matched_daily, on="date", how="left")
+                    else:
+                        _daily["matched"] = 0
+                    _daily["matched"] = _daily["matched"].fillna(0)
+                    _start_date = (pd.Timestamp.now().normalize() - pd.Timedelta(days=29))
+                    _all_dates = pd.date_range(start=_start_date, end=pd.Timestamp.now().normalize(), freq="D")
+                    _daily = (
+                        pd.DataFrame({"date": _all_dates})
+                        .merge(_daily, on="date", how="left")
+                        .fillna({"total": 0, "matched": 0})
+                    )
+                    _daily["total"] = _daily["total"].astype(int)
+                    _daily["matched"] = _daily["matched"].astype(int)
+                    _daily["auto_rate"] = (_daily["matched"] / _daily["total"].replace(0, pd.NA)).fillna(0.0) * 100.0
                     st.line_chart(_daily.set_index("date")[["total"]], height=220)
+                else:
+                    st.info("30日以内の問い合わせログがまだないため、グラフは表示されません。")
             with _right:
                 _cat = _df30.copy()
+                st.caption("🏷️ 問い合わせカテゴリ 上位5件")
                 if "category" in _cat.columns:
                     _cat["category"] = _cat["category"].fillna("").astype(str).replace("", "未分類")
                     _top_cat = _cat.groupby("category").size().sort_values(ascending=False).head(5)
                     if len(_top_cat) > 0:
-                        st.caption("🏷️ 問い合わせカテゴリ 上位5件")
                         st.bar_chart(_top_cat, height=220)
+                    else:
+                        st.info("カテゴリ付きログがまだありません。")
+                else:
+                    st.info("カテゴリ情報がないため、棒グラフは表示されません。")
 
             _recent = _df30.dropna(subset=["timestamp_dt"]).sort_values("timestamp_dt", ascending=False).head(10).copy()
             if len(_recent) > 0:
