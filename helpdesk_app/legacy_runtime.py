@@ -2314,6 +2314,8 @@ def run_app():
     except Exception:
         pass
 
+    render_kpi_dashboard_main()
+
     # ==== サイドバー ========
 
 
