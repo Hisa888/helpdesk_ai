@@ -452,8 +452,7 @@ def run_app():
         SENTENCE_TRANSFORMERS_AVAILABLE = False
 
     from services.auth import check_password
-    from services.llm_router import chat as base_llm_chat
-    from .admin_menu_complete import render_admin_complete_tools
+    from services.llm_router import chat as llm_chat
 
     # ======================
     # 基本設定
@@ -470,7 +469,6 @@ def run_app():
     # ======================
     UI_THEME_SETTINGS_PATH = DATA_DIR / "ui_theme_settings.json"
     UI_LAYOUT_SETTINGS_PATH = DATA_DIR / "ui_layout_settings.json"
-    LLM_SETTINGS_PATH = DATA_DIR / "llm_settings.json"
 
     def default_ui_theme_settings() -> dict:
         return {
@@ -545,27 +543,6 @@ def run_app():
             "card_shadow_alpha": _safe_int_range(src.get("card_shadow_alpha"), int(base["card_shadow_alpha"] * 100), 0, 40) / 100.0,
         }
 
-    def default_llm_settings() -> dict:
-        return {
-            "provider": "groq",
-            "groq_model": "llama-3.1-8b-instant",
-            "ollama_model": "qwen2.5:7b",
-            "ollama_base_url": "http://localhost:11434",
-        }
-
-    def sanitize_llm_settings(data: dict | None) -> dict:
-        base = default_llm_settings()
-        src = data or {}
-        provider = str(src.get("provider", base["provider"])).strip().lower()
-        if provider not in ("groq", "ollama"):
-            provider = base["provider"]
-        return {
-            "provider": provider,
-            "groq_model": str(src.get("groq_model", base["groq_model"])).strip() or base["groq_model"],
-            "ollama_model": str(src.get("ollama_model", base["ollama_model"])).strip() or base["ollama_model"],
-            "ollama_base_url": str(src.get("ollama_base_url", base["ollama_base_url"])).strip() or base["ollama_base_url"],
-        }
-
     def load_json_settings(path_obj: Path, default_factory, sanitizer):
         if path_obj.exists():
             try:
@@ -583,53 +560,6 @@ def run_app():
             return ok, settings
         except Exception:
             return False, settings
-
-    LLM_SETTINGS = load_json_settings(LLM_SETTINGS_PATH, default_llm_settings, sanitize_llm_settings)
-
-    def current_llm_settings() -> dict:
-        base = st.session_state.get("llm_settings", LLM_SETTINGS)
-        return sanitize_llm_settings(base if isinstance(base, dict) else {})
-
-    def current_llm_provider() -> str:
-        return current_llm_settings().get("provider", "groq")
-
-    def save_llm_settings(settings: dict) -> tuple[bool, dict]:
-        clean = sanitize_llm_settings(settings)
-        return save_json_settings(LLM_SETTINGS_PATH, clean, "llm_settings")
-
-    def _ollama_chat(messages, model: str, base_url: str) -> str:
-        url = str(base_url or "http://localhost:11434").rstrip("/") + "/api/chat"
-        payload = {
-            "model": model or "qwen2.5:7b",
-            "messages": messages,
-            "stream": False,
-        }
-        resp = requests.post(url, json=payload, timeout=(5, 120))
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, dict):
-            msg = data.get("message")
-            if isinstance(msg, dict):
-                content = msg.get("content")
-                if content is not None:
-                    return str(content).strip()
-            if data.get("response") is not None:
-                return str(data.get("response")).strip()
-        return ""
-
-    def llm_chat(messages):
-        cfg = current_llm_settings()
-        provider = cfg.get("provider", "groq")
-        if provider == "ollama":
-            try:
-                return _ollama_chat(
-                    messages=messages,
-                    model=cfg.get("ollama_model", "qwen2.5:7b"),
-                    base_url=cfg.get("ollama_base_url", "http://localhost:11434"),
-                )
-            except Exception as e:
-                st.warning(f"Ollama接続に失敗したためGroqに切り替えます: {e}")
-        return base_llm_chat(messages)
 
     # ======================
     # 営業用UI設定（secrets / 環境変数で上書き可）
@@ -3824,19 +3754,6 @@ def run_app():
                 st.session_state.is_admin = False
                 st.rerun()
 
-    if st.session_state.is_admin:
-        render_admin_complete_tools(
-            read_interactions=read_interactions,
-            count_nohit_logs=count_nohit_logs,
-            list_log_files=list_log_files,
-            make_logs_zip=make_logs_zip,
-            load_nohit_questions_from_logs=load_nohit_questions_from_logs,
-            generate_faq_candidates=generate_faq_candidates,
-            append_faq_csv=append_faq_csv,
-            seed_nohit_questions=seed_nohit_questions,
-            faq_path=FAQ_PATH,
-        )
-
     #         with st.expander("💾 永続化ステータス（v13）", expanded=False):
     #             st.caption(persistence_status_text())
     #             st.code("""
@@ -3992,46 +3909,6 @@ def run_app():
                         else:
                             st.warning("初期値に戻しましたが、外部保存に失敗した可能性があります。")
                         st.rerun()
-
-            with st.expander("🧠 LLM切替設定", expanded=False):
-                current_llm = current_llm_settings()
-                provider = st.radio(
-                    "利用するLLM",
-                    options=["groq", "ollama"],
-                    index=0 if current_llm["provider"] == "groq" else 1,
-                    format_func=lambda x: "Groq（クラウド・高速）" if x == "groq" else "Ollama（ローカル・社内完結）",
-                    key="llm_provider_radio",
-                )
-                groq_model = st.text_input("Groqモデル名", value=current_llm["groq_model"], key="groq_model_input")
-                ollama_model = st.text_input("Ollamaモデル名", value=current_llm["ollama_model"], key="ollama_model_input")
-                ollama_base_url = st.text_input("Ollama URL", value=current_llm["ollama_base_url"], key="ollama_base_url_input")
-
-                col_llm1, col_llm2 = st.columns(2)
-                with col_llm1:
-                    if st.button("💾 LLM設定を保存", width="stretch", key="save_llm_settings"):
-                        ok, saved = save_llm_settings({
-                            "provider": provider,
-                            "groq_model": groq_model,
-                            "ollama_model": ollama_model,
-                            "ollama_base_url": ollama_base_url,
-                        })
-                        st.session_state["llm_settings"] = saved
-                        if ok:
-                            st.success("LLM設定を保存しました。")
-                        else:
-                            st.warning("LLM設定は反映済みですが、保存に失敗した可能性があります。")
-                        st.rerun()
-                with col_llm2:
-                    if st.button("↩ LLM設定を初期値に戻す", width="stretch", key="reset_llm_settings"):
-                        default_llm = default_llm_settings()
-                        save_llm_settings(default_llm)
-                        st.session_state["llm_settings"] = default_llm
-                        st.rerun()
-
-                provider_label = "Groq（クラウド・高速）" if provider == "groq" else "Ollama（ローカル・社内完結）"
-                st.caption(f"現在の利用先: {provider_label}")
-                if provider == "ollama":
-                    st.info("Ollamaはローカル実行です。初回はモデルを事前に pull してください。")
 
             with st.expander("🎨 UI配色設定", expanded=False):
                 current_theme = current_ui_theme_settings()
@@ -4430,8 +4307,6 @@ def run_app():
 
     if "search_settings" not in st.session_state:
         st.session_state.search_settings = _sanitize_search_settings(SEARCH_SETTINGS)
-    if "llm_settings" not in st.session_state:
-        st.session_state.llm_settings = sanitize_llm_settings(LLM_SETTINGS)
 
 
     # ======================
