@@ -4,6 +4,7 @@ requests>=2.31
 scikit-learn>=1.5
 reportlab>=4.2
 sentence-transformers>=3.4
+torchvision
 torch
 flask>=3.0
 gunicorn>=22.0
