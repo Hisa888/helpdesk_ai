@@ -2028,8 +2028,24 @@ def run_app():
       --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
     }
 
-    .block-container {padding-top: 2rem !important; padding-bottom: 9rem !important; max-width: 1180px;}
+    html, body {
+      overflow-x: hidden !important;
+      overflow-y: auto !important;
+    }
+    .block-container {
+      padding-top: 2rem !important;
+      padding-bottom: 9rem !important;
+      max-width: 1180px;
+      overflow: visible !important;
+    }
     h1, h2, h3 {line-height: 1.25 !important;}
+
+    [data-testid="stAppViewContainer"],
+    [data-testid="stAppViewContainer"] > .main,
+    [data-testid="stVerticalBlock"],
+    [data-testid="column"] {
+      overflow: visible !important;
+    }
 
     [data-testid="stAppViewContainer"] {
       background: radial-gradient(circle at top left, #f0f9ff 0%, #ffffff 32%, #f8fafc 100%);
@@ -2246,14 +2262,11 @@ def run_app():
       background: var(--user-resizer-knob); box-shadow: 0 4px 18px rgba(56, 189, 248, 0.35);
     }}
     #oai-main-resizer {{
-      position: fixed;
-      right: max(calc((100vw - var(--user-main-max-width)) / 2 - 8px), 8px);
-      top: 120px; width: 14px; height: 120px;
-      z-index: 999998; cursor: ew-resize; border-radius: 999px;
-      background: linear-gradient(180deg, var(--user-resizer-line) 0%, var(--user-resizer-knob) 50%, var(--user-resizer-line) 100%);
-      opacity: 0.72;
+      display: none !important;
+      pointer-events: none !important;
+      opacity: 0 !important;
     }}
-    #oai-main-resizer:hover, #oai-sidebar-resizer:hover {{opacity: 1; filter: brightness(1.05);}}
+    #oai-sidebar-resizer:hover {{opacity: 1; filter: brightness(1.05);}}
     </style>
     """, unsafe_allow_html=True)
 
@@ -2295,10 +2308,6 @@ def run_app():
         if (e.target && e.target.id === 'oai-sidebar-resizer') {{
           drag = 'sidebar';
           e.preventDefault();
-        }} else if (e.target && e.target.id === 'oai-main-resizer') {{
-          drag = 'main';
-          e.preventDefault();
-        }}
       }};
       const onMove = (e) => {{
         if (!drag) return;
@@ -2306,21 +2315,12 @@ def run_app():
           const val = clamp(e.clientX, 240, 620);
           root.style.setProperty('--user-sidebar-width', val + 'px');
           storage.setItem(sidebarKey, String(val));
-        }} else if (drag === 'main') {{
-          const val = clamp(e.clientX - 80, 760, 2000);
-          root.style.setProperty('--user-main-max-width', val + 'px');
-          storage.setItem(mainKey, String(val));
-        }}
       }};
       const onUp = () => {{ drag = null; }};
       const onDouble = (e) => {{
         if (e.target && e.target.id === 'oai-sidebar-resizer') {{
           storage.removeItem(sidebarKey);
           root.style.setProperty('--user-sidebar-width', defaults.sidebar + 'px');
-        }} else if (e.target && e.target.id === 'oai-main-resizer') {{
-          storage.removeItem(mainKey);
-          root.style.setProperty('--user-main-max-width', defaults.main + 'px');
-        }}
       }};
 
       doc.removeEventListener('mousedown', onDown);
