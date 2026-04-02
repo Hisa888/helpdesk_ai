@@ -2028,24 +2028,8 @@ def run_app():
       --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
     }
 
-    html, body {
-      overflow-x: hidden !important;
-      overflow-y: auto !important;
-    }
-    .block-container {
-      padding-top: 2rem !important;
-      padding-bottom: 9rem !important;
-      max-width: 1180px;
-      overflow: visible !important;
-    }
+    .block-container {padding-top: 2rem !important; padding-bottom: 9rem !important; max-width: 1180px;}
     h1, h2, h3 {line-height: 1.25 !important;}
-
-    [data-testid="stAppViewContainer"],
-    [data-testid="stAppViewContainer"] > .main,
-    [data-testid="stVerticalBlock"],
-    [data-testid="column"] {
-      overflow: visible !important;
-    }
 
     [data-testid="stAppViewContainer"] {
       background: radial-gradient(circle at top left, #f0f9ff 0%, #ffffff 32%, #f8fafc 100%);
@@ -2262,11 +2246,14 @@ def run_app():
       background: var(--user-resizer-knob); box-shadow: 0 4px 18px rgba(56, 189, 248, 0.35);
     }}
     #oai-main-resizer {{
-      display: none !important;
-      pointer-events: none !important;
-      opacity: 0 !important;
+      position: fixed;
+      right: max(calc((100vw - var(--user-main-max-width)) / 2 - 8px), 8px);
+      top: 120px; width: 14px; height: 120px;
+      z-index: 999998; cursor: ew-resize; border-radius: 999px;
+      background: linear-gradient(180deg, var(--user-resizer-line) 0%, var(--user-resizer-knob) 50%, var(--user-resizer-line) 100%);
+      opacity: 0.72;
     }}
-    #oai-sidebar-resizer:hover {{opacity: 1; filter: brightness(1.05);}}
+    #oai-main-resizer:hover, #oai-sidebar-resizer:hover {{opacity: 1; filter: brightness(1.05);}}
     </style>
     """, unsafe_allow_html=True)
 
@@ -2308,6 +2295,10 @@ def run_app():
         if (e.target && e.target.id === 'oai-sidebar-resizer') {{
           drag = 'sidebar';
           e.preventDefault();
+        }} else if (e.target && e.target.id === 'oai-main-resizer') {{
+          drag = 'main';
+          e.preventDefault();
+        }}
       }};
       const onMove = (e) => {{
         if (!drag) return;
@@ -2315,12 +2306,21 @@ def run_app():
           const val = clamp(e.clientX, 240, 620);
           root.style.setProperty('--user-sidebar-width', val + 'px');
           storage.setItem(sidebarKey, String(val));
+        }} else if (drag === 'main') {{
+          const val = clamp(e.clientX - 80, 760, 2000);
+          root.style.setProperty('--user-main-max-width', val + 'px');
+          storage.setItem(mainKey, String(val));
+        }}
       }};
       const onUp = () => {{ drag = null; }};
       const onDouble = (e) => {{
         if (e.target && e.target.id === 'oai-sidebar-resizer') {{
           storage.removeItem(sidebarKey);
           root.style.setProperty('--user-sidebar-width', defaults.sidebar + 'px');
+        }} else if (e.target && e.target.id === 'oai-main-resizer') {{
+          storage.removeItem(mainKey);
+          root.style.setProperty('--user-main-max-width', defaults.main + 'px');
+        }}
       }};
 
       doc.removeEventListener('mousedown', onDown);
@@ -4434,23 +4434,12 @@ def run_app():
         st.session_state.llm_settings = sanitize_llm_settings(LLM_SETTINGS)
 
 
-    # ======================
-    # チャット履歴表示
-    # ======================
-    for m in st.session_state.messages:
-        with st.chat_message(m.get("role", "assistant")):
-            st.markdown(m.get("content", ""))
-
-
-    # ======================
-    # 「参照FAQ」表示
-    # ======================
-    st.markdown('<div class="section-title">🔎 回答の根拠</div><div class="section-caption">AIが参照したFAQ候補と一致度を確認できます。営業デモでも信頼性を見せやすい領域です。</div>', unsafe_allow_html=True)
-    with st.expander("参照したFAQ（根拠）を見る"):
-        used_hits = st.session_state.used_hits
-        if not used_hits:
-            st.markdown('<div class="refbox">該当なし（スコアが低いため問い合わせ誘導）</div>', unsafe_allow_html=True)
-        else:
+    def render_used_hits_expander(used_hits, best_score: float, answer_threshold: float, was_nohit: bool = False):
+        with st.expander("🔎 回答の根拠を見る", expanded=False):
+            if was_nohit or not used_hits:
+                st.markdown('<div class="refbox">該当なし（スコアが低いため問い合わせ誘導）</div>', unsafe_allow_html=True)
+                return
+            st.caption(f"上位FAQ候補の一致度を表示しています（best score: {best_score:.2f} / 自動回答しきい値: {answer_threshold:.2f}）。")
             for i, (row, score) in enumerate(used_hits, 1):
                 render_match_bar(score)
                 q_html = str(row.get("question", "")).replace("\n", "<br>")
@@ -4469,25 +4458,35 @@ def run_app():
                 )
 
 
+    def render_quick_start_buttons():
+        st.markdown('<div class="glass-card query-panel"><div class="eyebrow">Quick Start</div><h3>よくある問い合わせをワンクリックで試す</h3><p>デモで見せやすい代表質問を用意しています。クリックするとそのまま送信されます。</p></div>', unsafe_allow_html=True)
+        st.markdown("### 💡 おすすめ質問（クリックで送信）")
+        c1, c2, c3 = st.columns(3)
+
+        if c1.button("🔐 パスワードを忘れた"):
+            st.session_state.pending_q = "パスワードを忘れました"
+            st.rerun()
+
+        if c2.button("🧩 アカウントがロックされた"):
+            st.session_state.pending_q = "アカウントがロックされました"
+            st.rerun()
+
+        if c3.button("🌐 VPNに接続できない"):
+            st.session_state.pending_q = "VPNに接続できません"
+            st.rerun()
+
+
+    show_welcome = len(st.session_state.messages) == 0
+    if show_welcome:
+        st.markdown('<div class="glass-card query-panel"><div class="eyebrow">Ask AI</div><h3>困りごとをそのまま入力してください</h3><p>例：パスワードを忘れました / VPNにつながらない / ディスプレイが真っ暗です</p></div>', unsafe_allow_html=True)
+        render_quick_start_buttons()
+
     # ======================
-    # おすすめ質問ボタン（3つ）
+    # チャット履歴表示
     # ======================
-    st.markdown('<div class="glass-card query-panel"><div class="eyebrow">Quick Start</div><h3>よくある問い合わせをワンクリックで試す</h3><p>デモで見せやすい代表質問を用意しています。クリックするとそのまま送信されます。</p></div>', unsafe_allow_html=True)
-    st.markdown("### 💡 おすすめ質問（クリックで送信）")
-    c1, c2, c3 = st.columns(3)
-
-    if c1.button("🔐 パスワードを忘れた"):
-        st.session_state.pending_q = "パスワードを忘れました"
-        st.rerun()
-
-    if c2.button("🧩 アカウントがロックされた"):
-        st.session_state.pending_q = "アカウントがロックされました"
-        st.rerun()
-
-    if c3.button("🌐 VPNに接続できない"):
-        st.session_state.pending_q = "VPNに接続できません"
-        st.rerun()
-
+    for m in st.session_state.messages:
+        with st.chat_message(m.get("role", "assistant")):
+            st.markdown(m.get("content", ""), unsafe_allow_html=True)
 
 
     def build_suggest_answer(user_q: str, hits) -> str:
@@ -4581,7 +4580,6 @@ def run_app():
     if st.session_state.get("pending_nohit_active"):
         render_nohit_extra_form(expanded=True)
 
-    st.markdown('<div class="glass-card query-panel"><div class="eyebrow">Ask AI</div><h3>困りごとをそのまま入力してください</h3><p>例：パスワードを忘れました / VPNにつながらない / ディスプレイが真っ暗です</p></div>', unsafe_allow_html=True)
     # 先に chat_input を描画（画面下に固定されます）
     chat_typed = st.chat_input("質問を入力してください")
 
@@ -4702,13 +4700,3 @@ def run_app():
         if used_pending:
             st.rerun()
 
-    st.set_page_config(page_title="情シス問い合わせAI", layout="wide")
-
-    st.title("情シス問い合わせAI")
-
-    st.write("起動確認OK")
-
-    question = st.text_input("質問してください")
-
-    if question:
-        st.write("入力:", question)
