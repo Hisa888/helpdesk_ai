@@ -2249,14 +2249,9 @@ def run_app():
       background: var(--user-resizer-knob); box-shadow: 0 4px 18px rgba(56, 189, 248, 0.35);
     }}
     #oai-main-resizer {{
-      position: fixed;
-      right: max(calc((100vw - var(--user-main-max-width)) / 2 - 8px), 8px);
-      top: 120px; width: 14px; height: 120px;
-      z-index: 999998; cursor: ew-resize; border-radius: 999px;
-      background: linear-gradient(180deg, var(--user-resizer-line) 0%, var(--user-resizer-knob) 50%, var(--user-resizer-line) 100%);
-      opacity: 0.72;
+      display: none !important;
     }}
-    #oai-main-resizer:hover, #oai-sidebar-resizer:hover {{opacity: 1; filter: brightness(1.05);}}
+    #oai-sidebar-resizer:hover {{opacity: 1; filter: brightness(1.05);}}
     </style>
     """, unsafe_allow_html=True)
 
@@ -2290,7 +2285,10 @@ def run_app():
       }};
 
       const sidebarBar = ensureBar('oai-sidebar-resizer', '左右ドラッグで管理者画面幅を変更');
-      const mainBar = ensureBar('oai-main-resizer', '左右ドラッグでメイン画面幅を変更');
+      const staleMainBar = doc.getElementById('oai-main-resizer');
+      if (staleMainBar) staleMainBar.remove();
+      storage.removeItem(mainKey);
+      root.style.setProperty('--user-main-max-width', defaults.main + 'px');
       applyStored();
 
       let drag = null;
@@ -2309,11 +2307,6 @@ def run_app():
           const val = clamp(e.clientX, 240, 620);
           root.style.setProperty('--user-sidebar-width', val + 'px');
           storage.setItem(sidebarKey, String(val));
-        }} else if (drag === 'main') {{
-          const val = clamp(e.clientX - 80, 760, 2000);
-          root.style.setProperty('--user-main-max-width', val + 'px');
-          storage.setItem(mainKey, String(val));
-        }}
       }};
       const onUp = () => {{ drag = null; }};
       const onDouble = (e) => {{
