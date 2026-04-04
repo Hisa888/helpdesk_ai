@@ -4051,300 +4051,300 @@ def run_app():
                         st.warning("初期値に戻しましたが、外部保存に失敗した可能性があります。")
                     st.rerun()
 
-            with st.expander("🧠 LLM切替設定", expanded=False):
-                current_llm = current_llm_settings()
-                provider = st.radio(
-                    "利用するLLM",
-                    options=["groq", "ollama"],
-                    index=0 if current_llm["provider"] == "groq" else 1,
-                    format_func=lambda x: "Groq（クラウド・高速）" if x == "groq" else "Ollama（ローカル・社内完結）",
-                    key="llm_provider_radio",
-                )
-                groq_model = st.text_input("Groqモデル名", value=current_llm["groq_model"], key="groq_model_input")
-                ollama_model = st.text_input("Ollamaモデル名", value=current_llm["ollama_model"], key="ollama_model_input")
-                ollama_base_url = st.text_input("Ollama URL", value=current_llm["ollama_base_url"], key="ollama_base_url_input")
+        with st.expander("🧠 LLM切替設定", expanded=False):
+            current_llm = current_llm_settings()
+            provider = st.radio(
+                "利用するLLM",
+                options=["groq", "ollama"],
+                index=0 if current_llm["provider"] == "groq" else 1,
+                format_func=lambda x: "Groq（クラウド・高速）" if x == "groq" else "Ollama（ローカル・社内完結）",
+                key="llm_provider_radio",
+            )
+            groq_model = st.text_input("Groqモデル名", value=current_llm["groq_model"], key="groq_model_input")
+            ollama_model = st.text_input("Ollamaモデル名", value=current_llm["ollama_model"], key="ollama_model_input")
+            ollama_base_url = st.text_input("Ollama URL", value=current_llm["ollama_base_url"], key="ollama_base_url_input")
 
-                col_llm1, col_llm2 = st.columns(2)
-                with col_llm1:
-                    if st.button("💾 LLM設定を保存", width="stretch", key="save_llm_settings"):
-                        ok, saved = save_llm_settings({
-                            "provider": provider,
-                            "groq_model": groq_model,
-                            "ollama_model": ollama_model,
-                            "ollama_base_url": ollama_base_url,
-                        })
-                        st.session_state["llm_settings"] = saved
-                        if ok:
-                            st.success("LLM設定を保存しました。")
-                        else:
-                            st.warning("LLM設定は反映済みですが、保存に失敗した可能性があります。")
-                        st.rerun()
-                with col_llm2:
-                    if st.button("↩ LLM設定を初期値に戻す", width="stretch", key="reset_llm_settings"):
-                        default_llm = default_llm_settings()
-                        save_llm_settings(default_llm)
-                        st.session_state["llm_settings"] = default_llm
-                        st.rerun()
-
-                provider_label = "Groq（クラウド・高速）" if provider == "groq" else "Ollama（ローカル・社内完結）"
-                st.caption(f"現在の利用先: {provider_label}")
-                if provider == "ollama":
-                    st.info("Ollamaはローカル実行です。初回はモデルを事前に pull してください。")
-
-            with st.expander("🎨 UI配色設定", expanded=False):
-                current_theme = current_ui_theme_settings()
-
-                c1, c2 = st.columns(2)
-                with c1:
-                    sidebar_bg_start = st.color_picker("左メニュー背景（開始色）", current_theme["sidebar_bg_start"], key="ui_sidebar_bg_start")
-                    sidebar_text = st.color_picker("左メニュー文字色", current_theme["sidebar_text"], key="ui_sidebar_text")
-                    sidebar_text_muted = st.color_picker("左メニュー補助文字色", current_theme["sidebar_text_muted"], key="ui_sidebar_text_muted")
-                    button_bg = st.color_picker("ボタン背景色", current_theme["button_bg"], key="ui_button_bg")
-                    button_text = st.color_picker("ボタン文字色", current_theme["button_text"], key="ui_button_text")
-                    button_border = st.color_picker("ボタン枠線色", current_theme["button_border"], key="ui_button_border")
-                    button_hover_bg = st.color_picker("ボタンホバー背景", current_theme["button_hover_bg"], key="ui_button_hover_bg")
-                    button_hover_text = st.color_picker("ボタンホバー文字", current_theme["button_hover_text"], key="ui_button_hover_text")
-                    button_disabled_bg = st.color_picker("無効ボタン背景色", current_theme["button_disabled_bg"], key="ui_button_disabled_bg")
-                    button_disabled_text = st.color_picker("無効ボタン文字色", current_theme["button_disabled_text"], key="ui_button_disabled_text")
-                with c2:
-                    sidebar_bg_end = st.color_picker("左メニュー背景（終了色）", current_theme["sidebar_bg_end"], key="ui_sidebar_bg_end")
-                    main_bg_start = st.color_picker("メイン背景（開始色）", current_theme["main_bg_start"], key="ui_main_bg_start")
-                    main_bg_mid = st.color_picker("メイン背景（中央色）", current_theme["main_bg_mid"], key="ui_main_bg_mid")
-                    main_bg_end = st.color_picker("メイン背景（終了色）", current_theme["main_bg_end"], key="ui_main_bg_end")
-                    card_border = st.color_picker("カード枠線色", current_theme["card_border"], key="ui_card_border")
-                    resizer_knob = st.color_picker("ドラッグつまみ色", current_theme["resizer_knob"], key="ui_resizer_knob")
-
-                sidebar_panel_bg = st.text_input("左メニューパネル背景（hex または rgba）", value=current_theme["sidebar_panel_bg"], key="ui_sidebar_panel_bg")
-                sidebar_panel_border = st.text_input("左メニューパネル枠線（hex または rgba）", value=current_theme["sidebar_panel_border"], key="ui_sidebar_panel_border")
-                card_bg = st.text_input("カード背景色（hex または rgba）", value=current_theme["card_bg"], key="ui_card_bg")
-                resizer_line = st.text_input("ドラッグライン色（hex または rgba）", value=current_theme["resizer_line"], key="ui_resizer_line")
-
-                live_theme = sanitize_ui_theme_settings({
-                    "sidebar_bg_start": sidebar_bg_start,
-                    "sidebar_bg_end": sidebar_bg_end,
-                    "sidebar_text": sidebar_text,
-                    "sidebar_text_muted": sidebar_text_muted,
-                    "sidebar_panel_bg": sidebar_panel_bg,
-                    "sidebar_panel_border": sidebar_panel_border,
-                    "button_bg": button_bg,
-                    "button_text": button_text,
-                    "button_border": button_border,
-                    "button_hover_bg": button_hover_bg,
-                    "button_hover_text": button_hover_text,
-                    "button_disabled_bg": button_disabled_bg,
-                    "button_disabled_text": button_disabled_text,
-                    "main_bg_start": main_bg_start,
-                    "main_bg_mid": main_bg_mid,
-                    "main_bg_end": main_bg_end,
-                    "card_bg": card_bg,
-                    "card_border": card_border,
-                    "resizer_line": resizer_line,
-                    "resizer_knob": resizer_knob,
-                })
-                st.session_state["ui_theme_settings"] = live_theme
-
-                col_ui1, col_ui2 = st.columns(2)
-                with col_ui1:
-                    if st.button("💾 UI配色を保存", width="stretch", key="save_ui_theme"):
-                        ok, _ = save_ui_theme_settings(live_theme)
-                        st.success("UI配色を保存しました。" if ok else "UI配色は反映済みですが、保存に失敗した可能性があります。")
-                with col_ui2:
-                    if st.button("↩ UI配色を初期値に戻す", width="stretch", key="reset_ui_theme"):
-                        default_theme = default_ui_theme_settings()
-                        save_ui_theme_settings(default_theme)
-                        for k, v in default_theme.items():
-                            st.session_state[f"ui_{k}"] = v
-                        st.session_state["ui_theme_settings"] = default_theme
-                        st.rerun()
-
-            with st.expander("📐 UIレイアウト設定", expanded=False):
-                current_layout = current_ui_layout_settings()
-                sidebar_width = st.slider("左メニュー幅", 240, 620, int(current_layout["sidebar_width"]), key="ui_layout_sidebar_width")
-                main_max_width = st.slider("メイン画面の最大幅", 760, 2000, int(current_layout["main_max_width"]), step=10, key="ui_layout_main_max_width")
-                main_padding_top = st.slider("上余白", 4, 96, int(current_layout["main_padding_top"]), key="ui_layout_main_padding_top")
-                main_padding_bottom = st.slider("下余白", 72, 280, int(current_layout["main_padding_bottom"]), key="ui_layout_main_padding_bottom")
-                card_radius = st.slider("フレーム角丸", 8, 40, int(current_layout["card_radius"]), key="ui_layout_card_radius")
-                card_shadow_blur = st.slider("フレーム影のぼかし", 0, 80, int(current_layout["card_shadow_blur"]), key="ui_layout_card_shadow_blur")
-                card_shadow_alpha_pct = st.slider("フレーム影の濃さ", 0, 40, int(round(float(current_layout["card_shadow_alpha"]) * 100)), key="ui_layout_card_shadow_alpha")
-
-                live_layout = sanitize_ui_layout_settings({
-                    "sidebar_width": sidebar_width,
-                    "main_max_width": main_max_width,
-                    "main_padding_top": main_padding_top,
-                    "main_padding_bottom": main_padding_bottom,
-                    "card_radius": card_radius,
-                    "card_shadow_blur": card_shadow_blur,
-                    "card_shadow_alpha": card_shadow_alpha_pct,
-                })
-                st.session_state["ui_layout_settings"] = live_layout
-
-                components.html(f"""
-                <script>
-                (function() {{
-                  const doc = window.parent.document;
-                  const root = doc.documentElement;
-                  root.style.setProperty('--user-sidebar-width', '{live_layout['sidebar_width']}px');
-                  root.style.setProperty('--user-main-max-width', '{live_layout['main_max_width']}px');
-                  root.style.setProperty('--user-main-padding-top', '{live_layout['main_padding_top']}px');
-                  root.style.setProperty('--user-main-padding-bottom', '{live_layout['main_padding_bottom']}px');
-                  root.style.setProperty('--user-card-radius', '{live_layout['card_radius']}px');
-                  root.style.setProperty('--user-card-shadow', '0 10px {live_layout['card_shadow_blur']}px rgba(15, 23, 42, {live_layout['card_shadow_alpha']:.2f})');
-                  window.localStorage.setItem('oai_sidebar_width', '{live_layout['sidebar_width']}');
-                  window.localStorage.setItem('oai_main_max_width', '{live_layout['main_max_width']}');
-                }})();
-                </script>
-                """, height=0, width=0)
-
-                col_layout1, col_layout2 = st.columns(2)
-                with col_layout1:
-                    if st.button("💾 UIレイアウトを保存", width="stretch", key="save_ui_layout"):
-                        ok, _ = save_ui_layout_settings(live_layout)
-                        st.success("UIレイアウトを保存しました。" if ok else "UIレイアウトは反映済みですが、保存に失敗した可能性があります。")
-                with col_layout2:
-                    if st.button("↩ UIレイアウトを初期値に戻す", width="stretch", key="reset_ui_layout"):
-                        default_layout = default_ui_layout_settings()
-                        save_ui_layout_settings(default_layout)
-                        st.session_state["ui_layout_settings"] = default_layout
-                        window_local_js = f"""<script>(function(){{const doc=window.parent.document;const root=doc.documentElement;root.style.setProperty('--user-sidebar-width','{default_layout['sidebar_width']}px');root.style.setProperty('--user-main-max-width','{default_layout['main_max_width']}px');localStorage.removeItem('oai_sidebar_width');localStorage.removeItem('oai_main_max_width');}})();</script>"""
-                        components.html(window_local_js, height=0, width=0)
-                        st.rerun()
-
-            with st.expander("📂 FAQ管理（Excelダウンロード / アップロード）", expanded=False):
-                st.caption("管理者は FAQ を Excel(.xlsx) で一括入出力できます。500件以上でもまとめて置き換え可能です。推奨列名は『質問 / 回答 / カテゴリ』です。")
-
-                if st.session_state.get("faq_replace_result"):
-                    st.success(st.session_state["faq_replace_result"])
-                    st.session_state.pop("faq_replace_result", None)
-
-                current_faq_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
-                excel_bytes = faq_df_to_excel_bytes(current_faq_df)
-                st.download_button(
-                    "⬇ 現在のFAQをExcelでダウンロード",
-                    data=excel_bytes,
-                    file_name="faq.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    width="stretch",
-                )
-                st.caption(f"現在登録中のFAQ件数: {len(current_faq_df)} 件")
-
-                uploaded_faq = st.file_uploader(
-                    "FAQファイルをアップロード",
-                    type=["xlsx", "xls", "csv"],
-                    key="faq_excel_uploader_admin",
-                    help="Excel(.xlsx) 推奨。質問 / 回答 / カテゴリ、または question / answer / category に対応。",
-                )
-
-                if uploaded_faq is not None:
-                    try:
-                        incoming_df = read_faq_uploaded_file(uploaded_faq.name, uploaded_faq.getvalue())
-                        st.success(f"アップロード確認OK: {len(incoming_df)} 件のFAQを検出しました。")
-                        preview_df = incoming_df.rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"})
-                        st.dataframe(preview_df.head(20), width="stretch", height=420)
-                        if len(incoming_df) > 20:
-                            st.caption(f"先頭20件を表示中です。保存対象は全 {len(incoming_df)} 件です。")
-
-                        if st.button("📥 この内容でFAQを反映する", type="primary", key="replace_faq_excel_admin", width="stretch"):
-                            with st.spinner("FAQを保存しています..."):
-                                saved = save_faq_csv_full(FAQ_PATH, incoming_df)
-                                reloaded_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
-
-                                try:
-                                    load_faq_index.clear()
-                                    get_faq_index_state.clear()
-                                    reset_faq_index_runtime()
-                                except Exception:
-                                    pass
-                                try:
-                                    st.cache_resource.clear()
-                                except Exception:
-                                    pass
-                                try:
-                                    st.cache_data.clear()
-                                except Exception:
-                                    pass
-
-                                if int(saved) != int(len(reloaded_df)):
-                                    st.error(f"保存件数と再読込件数が一致しません。保存: {saved} 件 / 再読込: {len(reloaded_df)} 件")
-                                else:
-                                    msg = f"FAQを {saved} 件反映しました。現在登録中のFAQ件数も {len(reloaded_df)} 件です。"
-                                    st.session_state["faq_replace_result"] = msg
-                                    st.success(msg)
-                                    st.info("FAQの反映が完了しました。再読み込みは不要です。GitHub永続化ONなら自動で外部保存されます。")
-                                    current_faq_df = reloaded_df
-                    except Exception as e:
-                        st.error(f"FAQファイルの取込でエラー: {e}")
-
-            # ===== FAQ自動生成（該当なしログ → FAQ案）=====
-
-            # =========================
-            # 管理者向け資料（PDF）ダウンロード
-            # =========================
-            with st.expander("📘 管理者向け資料（PDF）", expanded=False):
-                if not REPORTLAB_AVAILABLE:
-                    st.warning("PDF出力には reportlab が必要です。requirements.txt に reportlab を追加してください。")
-                else:
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        ops_pdf = generate_ops_manual_pdf()
-                        st.download_button(
-                            "📄 操作説明書PDFをダウンロード",
-                            data=ops_pdf,
-                            file_name="操作説明書_情シス問い合わせAI.pdf",
-                            mime="application/pdf",
-                            width="stretch",
-                        )
-                    with col_b:
-                        proposal_pdf = generate_sales_proposal_pdf()
-                        st.download_button(
-                            "📑 提案資料PDFをダウンロード",
-                            data=proposal_pdf,
-                            file_name="提案資料_情シス問い合わせAI.pdf",
-                            mime="application/pdf",
-                            width="stretch",
-                        )
-                    st.caption("※ どちらもアプリの現状に合わせて自動生成されます（必要に応じて文面はカスタマイズ可能）。")
-
-            with st.expander("📄 効果レポート（PDF）", expanded=False):
-                if not REPORTLAB_AVAILABLE:
-                    st.warning("PDF出力には reportlab が必要です。requirements.txt に reportlab を追加してください。")
-                else:
-                    hourly_cost = st.number_input(
-                        "想定人件費（円/時間）",
-                        min_value=0,
-                        max_value=20000,
-                        value=int(st.session_state.get("hourly_cost", 4000)),
-                        step=500,
-                        key="admin_hourly_cost",
-                    )
-                    df_month_all = read_interactions(days=60)
-                    if df_month_all is None or len(df_month_all) == 0:
-                        st.caption("今月の利用ログがまだありません。質問すると自動で蓄積します。")
+            col_llm1, col_llm2 = st.columns(2)
+            with col_llm1:
+                if st.button("💾 LLM設定を保存", width="stretch", key="save_llm_settings"):
+                    ok, saved = save_llm_settings({
+                        "provider": provider,
+                        "groq_model": groq_model,
+                        "ollama_model": ollama_model,
+                        "ollama_base_url": ollama_base_url,
+                    })
+                    st.session_state["llm_settings"] = saved
+                    if ok:
+                        st.success("LLM設定を保存しました。")
                     else:
-                        try:
-                            ts = pd.to_datetime(df_month_all["timestamp"], errors="coerce")
-                            month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                            df_month = df_month_all[ts >= month_start]
-                        except Exception:
-                            df_month = df_month_all
+                        st.warning("LLM設定は反映済みですが、保存に失敗した可能性があります。")
+                    st.rerun()
+            with col_llm2:
+                if st.button("↩ LLM設定を初期値に戻す", width="stretch", key="reset_llm_settings"):
+                    default_llm = default_llm_settings()
+                    save_llm_settings(default_llm)
+                    st.session_state["llm_settings"] = default_llm
+                    st.rerun()
 
-                        try:
-                            pdf_bytes = generate_effect_report_pdf(
-                                df=df_month,
-                                avg_min=float(avg_min),
-                                deflect=float(deflect),
-                                hourly_cost_yen=int(hourly_cost),
-                            )
-                            st.download_button(
-                                "📄 今月の導入効果レポートをダウンロード",
-                                data=pdf_bytes,
-                                file_name=f"effect_report_{datetime.now().strftime('%Y%m')}.pdf",
-                                mime="application/pdf",
-                                width="stretch",
-                            )
-                        except Exception as e:
-                            st.error(f"PDF生成でエラー: {e}")
+            provider_label = "Groq（クラウド・高速）" if provider == "groq" else "Ollama（ローカル・社内完結）"
+            st.caption(f"現在の利用先: {provider_label}")
+            if provider == "ollama":
+                st.info("Ollamaはローカル実行です。初回はモデルを事前に pull してください。")
 
-            # with st.expander("⏰ Render無料プラン常時起動支援", expanded=False):
+        with st.expander("🎨 UI配色設定", expanded=False):
+            current_theme = current_ui_theme_settings()
+
+            c1, c2 = st.columns(2)
+            with c1:
+                sidebar_bg_start = st.color_picker("左メニュー背景（開始色）", current_theme["sidebar_bg_start"], key="ui_sidebar_bg_start")
+                sidebar_text = st.color_picker("左メニュー文字色", current_theme["sidebar_text"], key="ui_sidebar_text")
+                sidebar_text_muted = st.color_picker("左メニュー補助文字色", current_theme["sidebar_text_muted"], key="ui_sidebar_text_muted")
+                button_bg = st.color_picker("ボタン背景色", current_theme["button_bg"], key="ui_button_bg")
+                button_text = st.color_picker("ボタン文字色", current_theme["button_text"], key="ui_button_text")
+                button_border = st.color_picker("ボタン枠線色", current_theme["button_border"], key="ui_button_border")
+                button_hover_bg = st.color_picker("ボタンホバー背景", current_theme["button_hover_bg"], key="ui_button_hover_bg")
+                button_hover_text = st.color_picker("ボタンホバー文字", current_theme["button_hover_text"], key="ui_button_hover_text")
+                button_disabled_bg = st.color_picker("無効ボタン背景色", current_theme["button_disabled_bg"], key="ui_button_disabled_bg")
+                button_disabled_text = st.color_picker("無効ボタン文字色", current_theme["button_disabled_text"], key="ui_button_disabled_text")
+            with c2:
+                sidebar_bg_end = st.color_picker("左メニュー背景（終了色）", current_theme["sidebar_bg_end"], key="ui_sidebar_bg_end")
+                main_bg_start = st.color_picker("メイン背景（開始色）", current_theme["main_bg_start"], key="ui_main_bg_start")
+                main_bg_mid = st.color_picker("メイン背景（中央色）", current_theme["main_bg_mid"], key="ui_main_bg_mid")
+                main_bg_end = st.color_picker("メイン背景（終了色）", current_theme["main_bg_end"], key="ui_main_bg_end")
+                card_border = st.color_picker("カード枠線色", current_theme["card_border"], key="ui_card_border")
+                resizer_knob = st.color_picker("ドラッグつまみ色", current_theme["resizer_knob"], key="ui_resizer_knob")
+
+            sidebar_panel_bg = st.text_input("左メニューパネル背景（hex または rgba）", value=current_theme["sidebar_panel_bg"], key="ui_sidebar_panel_bg")
+            sidebar_panel_border = st.text_input("左メニューパネル枠線（hex または rgba）", value=current_theme["sidebar_panel_border"], key="ui_sidebar_panel_border")
+            card_bg = st.text_input("カード背景色（hex または rgba）", value=current_theme["card_bg"], key="ui_card_bg")
+            resizer_line = st.text_input("ドラッグライン色（hex または rgba）", value=current_theme["resizer_line"], key="ui_resizer_line")
+
+            live_theme = sanitize_ui_theme_settings({
+                "sidebar_bg_start": sidebar_bg_start,
+                "sidebar_bg_end": sidebar_bg_end,
+                "sidebar_text": sidebar_text,
+                "sidebar_text_muted": sidebar_text_muted,
+                "sidebar_panel_bg": sidebar_panel_bg,
+                "sidebar_panel_border": sidebar_panel_border,
+                "button_bg": button_bg,
+                "button_text": button_text,
+                "button_border": button_border,
+                "button_hover_bg": button_hover_bg,
+                "button_hover_text": button_hover_text,
+                "button_disabled_bg": button_disabled_bg,
+                "button_disabled_text": button_disabled_text,
+                "main_bg_start": main_bg_start,
+                "main_bg_mid": main_bg_mid,
+                "main_bg_end": main_bg_end,
+                "card_bg": card_bg,
+                "card_border": card_border,
+                "resizer_line": resizer_line,
+                "resizer_knob": resizer_knob,
+            })
+            st.session_state["ui_theme_settings"] = live_theme
+
+            col_ui1, col_ui2 = st.columns(2)
+            with col_ui1:
+                if st.button("💾 UI配色を保存", width="stretch", key="save_ui_theme"):
+                    ok, _ = save_ui_theme_settings(live_theme)
+                    st.success("UI配色を保存しました。" if ok else "UI配色は反映済みですが、保存に失敗した可能性があります。")
+            with col_ui2:
+                if st.button("↩ UI配色を初期値に戻す", width="stretch", key="reset_ui_theme"):
+                    default_theme = default_ui_theme_settings()
+                    save_ui_theme_settings(default_theme)
+                    for k, v in default_theme.items():
+                        st.session_state[f"ui_{k}"] = v
+                    st.session_state["ui_theme_settings"] = default_theme
+                    st.rerun()
+
+        with st.expander("📐 UIレイアウト設定", expanded=False):
+            current_layout = current_ui_layout_settings()
+            sidebar_width = st.slider("左メニュー幅", 240, 620, int(current_layout["sidebar_width"]), key="ui_layout_sidebar_width")
+            main_max_width = st.slider("メイン画面の最大幅", 760, 2000, int(current_layout["main_max_width"]), step=10, key="ui_layout_main_max_width")
+            main_padding_top = st.slider("上余白", 4, 96, int(current_layout["main_padding_top"]), key="ui_layout_main_padding_top")
+            main_padding_bottom = st.slider("下余白", 72, 280, int(current_layout["main_padding_bottom"]), key="ui_layout_main_padding_bottom")
+            card_radius = st.slider("フレーム角丸", 8, 40, int(current_layout["card_radius"]), key="ui_layout_card_radius")
+            card_shadow_blur = st.slider("フレーム影のぼかし", 0, 80, int(current_layout["card_shadow_blur"]), key="ui_layout_card_shadow_blur")
+            card_shadow_alpha_pct = st.slider("フレーム影の濃さ", 0, 40, int(round(float(current_layout["card_shadow_alpha"]) * 100)), key="ui_layout_card_shadow_alpha")
+
+            live_layout = sanitize_ui_layout_settings({
+                "sidebar_width": sidebar_width,
+                "main_max_width": main_max_width,
+                "main_padding_top": main_padding_top,
+                "main_padding_bottom": main_padding_bottom,
+                "card_radius": card_radius,
+                "card_shadow_blur": card_shadow_blur,
+                "card_shadow_alpha": card_shadow_alpha_pct,
+            })
+            st.session_state["ui_layout_settings"] = live_layout
+
+            components.html(f"""
+            <script>
+            (function() {{
+              const doc = window.parent.document;
+              const root = doc.documentElement;
+              root.style.setProperty('--user-sidebar-width', '{live_layout['sidebar_width']}px');
+              root.style.setProperty('--user-main-max-width', '{live_layout['main_max_width']}px');
+              root.style.setProperty('--user-main-padding-top', '{live_layout['main_padding_top']}px');
+              root.style.setProperty('--user-main-padding-bottom', '{live_layout['main_padding_bottom']}px');
+              root.style.setProperty('--user-card-radius', '{live_layout['card_radius']}px');
+              root.style.setProperty('--user-card-shadow', '0 10px {live_layout['card_shadow_blur']}px rgba(15, 23, 42, {live_layout['card_shadow_alpha']:.2f})');
+              window.localStorage.setItem('oai_sidebar_width', '{live_layout['sidebar_width']}');
+              window.localStorage.setItem('oai_main_max_width', '{live_layout['main_max_width']}');
+            }})();
+            </script>
+            """, height=0, width=0)
+
+            col_layout1, col_layout2 = st.columns(2)
+            with col_layout1:
+                if st.button("💾 UIレイアウトを保存", width="stretch", key="save_ui_layout"):
+                    ok, _ = save_ui_layout_settings(live_layout)
+                    st.success("UIレイアウトを保存しました。" if ok else "UIレイアウトは反映済みですが、保存に失敗した可能性があります。")
+            with col_layout2:
+                if st.button("↩ UIレイアウトを初期値に戻す", width="stretch", key="reset_ui_layout"):
+                    default_layout = default_ui_layout_settings()
+                    save_ui_layout_settings(default_layout)
+                    st.session_state["ui_layout_settings"] = default_layout
+                    window_local_js = f"""<script>(function(){{const doc=window.parent.document;const root=doc.documentElement;root.style.setProperty('--user-sidebar-width','{default_layout['sidebar_width']}px');root.style.setProperty('--user-main-max-width','{default_layout['main_max_width']}px');localStorage.removeItem('oai_sidebar_width');localStorage.removeItem('oai_main_max_width');}})();</script>"""
+                    components.html(window_local_js, height=0, width=0)
+                    st.rerun()
+
+        with st.expander("📂 FAQ管理（Excelダウンロード / アップロード）", expanded=False):
+            st.caption("管理者は FAQ を Excel(.xlsx) で一括入出力できます。500件以上でもまとめて置き換え可能です。推奨列名は『質問 / 回答 / カテゴリ』です。")
+
+            if st.session_state.get("faq_replace_result"):
+                st.success(st.session_state["faq_replace_result"])
+                st.session_state.pop("faq_replace_result", None)
+
+            current_faq_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
+            excel_bytes = faq_df_to_excel_bytes(current_faq_df)
+            st.download_button(
+                "⬇ 現在のFAQをExcelでダウンロード",
+                data=excel_bytes,
+                file_name="faq.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                width="stretch",
+            )
+            st.caption(f"現在登録中のFAQ件数: {len(current_faq_df)} 件")
+
+            uploaded_faq = st.file_uploader(
+                "FAQファイルをアップロード",
+                type=["xlsx", "xls", "csv"],
+                key="faq_excel_uploader_admin",
+                help="Excel(.xlsx) 推奨。質問 / 回答 / カテゴリ、または question / answer / category に対応。",
+            )
+
+            if uploaded_faq is not None:
+                try:
+                    incoming_df = read_faq_uploaded_file(uploaded_faq.name, uploaded_faq.getvalue())
+                    st.success(f"アップロード確認OK: {len(incoming_df)} 件のFAQを検出しました。")
+                    preview_df = incoming_df.rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"})
+                    st.dataframe(preview_df.head(20), width="stretch", height=420)
+                    if len(incoming_df) > 20:
+                        st.caption(f"先頭20件を表示中です。保存対象は全 {len(incoming_df)} 件です。")
+
+                    if st.button("📥 この内容でFAQを反映する", type="primary", key="replace_faq_excel_admin", width="stretch"):
+                        with st.spinner("FAQを保存しています..."):
+                            saved = save_faq_csv_full(FAQ_PATH, incoming_df)
+                            reloaded_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
+
+                            try:
+                                load_faq_index.clear()
+                                get_faq_index_state.clear()
+                                reset_faq_index_runtime()
+                            except Exception:
+                                pass
+                            try:
+                                st.cache_resource.clear()
+                            except Exception:
+                                pass
+                            try:
+                                st.cache_data.clear()
+                            except Exception:
+                                pass
+
+                            if int(saved) != int(len(reloaded_df)):
+                                st.error(f"保存件数と再読込件数が一致しません。保存: {saved} 件 / 再読込: {len(reloaded_df)} 件")
+                            else:
+                                msg = f"FAQを {saved} 件反映しました。現在登録中のFAQ件数も {len(reloaded_df)} 件です。"
+                                st.session_state["faq_replace_result"] = msg
+                                st.success(msg)
+                                st.info("FAQの反映が完了しました。再読み込みは不要です。GitHub永続化ONなら自動で外部保存されます。")
+                                current_faq_df = reloaded_df
+                except Exception as e:
+                    st.error(f"FAQファイルの取込でエラー: {e}")
+
+        # ===== FAQ自動生成（該当なしログ → FAQ案）=====
+
+        # =========================
+        # 管理者向け資料（PDF）ダウンロード
+        # =========================
+        with st.expander("📘 管理者向け資料（PDF）", expanded=False):
+            if not REPORTLAB_AVAILABLE:
+                st.warning("PDF出力には reportlab が必要です。requirements.txt に reportlab を追加してください。")
+            else:
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    ops_pdf = generate_ops_manual_pdf()
+                    st.download_button(
+                        "📄 操作説明書PDFをダウンロード",
+                        data=ops_pdf,
+                        file_name="操作説明書_情シス問い合わせAI.pdf",
+                        mime="application/pdf",
+                        width="stretch",
+                    )
+                with col_b:
+                    proposal_pdf = generate_sales_proposal_pdf()
+                    st.download_button(
+                        "📑 提案資料PDFをダウンロード",
+                        data=proposal_pdf,
+                        file_name="提案資料_情シス問い合わせAI.pdf",
+                        mime="application/pdf",
+                        width="stretch",
+                    )
+                st.caption("※ どちらもアプリの現状に合わせて自動生成されます（必要に応じて文面はカスタマイズ可能）。")
+
+        with st.expander("📄 効果レポート（PDF）", expanded=False):
+            if not REPORTLAB_AVAILABLE:
+                st.warning("PDF出力には reportlab が必要です。requirements.txt に reportlab を追加してください。")
+            else:
+                hourly_cost = st.number_input(
+                    "想定人件費（円/時間）",
+                    min_value=0,
+                    max_value=20000,
+                    value=int(st.session_state.get("hourly_cost", 4000)),
+                    step=500,
+                    key="admin_hourly_cost",
+                )
+                df_month_all = read_interactions(days=60)
+                if df_month_all is None or len(df_month_all) == 0:
+                    st.caption("今月の利用ログがまだありません。質問すると自動で蓄積します。")
+                else:
+                    try:
+                        ts = pd.to_datetime(df_month_all["timestamp"], errors="coerce")
+                        month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                        df_month = df_month_all[ts >= month_start]
+                    except Exception:
+                        df_month = df_month_all
+
+                    try:
+                        pdf_bytes = generate_effect_report_pdf(
+                            df=df_month,
+                            avg_min=float(avg_min),
+                            deflect=float(deflect),
+                            hourly_cost_yen=int(hourly_cost),
+                        )
+                        st.download_button(
+                            "📄 今月の導入効果レポートをダウンロード",
+                            data=pdf_bytes,
+                            file_name=f"effect_report_{datetime.now().strftime('%Y%m')}.pdf",
+                            mime="application/pdf",
+                            width="stretch",
+                        )
+                    except Exception as e:
+                        st.error(f"PDF生成でエラー: {e}")
+
+        # with st.expander("⏰ Render無料プラン常時起動支援", expanded=False):
             #     st.caption("Render無料プランのスリープを減らすため、GitHub Actionsから一定間隔でRender URLへアクセスする設定を生成します。")
             #     st.warning("app.py単体では、サービスが完全にスリープした後に自力で自分自身を起こすことはできません。常時起動に近づけるには、外部からの定期アクセスが必要です。")
 
