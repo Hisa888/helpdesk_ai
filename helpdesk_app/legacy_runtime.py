@@ -233,6 +233,234 @@ def run_app():
         return _build_minimal_xlsx_bytes(export_df, sheet_name="FAQ")
 
 
+    NOISE_QUESTION_PATTERNS = [
+        r"^test+$",
+        r"^tesuto+$",
+        r"^てすと+$",
+        r"^あ+$",
+        r"^ああ+$",
+        r"^aaa+$",
+        r"^sample$",
+        r"^サンプル$",
+        r"^確認$",
+        r"^動作確認$",
+        r"^こんにちは$",
+        r"^こんばんは$",
+        r"^おはよう$",
+        r"^雑談$",
+        r"^質問$",
+    ]
+    NOISE_CONTAINS_PATTERNS = [
+        r"ダミー",
+        r"テスト用",
+        r"サンプルデータ",
+        r"これはテスト",
+        r"確認用",
+        r"練習用",
+    ]
+    CATEGORY_NORMALIZATION_RULES = {
+        "PC本体": ["pc", "パソコン", "端末", "windows", "起動", "電源", "ノートpc", "デスクトップ"],
+        "ネットワーク/VPN": ["vpn", "wifi", "wi-fi", "無線", "lan", "ネットワーク", "インターネット", "通信"],
+        "アカウント/認証": ["ログイン", "サインイン", "認証", "アカウント", "パスワード", "pw", "初期化", "リセット"],
+        "メール/Outlook": ["メール", "outlook", "受信", "送信", "exchange", "メーリングリスト"],
+        "Microsoft 365/Office": ["excel", "word", "powerpoint", "office", "onenote", "teams", "sharepoint", "onedrive"],
+        "プリンタ/印刷": ["印刷", "プリンタ", "printer", "print", "スキャナ"],
+        "ブラウザ/Web": ["chrome", "edge", "firefox", "ブラウザ", "web", "サイト", "sso"],
+        "周辺機器": ["ディスプレイ", "モニター", "キーボード", "マウス", "カメラ", "マイク", "ヘッドセット", "dock", "ドッキング"],
+        "ファイル/共有": ["共有フォルダ", "アクセス権", "権限", "ファイルサーバ", "nas", "フォルダ", "共有"],
+        "業務システム": ["システム", "ワークフロー", "申請", "承認", "勤怠", "経費", "会計"],
+    }
+    REPRESENTATIVE_REPLACEMENTS = [
+        ("パソコン", ["PC", "端末", "Windows端末", "ノートPC"]),
+        ("pc", ["パソコン", "端末", "Windows端末"]),
+        ("起動しません", ["電源が入りません", "立ち上がりません", "立ち上げできません"]),
+        ("ログインできません", ["サインインできません", "入れません", "認証できません"]),
+        ("パスワードを忘れました", ["パスワードが分かりません", "PWを忘れました", "パスワードを失念しました"]),
+        ("つながりません", ["接続できません", "利用できません"]),
+        ("接続できません", ["つながりません", "利用できません"]),
+        ("表示されません", ["開けません", "見られません"]),
+        ("印刷できません", ["プリントできません", "出力できません"]),
+        ("メールが送れません", ["メールを送信できません", "送信できません"]),
+        ("メールが受信できません", ["受信できません", "メールが届きません"]),
+    ]
+
+    def _clean_text_for_faq(text_value: object) -> str:
+        s = "" if text_value is None else str(text_value)
+        s = _strip_excel_phonetic_artifacts(s)
+        s = s.replace("\u3000", " ").replace("\r\n", "\n").replace("\r", "\n")
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+
+    def _is_noise_faq_row(row) -> tuple[bool, str]:
+        q = _clean_text_for_faq(row.get("question", ""))
+        a = _clean_text_for_faq(row.get("answer", ""))
+        c = _clean_text_for_faq(row.get("category", ""))
+
+        if not q or not a:
+            return True, "質問または回答が空"
+        if len(q) <= 1:
+            return True, "質問が短すぎる"
+        q_norm = q.lower()
+        for pat in NOISE_QUESTION_PATTERNS:
+            if re.fullmatch(pat, q_norm):
+                return True, "テスト/雑談系の質問"
+        joined = f"{q} {a} {c}"
+        for pat in NOISE_CONTAINS_PATTERNS:
+            if re.search(pat, joined, flags=re.IGNORECASE):
+                return True, "テスト/サンプル系の文言"
+        if q == a:
+            return True, "質問と回答が同一"
+        if len(a) < 4:
+            return True, "回答が短すぎる"
+        return False, ""
+
+    def _normalize_category_name(question: str, answer: str, category: str) -> str:
+        raw = _clean_text_for_faq(category)
+        if raw:
+            raw_lower = raw.lower()
+            for canonical, keys in CATEGORY_NORMALIZATION_RULES.items():
+                if raw == canonical:
+                    return canonical
+                if any(k.lower() in raw_lower for k in keys):
+                    return canonical
+        joined = f"{question} {answer} {raw}".lower()
+        for canonical, keys in CATEGORY_NORMALIZATION_RULES.items():
+            if any(k.lower() in joined for k in keys):
+                return canonical
+        return raw or "その他"
+
+    def _build_representative_questions(question: str, category: str) -> list[str]:
+        base = _clean_text_for_faq(question)
+        variants = []
+        if not base:
+            return variants
+        variants.append(base)
+        for src, repls in REPRESENTATIVE_REPLACEMENTS:
+            if src in base:
+                for repl in repls:
+                    variants.append(base.replace(src, repl))
+        if category and category not in base:
+            if len(base) <= 32:
+                variants.append(f"{category}で{base}")
+            variants.append(f"{base}（{category}）")
+        deduped = []
+        seen = set()
+        for v in variants:
+            v = _clean_text_for_faq(v)
+            if not v:
+                continue
+            key = v.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(v)
+        # 過剰増殖を防ぐ
+        return deduped[:8]
+
+    def build_faq_improvement_pack(df: pd.DataFrame) -> dict:
+        src = normalize_faq_columns(df)
+        cleaned_rows = []
+        excluded_rows = []
+        notes = []
+
+        for _, row in src.iterrows():
+            q = _clean_text_for_faq(row.get("question", ""))
+            a = _clean_text_for_faq(row.get("answer", ""))
+            cat_before = _clean_text_for_faq(row.get("category", ""))
+            is_noise, reason = _is_noise_faq_row({"question": q, "answer": a, "category": cat_before})
+            if is_noise:
+                excluded_rows.append({
+                    "質問": q,
+                    "回答": a,
+                    "カテゴリ": cat_before,
+                    "除外理由": reason,
+                })
+                continue
+
+            cat_after = _normalize_category_name(q, a, cat_before)
+            if cat_after != (cat_before or "その他"):
+                notes.append({
+                    "種別": "カテゴリ整備",
+                    "内容": f"『{q[:40]}』のカテゴリを『{cat_before or '未設定'}』→『{cat_after}』へ標準化",
+                })
+
+            reps = _build_representative_questions(q, cat_after)
+            if len(reps) > 1:
+                notes.append({
+                    "種別": "代表質問追記",
+                    "内容": f"『{q[:40]}』に対して {len(reps)-1} 件の代表質問を追加",
+                })
+
+            for idx, rep_q in enumerate(reps):
+                cleaned_rows.append({
+                    "question": rep_q,
+                    "answer": a,
+                    "category": cat_after,
+                    "_source_question": q,
+                    "_is_generated": "Y" if idx > 0 else "",
+                })
+
+        improved = pd.DataFrame(cleaned_rows) if cleaned_rows else pd.DataFrame(columns=["question", "answer", "category", "_source_question", "_is_generated"])
+        if not improved.empty:
+            improved["q_key"] = improved["question"].astype(str).str.strip().str.lower()
+            improved["a_key"] = improved["answer"].astype(str).str.strip().str.lower()
+            improved["c_key"] = improved["category"].astype(str).str.strip().str.lower()
+            before = len(improved)
+            improved = improved.drop_duplicates(subset=["q_key", "a_key", "c_key"]).copy()
+            removed_dup = before - len(improved)
+            if removed_dup > 0:
+                notes.append({"種別": "重複整理", "内容": f"重複FAQを {removed_dup} 件整理"})
+            improved = improved.drop(columns=["q_key", "a_key", "c_key"], errors="ignore")
+
+        notes.insert(0, {"種別": "ノイズ除去", "内容": f"除外件数: {len(excluded_rows)} 件"})
+        notes.insert(1, {"種別": "完成件数", "内容": f"完成版FAQ件数: {len(improved)} 件"})
+        notes.insert(2, {"種別": "元FAQ件数", "内容": f"元データ件数: {len(src)} 件"})
+
+        improved_export = improved[["question", "answer", "category"]].rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"})
+        excluded_export = pd.DataFrame(excluded_rows) if excluded_rows else pd.DataFrame(columns=["質問", "回答", "カテゴリ", "除外理由"])
+        notes_export = pd.DataFrame(notes) if notes else pd.DataFrame(columns=["種別", "内容"])
+
+        return {
+            "faq_df": improved[["question", "answer", "category"]] if not improved.empty else pd.DataFrame(columns=["question", "answer", "category"]),
+            "faq_sheet": improved_export,
+            "excluded_sheet": excluded_export,
+            "memo_sheet": notes_export,
+        }
+
+    def build_multi_sheet_faq_excel_bytes(faq_df: pd.DataFrame, memo_df: pd.DataFrame | None = None, excluded_df: pd.DataFrame | None = None) -> bytes:
+        try:
+            from openpyxl import Workbook  # type: ignore
+            from io import BytesIO
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "FAQ"
+            faq_export = normalize_faq_columns(faq_df).rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"})
+            for row in [list(faq_export.columns)] + faq_export.fillna("").astype(str).values.tolist():
+                ws.append(row)
+
+            ws_memo = wb.create_sheet("改善メモ")
+            memo_export = memo_df if memo_df is not None else pd.DataFrame(columns=["種別", "内容"])
+            if memo_export.empty:
+                memo_export = pd.DataFrame([{"種別": "改善メモ", "内容": "改善内容はありません。"}])
+            for row in [list(memo_export.columns)] + memo_export.fillna("").astype(str).values.tolist():
+                ws_memo.append(row)
+
+            ws_exc = wb.create_sheet("除外した元データ")
+            excluded_export = excluded_df if excluded_df is not None else pd.DataFrame(columns=["質問", "回答", "カテゴリ", "除外理由"])
+            if excluded_export.empty:
+                excluded_export = pd.DataFrame([{"質問": "", "回答": "", "カテゴリ": "", "除外理由": "除外データはありません。"}])
+            for row in [list(excluded_export.columns)] + excluded_export.fillna("").astype(str).values.tolist():
+                ws_exc.append(row)
+
+            bio = BytesIO()
+            wb.save(bio)
+            return bio.getvalue()
+        except Exception:
+            return faq_df_to_excel_bytes(faq_df)
+
+
+
     def _read_xlsx_bytes(raw: bytes) -> pd.DataFrame:
         """XLSXを安全にDataFrame化する。
         1) pandas + openpyxl を優先
@@ -407,7 +635,8 @@ def run_app():
                     .str.replace("\r", "\n", regex=False)
                     .str.strip()
                 )
-        return df
+        improve_pack = build_faq_improvement_pack(df)
+        return improve_pack["faq_df"]
 
 
     def save_faq_csv_full(faq_path: Path, df: pd.DataFrame) -> int:
@@ -2249,14 +2478,11 @@ def run_app():
       background: var(--user-resizer-knob); box-shadow: 0 4px 18px rgba(56, 189, 248, 0.35);
     }}
     #oai-main-resizer {{
-      position: fixed;
-      right: max(calc((100vw - var(--user-main-max-width)) / 2 - 8px), 8px);
-      top: 120px; width: 14px; height: 120px;
-      z-index: 999998; cursor: ew-resize; border-radius: 999px;
-      background: linear-gradient(180deg, var(--user-resizer-line) 0%, var(--user-resizer-knob) 50%, var(--user-resizer-line) 100%);
-      opacity: 0.72;
+      display: none !important;
+      pointer-events: none !important;
+      opacity: 0 !important;
     }}
-    #oai-main-resizer:hover, #oai-sidebar-resizer:hover {{opacity: 1; filter: brightness(1.05);}}
+    #oai-sidebar-resizer:hover {{opacity: 1; filter: brightness(1.05);}}
     </style>
     """, unsafe_allow_html=True)
 
@@ -2290,16 +2516,16 @@ def run_app():
       }};
 
       const sidebarBar = ensureBar('oai-sidebar-resizer', '左右ドラッグで管理者画面幅を変更');
-      const mainBar = ensureBar('oai-main-resizer', '左右ドラッグでメイン画面幅を変更');
+      const staleMainBar = doc.getElementById('oai-main-resizer');
+      if (staleMainBar) staleMainBar.remove();
+      storage.removeItem(mainKey);
+      root.style.setProperty('--user-main-max-width', defaults.main + 'px');
       applyStored();
 
       let drag = null;
       const onDown = (e) => {{
         if (e.target && e.target.id === 'oai-sidebar-resizer') {{
           drag = 'sidebar';
-          e.preventDefault();
-        }} else if (e.target && e.target.id === 'oai-main-resizer') {{
-          drag = 'main';
           e.preventDefault();
         }}
       }};
@@ -2309,10 +2535,6 @@ def run_app():
           const val = clamp(e.clientX, 240, 620);
           root.style.setProperty('--user-sidebar-width', val + 'px');
           storage.setItem(sidebarKey, String(val));
-        }} else if (drag === 'main') {{
-          const val = clamp(e.clientX - 80, 760, 2000);
-          root.style.setProperty('--user-main-max-width', val + 'px');
-          storage.setItem(mainKey, String(val));
         }}
       }};
       const onUp = () => {{ drag = null; }};
@@ -2320,9 +2542,6 @@ def run_app():
         if (e.target && e.target.id === 'oai-sidebar-resizer') {{
           storage.removeItem(sidebarKey);
           root.style.setProperty('--user-sidebar-width', defaults.sidebar + 'px');
-        }} else if (e.target && e.target.id === 'oai-main-resizer') {{
-          storage.removeItem(mainKey);
-          root.style.setProperty('--user-main-max-width', defaults.main + 'px');
         }}
       }};
 
@@ -4255,21 +4474,27 @@ def run_app():
 
             with st.expander("📂 FAQ管理（Excelダウンロード / アップロード）", expanded=False):
                 st.caption("管理者は FAQ を Excel(.xlsx) で一括入出力できます。500件以上でもまとめて置き換え可能です。推奨列名は『質問 / 回答 / カテゴリ』です。")
+                st.caption("アップロード時に、ノイズ除去 / 代表質問追記 / カテゴリ整備 を自動で行い、改善メモと除外履歴付きのExcelも出力できます。")
 
                 if st.session_state.get("faq_replace_result"):
                     st.success(st.session_state["faq_replace_result"])
                     st.session_state.pop("faq_replace_result", None)
 
                 current_faq_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
-                excel_bytes = faq_df_to_excel_bytes(current_faq_df)
+                current_pack = build_faq_improvement_pack(current_faq_df)
+                excel_bytes = build_multi_sheet_faq_excel_bytes(
+                    current_pack["faq_df"],
+                    memo_df=current_pack["memo_sheet"],
+                    excluded_df=current_pack["excluded_sheet"],
+                )
                 st.download_button(
-                    "⬇ 現在のFAQをExcelでダウンロード",
+                    "⬇ 現在のFAQをExcelでダウンロード（改善メモ付き）",
                     data=excel_bytes,
-                    file_name="faq.xlsx",
+                    file_name="faq_improved.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     width="stretch",
                 )
-                st.caption(f"現在登録中のFAQ件数: {len(current_faq_df)} 件")
+                st.caption(f"現在登録中のFAQ件数: {len(current_faq_df)} 件 / 改善後想定: {len(current_pack['faq_df'])} 件")
 
                 uploaded_faq = st.file_uploader(
                     "FAQファイルをアップロード",
@@ -4280,14 +4505,42 @@ def run_app():
 
                 if uploaded_faq is not None:
                     try:
-                        incoming_df = read_faq_uploaded_file(uploaded_faq.name, uploaded_faq.getvalue())
-                        st.success(f"アップロード確認OK: {len(incoming_df)} 件のFAQを検出しました。")
-                        preview_df = incoming_df.rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"})
-                        st.dataframe(preview_df.head(20), width="stretch", height=420)
-                        if len(incoming_df) > 20:
-                            st.caption(f"先頭20件を表示中です。保存対象は全 {len(incoming_df)} 件です。")
+                        # read_faq_uploaded_file() 側で列名正規化・文字列整形・FAQ改善を実施済み。
+                        # ここで再度 build_faq_improvement_pack() をかけると、
+                        # 代表質問追記や件数計算が二重適用になりやすいので避ける。
+                        incoming_df = normalize_faq_columns(read_faq_uploaded_file(uploaded_faq.name, uploaded_faq.getvalue()))
+                        improve_pack = build_faq_improvement_pack(incoming_df)
+                        memo_df = improve_pack["memo_sheet"]
+                        excluded_df = improve_pack["excluded_sheet"]
+                        raw_uploaded_df = normalize_faq_columns(_read_xlsx_bytes(uploaded_faq.getvalue()) if Path(uploaded_faq.name).suffix.lower() != '.csv' else read_csv_flexible(Path('/tmp/_faq_upload.csv')))
 
-                        if st.button("📥 この内容でFAQを反映する", type="primary", key="replace_faq_excel_admin", width="stretch"):
+                        st.success(f"アップロード確認OK: 元データ {len(raw_uploaded_df)} 件 → 改善後 {len(incoming_df)} 件")
+                        col_imp1, col_imp2, col_imp3 = st.columns(3)
+                        col_imp1.metric("改善後FAQ", f"{len(incoming_df)}件")
+                        col_imp2.metric("除外", f"{len(excluded_df)}件")
+                        generated_count = max(0, len(incoming_df) - (len(raw_uploaded_df) - len(excluded_df)))
+                        col_imp3.metric("代表質問追記", f"{generated_count}件")
+
+                        st.download_button(
+                            "🧠 改善版FAQをExcelでダウンロード",
+                            data=build_multi_sheet_faq_excel_bytes(incoming_df, memo_df=memo_df, excluded_df=excluded_df),
+                            file_name="faq_improved_preview.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            width="stretch",
+                        )
+
+                        with st.expander("改善メモを見る", expanded=True):
+                            st.dataframe(memo_df, width="stretch", height=220)
+
+                        preview_df = incoming_df.rename(columns={"question": "質問", "answer": "回答", "category": "カテゴリ"})
+                        st.dataframe(preview_df.head(30), width="stretch", height=420)
+                        if len(incoming_df) > 30:
+                            st.caption(f"先頭30件を表示中です。保存対象は全 {len(incoming_df)} 件です。")
+                        if len(excluded_df) > 0:
+                            with st.expander(f"除外した元データを見る（{len(excluded_df)}件）", expanded=False):
+                                st.dataframe(excluded_df.head(50), width="stretch", height=260)
+
+                        if st.button("📥 この改善後内容でFAQを反映する", type="primary", key="replace_faq_excel_admin", width="stretch"):
                             with st.spinner("FAQを保存しています..."):
                                 saved = save_faq_csv_full(FAQ_PATH, incoming_df)
                                 reloaded_df = normalize_faq_columns(read_csv_flexible(FAQ_PATH)) if FAQ_PATH.exists() else pd.DataFrame(columns=["question", "answer", "category"])
@@ -4310,10 +4563,10 @@ def run_app():
                                 if int(saved) != int(len(reloaded_df)):
                                     st.error(f"保存件数と再読込件数が一致しません。保存: {saved} 件 / 再読込: {len(reloaded_df)} 件")
                                 else:
-                                    msg = f"FAQを {saved} 件反映しました。現在登録中のFAQ件数も {len(reloaded_df)} 件です。"
+                                    msg = f"FAQを改善後 {saved} 件反映しました。現在登録中のFAQ件数も {len(reloaded_df)} 件です。"
                                     st.session_state["faq_replace_result"] = msg
                                     st.success(msg)
-                                    st.info("FAQの反映が完了しました。再読み込みは不要です。GitHub永続化ONなら自動で外部保存されます。")
+                                    st.info("ノイズ除去 / 代表質問追記 / カテゴリ整備 を反映しました。再読み込みは不要です。GitHub永続化ONなら自動で外部保存されます。")
                                     current_faq_df = reloaded_df
                     except Exception as e:
                         st.error(f"FAQファイルの取込でエラー: {e}")
