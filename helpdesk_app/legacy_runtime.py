@@ -2101,6 +2101,9 @@ def run_app():
     .query-panel .eyebrow {font-size: 12px; color: #0369a1; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;}
     .query-panel h3 {margin: 5px 0 6px 0; font-size: 22px; color: var(--text-main);}
     .query-panel p {margin: 0; color: var(--text-sub); font-size: 14px;}
+    .hero-eyebrow {font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; opacity: .9; margin-bottom: 8px;}
+    .hero-consult {margin-top: 18px;}
+    .hero-consult a {display:inline-block; background:#ffffff; color:#0f172a; text-decoration:none; padding:10px 16px; border-radius:12px; font-weight:800;}
 
     .kpi-grid {display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 14px 0 18px 0;}
     @media (max-width: 1100px){ .kpi-grid {grid-template-columns: repeat(2, minmax(0, 1fr));} }
@@ -2358,15 +2361,16 @@ def run_app():
     st.markdown('</div>', unsafe_allow_html=True)
 
     # ===== ヒーローヘッダー =====
-    st.markdown("""
+    st.markdown(f"""
     <div class="hero-shell">
     <div class="hero">
-    <h1>情シス問い合わせAI</h1>
-    <p>FAQ根拠付きで即回答し、問い合わせ対応を削減する社内ヘルプデスクAI。導入デモ、管理者運用、効果レポートまで1画面で見せられる営業仕様です。</p>
+    <div class="hero-eyebrow">導入デモ / 情シス問い合わせAI</div>
+    <h1>情シス問い合わせを削減するAI</h1>
+    <p>FAQを根拠付きで即回答し、未解決は問い合わせ導線へつなぎ、ナレッジを継続的に蓄積します。営業デモ、管理者運用、効果レポートまで1画面で見せられる営業仕様です。</p>
     <div class="cta-row">
-    <span class="cta">🎯 導入効果：問い合わせ削減 / 品質平準化 / ナレッジ蓄積</span>
-    <span class="cta">🧩 既存FAQ（CSV / Excel）で即導入</span>
-    <span class="cta">📄 効果レポートPDF・提案資料を同梱</span>
+    <span class="cta">✔ FAQで即回答</span>
+    <span class="cta">✔ 未解決は問い合わせ誘導</span>
+    <span class="cta">✔ ログ可視化と効果測定</span>
     </div>
     <div class="badges">
     <span class="badge">✅ FAQ参照（根拠表示）</span>
@@ -2374,7 +2378,9 @@ def run_app():
     <span class="badge">📝 ログ / 該当なし蓄積</span>
     <span class="badge">🔐 管理者でFAQ育成</span>
     <span class="badge">📊 KPI・導入効果可視化</span>
+    <span class="badge">📄 提案・操作資料DL</span>
     </div>
+    {"<div class='hero-consult'><a href='" + contact_link + "' target='_blank'>📩 導入相談はこちら</a></div>" if contact_link else ""}
     </div>
     </div>
     """, unsafe_allow_html=True)
@@ -2387,8 +2393,50 @@ def run_app():
     # ==== サイドバー ========
 
 
-    # ===== KPI（直近7日）=====
+    # ===== KPI（営業デモ + 直近7日）=====
     try:
+        _df30 = read_interactions(days=30)
+        if _df30 is not None and len(_df30) > 0:
+            _total30 = int(len(_df30))
+            _matched30 = int(_df30["matched"].sum()) if "matched" in _df30.columns else 0
+            _rate30 = (_matched30 / _total30 * 100.0) if _total30 else 0.0
+
+            _avg_min_kpi = float(st.session_state.get("avg_min", 5))
+            _deflect_kpi = float(st.session_state.get("deflect", 0.7))
+            _hourly_cost_kpi = int(st.session_state.get("hourly_cost", 4000))
+            _saved_min30 = _matched30 * _avg_min_kpi * _deflect_kpi
+            _saved_h30 = _saved_min30 / 60.0
+            _saved_yen30 = int(round(_saved_h30 * _hourly_cost_kpi)) if _hourly_cost_kpi else 0
+
+            st.markdown('<div class="section-title">📊 営業デモサマリー</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'''
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="label">直近30日 問い合わせ</div>
+        <div class="value">{_total30}</div>
+        <div class="sub">利用ログベース</div>
+      </div>
+      <div class="kpi">
+        <div class="label">AI自動対応率</div>
+        <div class="value">{_rate30:.1f}%</div>
+        <div class="sub">FAQヒット率</div>
+      </div>
+      <div class="kpi">
+        <div class="label">削減時間（推定）</div>
+        <div class="value">{_saved_h30:.1f}h</div>
+        <div class="sub">平均対応 {int(_avg_min_kpi)}分 × 解決率 {int(_deflect_kpi * 100)}%</div>
+      </div>
+      <div class="kpi">
+        <div class="label">削減コスト（推定）</div>
+        <div class="value">¥{_saved_yen30:,}</div>
+        <div class="sub">時給 {int(_hourly_cost_kpi):,}円換算</div>
+      </div>
+    </div>
+    ''',
+                unsafe_allow_html=True,
+            )
+
         _df7 = read_interactions(days=7)
         if _df7 is not None and len(_df7) > 0:
             _total7 = int(len(_df7))
@@ -2397,8 +2445,6 @@ def run_app():
             _today_prefix = datetime.now().strftime("%Y-%m-%d")
             _today = _df7[_df7["timestamp"].astype(str).str.startswith(_today_prefix)]
             _total_today = int(len(_today))
-
-            # 営業用：削減時間（推定）KPI（サイドバー入力と連動）
             _avg_min_kpi = float(st.session_state.get("avg_min", 5))
             _deflect_kpi = float(st.session_state.get("deflect", 0.7))
             _hourly_cost_kpi = int(st.session_state.get("hourly_cost", 4000))
@@ -2406,8 +2452,7 @@ def run_app():
             _saved_h7 = _saved_min7 / 60.0
             _saved_yen7 = int(round(_saved_h7 * _hourly_cost_kpi)) if _hourly_cost_kpi else 0
 
-            # 営業用：KPIカード（中央に大きく）
-            st.markdown('<div class="section-title">📊 直近の利用状況</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-title">📈 直近の利用状況</div>', unsafe_allow_html=True)
             st.markdown(
                 f'''
     <div class="kpi-grid">
@@ -2440,7 +2485,7 @@ def run_app():
     ''',
                 unsafe_allow_html=True,
             )
-        else:
+        elif _df30 is None or len(_df30) == 0:
             st.caption("（利用ログがまだありません。質問するとKPIが表示されます）")
     except Exception:
         pass
@@ -2513,6 +2558,19 @@ def run_app():
         AIの回答精度を継続的に改善できます
         """
         )
+        if contact_link:
+            st.markdown(
+                f'''
+<div class="glass-card" style="margin-top: 18px; padding: 20px;">
+  <div class="eyebrow">Consulting CTA</div>
+  <h3 style="margin:4px 0 8px 0;">このまま導入相談につなげられます</h3>
+  <p style="margin:0 0 12px 0; color: var(--text-sub);">デモ確認後、そのままヒアリング・導入相談へ進めるための導線です。</p>
+  <a href="{contact_link}" target="_blank" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;padding:10px 16px;border-radius:10px;font-weight:700;">🚀 導入のご相談</a>
+</div>
+''',
+                unsafe_allow_html=True,
+            )
+
         # ======================
         # ログ（該当なし）状況＆ダウンロード
         # ======================
@@ -4478,7 +4536,7 @@ def run_app():
 
     show_welcome = len(st.session_state.messages) == 0
     if show_welcome:
-        st.markdown('<div class="glass-card query-panel"><div class="eyebrow">Ask AI</div><h3>困りごとをそのまま入力してください</h3><p>例：パスワードを忘れました / VPNにつながらない / ディスプレイが真っ暗です</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="glass-card query-panel"><div class="eyebrow">AI Demo</div><h3>実際の問い合わせをそのまま入力してください</h3><p>例：パスワードを忘れました / VPNにつながらない / ディスプレイが真っ暗です</p></div>', unsafe_allow_html=True)
         render_quick_start_buttons()
 
     # ======================
@@ -4581,7 +4639,7 @@ def run_app():
         render_nohit_extra_form(expanded=True)
 
     # 先に chat_input を描画（画面下に固定されます）
-    chat_typed = st.chat_input("質問を入力してください")
+    chat_typed = st.chat_input("情シス問い合わせを入力してください")
 
     # 入力が無いときは pending_q（おすすめボタン等）を使う
     user_q = (chat_typed or st.session_state.get("pending_q", ""))
