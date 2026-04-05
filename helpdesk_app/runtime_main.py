@@ -822,28 +822,16 @@ def run_app():
       border-color: var(--user-card-border) !important;
     }}
     #oai-sidebar-resizer {{
-      position: fixed;
-      left: calc(var(--user-sidebar-width) - 4px);
-      top: 0; bottom: 0; width: 12px;
-      z-index: 999999; cursor: col-resize;
-      background: linear-gradient(180deg, transparent 0%, transparent 35%, var(--user-resizer-line) 35%, var(--user-resizer-line) 65%, transparent 65%, transparent 100%);
+      display: none !important;
     }}
     #oai-sidebar-resizer::after {{
+      display: none !important;
       content: "";
-      position: absolute;
-      left: 2px; top: 50%; transform: translateY(-50%);
-      width: 8px; height: 72px; border-radius: 999px;
-      background: var(--user-resizer-knob); box-shadow: 0 4px 18px rgba(56, 189, 248, 0.35);
     }}
     #oai-main-resizer {{
-      position: fixed;
-      right: max(calc((100vw - var(--user-main-max-width)) / 2 - 8px), 8px);
-      top: 120px; width: 14px; height: 120px;
-      z-index: 999998; cursor: ew-resize; border-radius: 999px;
-      background: linear-gradient(180deg, var(--user-resizer-line) 0%, var(--user-resizer-knob) 50%, var(--user-resizer-line) 100%);
-      opacity: 0.72;
+      display: none !important;
     }}
-    #oai-main-resizer:hover, #oai-sidebar-resizer:hover {{opacity: 1; filter: brightness(1.05);}}
+    #oai-main-resizer:hover, #oai-sidebar-resizer:hover {{opacity: 0 !important; filter: none !important;}}
     </style>
     """, unsafe_allow_html=True)
 
@@ -876,9 +864,12 @@ def run_app():
         return el;
       }};
 
-      const sidebarBar = ensureBar('oai-sidebar-resizer', '左右ドラッグで管理者画面幅を変更');
-      const mainBar = ensureBar('oai-main-resizer', '左右ドラッグでメイン画面幅を変更');
+      const oldSidebarBar = doc.getElementById('oai-sidebar-resizer');
+      const oldMainBar = doc.getElementById('oai-main-resizer');
+      if (oldSidebarBar) oldSidebarBar.remove();
+      if (oldMainBar) oldMainBar.remove();
       applyStored();
+      return;
 
       let drag = null;
       const onDown = (e) => {{
@@ -1691,39 +1682,6 @@ def run_app():
         faq_path=FAQ_PATH,
     )
 
-    #         with st.expander("💾 永続化ステータス（v13）", expanded=False):
-    #             st.caption(persistence_status_text())
-    #             st.code("""
-    # # Streamlit Cloud secrets.toml の例
-    # PERSIST_MODE = "github"
-    # GITHUB_REPO = "owner/repo"
-    # GITHUB_BRANCH = "main"
-    # GITHUB_BASE_PATH = "streamlit_data"
-    # GITHUB_TOKEN = "ghp_xxx"
-    # """.strip(), language="toml")
-    #             col_sync1, col_sync2 = st.columns(2)
-    #             with col_sync1:
-    #                 if st.button("📥 GitHubからFAQ再読込", width="stretch", disabled=not _github_persistence_enabled()):
-    #                     ok = github_download_file("faq.csv", FAQ_PATH)
-    #                     if ok:
-    #                         try:
-    #                             load_faq_index.clear()
-    #                             get_faq_index_state.clear()
-    #                             reset_faq_index_runtime()
-    #                         except Exception:
-    #                             pass
-    #                         st.success("GitHub上の faq.csv を再読込しました。")
-    #                         st.rerun()
-    #                     else:
-    #                         st.warning("GitHubからFAQを取得できませんでした。設定を確認してください。")
-    #             with col_sync2:
-    #                 if st.button("📤 FAQをGitHubへ保存", width="stretch", disabled=not _github_persistence_enabled()):
-    #                     ok = persist_faq_now()
-    #                     if ok:
-    #                         st.success("faq.csv を GitHub に保存しました。")
-    #                     else:
-    #                         st.warning("GitHubへの保存に失敗しました。設定を確認してください。")
-
     if st.session_state.is_admin:
         with st.expander("🎯 検索精度設定", expanded=False):
             current_cfg = current_search_settings()
@@ -2145,131 +2103,6 @@ def run_app():
                     except Exception as e:
                         st.error(f"PDF生成でエラー: {e}")
 
-
-        # with st.expander("⏰ Render無料プラン常時起動支援", expanded=False):
-        #     st.caption("Render無料プランのスリープを減らすため、GitHub Actionsから一定間隔でRender URLへアクセスする設定を生成します。")
-        #     st.warning("app.py単体では、サービスが完全にスリープした後に自力で自分自身を起こすことはできません。常時起動に近づけるには、外部からの定期アクセスが必要です。")
-
-        #     default_keepalive_url = normalize_public_base_url(os.environ.get("RENDER_EXTERNAL_URL", ""))
-        #     keepalive_url = st.text_input(
-        #         "Renderの公開URL",
-        #         value=default_keepalive_url,
-        #         placeholder="https://あなたのRenderURL.onrender.com",
-        #         help="Renderで公開しているこのアプリのURLを入力してください。例: https://helpdesk-ai-xxxx.onrender.com",
-        #         key="keepalive_render_url",
-        #     )
-        #     cron_options = {
-        #         "5分ごと": "*/5 * * * *",
-        #         "10分ごと": "*/10 * * * *",
-        #         "14分ごと": "*/14 * * * *",
-        #     }
-        #     picked_label = st.selectbox("GitHub Actionsの実行間隔", list(cron_options.keys()), index=1, key="keepalive_cron_label")
-        #     cron_expr = cron_options[picked_label]
-
-        #     normalized_url = normalize_public_base_url(keepalive_url)
-        #     if normalized_url:
-        #         st.code(normalized_url, language="text")
-        #         st.caption("このURLへGitHub Actionsから定期アクセスします。")
-        #     else:
-        #         st.info("まずは Render の公開URL を入力してください。")
-
-        #     workflow_yaml = build_render_keepalive_workflow_yaml(normalized_url, cron_expr=cron_expr)
-        #     zip_bytes = build_keepalive_zip_bytes(normalized_url, cron_expr=cron_expr)
-
-        #     col_keep1, col_keep2 = st.columns(2)
-        #     with col_keep1:
-        #         st.download_button(
-        #             "⬇ GitHub Actions設定ZIPをダウンロード",
-        #             data=zip_bytes,
-        #             file_name="render_keepalive_actions.zip",
-        #             mime="application/zip",
-        #             width="stretch",
-        #         )
-        #     with col_keep2:
-        #         st.download_button(
-        #             "⬇ render-keepalive.yml をダウンロード",
-        #             data=workflow_yaml.encode("utf-8"),
-        #             file_name="render-keepalive.yml",
-        #             mime="text/yaml",
-        #             width="stretch",
-        #         )
-
-        #     st.markdown("**導入手順**")
-        #     st.write("1. ダウンロードしたZIPを展開し、`.github/workflows/render-keepalive.yml` をGitHubリポジトリへ追加します。")
-        #     st.write("2. GitHubへpushすると、Actionsが定期実行されます。")
-        #     st.write("3. Render無料プランのスリープ復帰待ちを減らせます。")
-
-        #     with st.expander("生成される GitHub Actions YAML を見る", expanded=False):
-        #         st.code(workflow_yaml, language="yaml")
-
-        # st.markdown("---")
-            # with st.expander("🧠 FAQ自動生成（該当なしログ → FAQ案）", expanded=False):
-            #     st.caption("『該当なし』ログからFAQを自動生成し、faq.csvへ追記できます。")
-
-            #     log_files = list_log_files()
-            #     if not log_files:
-            #         st.info("まだ nohit_*.csv がありません。まず質問して『該当なし』を発生させてください。")
-            #     else:
-            #         labels = [f.name for f in log_files[:15]]
-            #         pick = st.selectbox("参照するログファイル", labels, index=0)
-            #         picked_path = next((p for p in log_files if p.name == pick), log_files[0])
-
-            #         max_q = st.slider("生成に使う質問数（重複除外後）", 10, 200, 60, step=10)
-            #         n_items = st.slider("生成するFAQ件数", 3, 20, 8)
-
-            #         col_seed1, col_seed2 = st.columns([2, 3])
-            #         with col_seed1:
-            #             if st.button("🧪 デモ用に定番質問を追加（20件）"):
-            #                 added = seed_nohit_questions(20)
-            #                 st.success(f"nohitログに {added} 件追加しました。")
-            #                 st.rerun()
-            #         with col_seed2:
-            #             st.caption("※ 本番前にFAQ生成を試すためのテストデータです（channel=seedで記録）。")
-
-            #         if st.button("🤖 FAQ案を自動生成", type="primary"):
-            #             with st.spinner("FAQ案を生成中..."):
-            #                 qs = load_nohit_questions_from_logs([picked_path], max_questions=max_q)
-
-            #                 # 生成前に「有効質問数」を可視化（原因切り分け）
-            #                 st.info(f"ログから抽出できた有効質問数（重複除外後）：{len(qs)} 件")
-            #                 if len(qs) < 5:
-            #                     st.session_state.generated_faq_df = pd.DataFrame(columns=["category", "question", "answer"])
-            #                     st.warning("有効な質問が少なすぎてFAQを生成できません。ログのCSV形式（カラム名/文字コード/区切り）を確認してください。")
-            #                 else:
-            #                     try:
-            #                         gen_df = generate_faq_candidates(qs, n_items=n_items)
-            #                     except Exception:
-            #                         gen_df = pd.DataFrame(columns=["category", "question", "answer"])
-            #                     st.session_state.generated_faq_df = gen_df
-
-            #         gen_df = st.session_state.get("generated_faq_df")
-            #         if isinstance(gen_df, pd.DataFrame) and len(gen_df) > 0:
-            #             st.markdown("### ✅ 生成結果（編集して保存できます）")
-            #             edited = st.data_editor(
-            #                 gen_df,
-            #                 num_rows="dynamic",
-            #                 width="stretch",
-            #                 key="faq_editor",
-            #             )
-
-            #             col_a, col_b = st.columns(2)
-            #             with col_a:
-            #                 if st.button("💾 faq.csv に追記"):
-            #                     added = append_faq_csv(FAQ_PATH, edited.rename(columns={"category": "category"}))
-            #                     if added > 0:
-            #                         st.success(f"faq.csv に {added} 件追記しました。")
-            #                         # 反映のため再読み込み
-            #                         st.session_state.generated_faq_df = pd.DataFrame()
-            #                         st.rerun()
-            #                     else:
-            #                         st.warning("追記できる新規FAQがありません（重複/空欄の可能性）。")
-
-            #             with col_b:
-            #                 if st.button("🧹 生成結果をクリア"):
-            #                     st.session_state.generated_faq_df = pd.DataFrame()
-            #                     st.rerun()
-            #         elif isinstance(gen_df, pd.DataFrame) and len(gen_df) == 0 and st.session_state.get("generated_faq_df") is not None:
-            #             st.warning("FAQ案が生成できませんでした。ログの内容が少ないか、出力形式が崩れています。")
     # ======================
     # セッション初期化
     # ======================
