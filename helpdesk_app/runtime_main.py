@@ -427,7 +427,10 @@ def run_app():
         generate_sales_proposal_pdf_v25,
     )
 
-
+    from .modules.settings_and_persistence import (
+        current_ui_theme_settings,
+        current_ui_layout_settings,
+    )
 
     TOP_K = 3
     st.set_page_config(page_title="情シス問い合わせAI", layout="wide")
