@@ -427,7 +427,7 @@ def run_app():
         generate_sales_proposal_pdf_v25,
     )
 
-    from helpdesk_app.modules.modules.settings_and_persistence import (
+    from helpdesk_app.modules.settings_and_persistence import (
         current_ui_theme_settings,
         current_ui_layout_settings,
     )
