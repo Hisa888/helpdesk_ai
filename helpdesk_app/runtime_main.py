@@ -419,7 +419,7 @@ def run_app():
             persist_faq_now()
         return len(clean)
 
-    from .modules.pdf_runtime import (
+    from helpdesk_app.modules.pdf_runtime import (
         REPORTLAB_AVAILABLE,
         generate_effect_report_pdf,
         generate_ops_manual_pdf,
@@ -427,7 +427,7 @@ def run_app():
         generate_sales_proposal_pdf_v25,
     )
 
-    from .modules.settings_and_persistence import (
+    from helpdesk_app.modules.modules.settings_and_persistence import (
         current_ui_theme_settings,
         current_ui_layout_settings,
     )
