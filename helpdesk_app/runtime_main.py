@@ -490,11 +490,27 @@ def run_app():
     persist_log_now = settings_ctx.persist_log_now
     llm_chat = settings_ctx.llm_chat
 
-    def _csv_bytes_as_utf8_sig(df: pd.DataFrame) -> bytes:
-        try:
-            return df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-        except Exception:
-            return pd.DataFrame(df).to_csv(index=False).encode("utf-8-sig")
+    def _csv_bytes_as_utf8_sig(data) -> bytes:
+        import pandas as pd
+
+        if data is None:
+            return pd.DataFrame().to_csv(index=False).encode("utf-8-sig")
+
+        if isinstance(data, pd.DataFrame):
+            df = data
+        elif isinstance(data, list):
+            if len(data) == 0:
+                df = pd.DataFrame()
+            elif isinstance(data[0], dict):
+                df = pd.DataFrame(data)
+            else:
+                df = pd.DataFrame({"value": data})
+        elif isinstance(data, dict):
+            df = pd.DataFrame([data])
+        else:
+            df = pd.DataFrame({"value": [str(data)]})
+
+        return df.to_csv(index=False).encode("utf-8-sig")
 
     def list_log_files() -> list[Path]:
         try:
