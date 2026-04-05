@@ -6,6 +6,16 @@ def run_app():
     import re
     import json
     import requests
+    from datetime import datetime, timedelta
+    import streamlit.components.v1 as components
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    try:
+        from sentence_transformers import SentenceTransformer
+        SENTENCE_TRANSFORMERS_AVAILABLE = True
+    except Exception:
+        SentenceTransformer = None
+        SENTENCE_TRANSFORMERS_AVAILABLE = False
 
     import os
     import re
@@ -427,10 +437,147 @@ def run_app():
         generate_sales_proposal_pdf_v25,
     )
 
-    from helpdesk_app.modules.settings_and_persistence import (
-        current_ui_theme_settings,
-        current_ui_layout_settings,
+    from helpdesk_app.modules.settings_and_persistence import create_runtime_context
+    from helpdesk_app.modules.ui_helpers import render_match_bar
+    from helpdesk_app.admin_menu_complete import render_admin_complete_tools
+    from helpdesk_app.modules.main_view_runtime import (
+        ensure_admin_session_state,
+        render_admin_login_sidebar,
+        render_admin_tools_if_logged_in,
+        render_public_sidebar,
+        render_sales_kpi_sections,
     )
+    from helpdesk_app.modules.faq_index_runtime import create_faq_index_runtime
+    from helpdesk_app.modules.search_runtime import create_search_runtime
+
+    settings_ctx = create_runtime_context(
+        st=st,
+        requests=requests,
+        base_llm_chat=lambda messages: "",
+        root_dir=Path("."),
+    )
+
+    FAQ_PATH = settings_ctx.FAQ_PATH
+    LOG_DIR = settings_ctx.LOG_DIR
+    COMPANY_NAME = settings_ctx.COMPANY_NAME
+    LOGO_PATH = settings_ctx.LOGO_PATH
+    CONTACT_URL = settings_ctx.CONTACT_URL
+    CONTACT_EMAIL = settings_ctx.CONTACT_EMAIL
+    LLM_SETTINGS = settings_ctx.LLM_SETTINGS
+    SEARCH_SETTINGS = settings_ctx.SEARCH_SETTINGS
+    DEFAULT_SEARCH_THRESHOLD = settings_ctx.DEFAULT_SEARCH_THRESHOLD
+    DEFAULT_SUGGEST_THRESHOLD = settings_ctx.DEFAULT_SUGGEST_THRESHOLD
+    default_ui_theme_settings = settings_ctx.default_ui_theme_settings
+    default_ui_layout_settings = settings_ctx.default_ui_layout_settings
+    sanitize_ui_theme_settings = settings_ctx.sanitize_ui_theme_settings
+    sanitize_ui_layout_settings = settings_ctx.sanitize_ui_layout_settings
+    default_llm_settings = settings_ctx.default_llm_settings
+    sanitize_llm_settings = settings_ctx.sanitize_llm_settings
+    current_llm_settings = settings_ctx.current_llm_settings
+    save_llm_settings = settings_ctx.save_llm_settings
+    default_search_settings = settings_ctx.default_search_settings
+    _sanitize_search_settings = settings_ctx._sanitize_search_settings
+    current_search_settings = settings_ctx.current_search_settings
+    save_search_settings = settings_ctx.save_search_settings
+    current_search_threshold = settings_ctx.current_search_threshold
+    current_suggest_threshold = settings_ctx.current_suggest_threshold
+    current_ui_theme_settings = settings_ctx.current_ui_theme_settings
+    current_ui_layout_settings = settings_ctx.current_ui_layout_settings
+    save_ui_theme_settings = settings_ctx.save_ui_theme_settings
+    save_ui_layout_settings = settings_ctx.save_ui_layout_settings
+    build_contact_link = settings_ctx.build_contact_link
+    persist_faq_now = settings_ctx.persist_faq_now
+    persist_log_now = settings_ctx.persist_log_now
+    llm_chat = settings_ctx.llm_chat
+
+    def _csv_bytes_as_utf8_sig(df: pd.DataFrame) -> bytes:
+        try:
+            return df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        except Exception:
+            return pd.DataFrame(df).to_csv(index=False).encode("utf-8-sig")
+
+    def list_log_files() -> list[Path]:
+        try:
+            return sorted(LOG_DIR.glob("nohit_*.csv"), reverse=True)
+        except Exception:
+            return []
+
+    def make_logs_zip(files) -> bytes:
+        bio = io.BytesIO()
+        with zipfile.ZipFile(bio, "w", zipfile.ZIP_DEFLATED) as zf:
+            for p in files or []:
+                try:
+                    zf.writestr(Path(p).name, Path(p).read_bytes())
+                except Exception:
+                    continue
+        return bio.getvalue()
+
+    def count_nohit_logs(days: int = 7):
+        files = list_log_files()
+        if not files:
+            return 0, 0, 0
+        today_str = datetime.now().strftime("%Y%m%d")
+        today = datetime.now().date()
+        recent_days = {(today - timedelta(days=i)).strftime("%Y%m%d") for i in range(days)}
+        today_count = recent_count = total_count = 0
+        for p in files:
+            m = re.match(r"nohit_(\d{8})\.csv$", Path(p).name)
+            day = m.group(1) if m else ""
+            try:
+                cnt = int(len(read_csv_flexible(Path(p))))
+            except Exception:
+                cnt = 0
+            total_count += cnt
+            if day == today_str:
+                today_count += cnt
+            if day in recent_days:
+                recent_count += cnt
+        return today_count, recent_count, total_count
+
+    def read_interactions(days: int = 7) -> pd.DataFrame:
+        frames = []
+        for i in range(days):
+            d = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
+            p = LOG_DIR / f"interactions_{d}.csv"
+            if p.exists():
+                try:
+                    frames.append(read_csv_flexible(p))
+                except Exception:
+                    pass
+        if not frames:
+            return pd.DataFrame(columns=["timestamp", "question", "matched", "best_score", "category"])
+        df_all = pd.concat(frames, ignore_index=True)
+        if "matched" in df_all.columns:
+            df_all["matched"] = pd.to_numeric(df_all["matched"], errors="coerce").fillna(0).astype(int)
+        else:
+            df_all["matched"] = 0
+        if "best_score" in df_all.columns:
+            df_all["best_score"] = pd.to_numeric(df_all["best_score"], errors="coerce").fillna(0.0)
+        else:
+            df_all["best_score"] = 0.0
+        if "category" not in df_all.columns:
+            df_all["category"] = ""
+        return df_all
+
+    def format_minutes_to_hours(minutes: float) -> str:
+        try:
+            m = float(minutes)
+        except Exception:
+            m = 0.0
+        return f"{int(round(m))}分" if m < 60 else f"{m/60.0:.1f}時間"
+
+    def _faq_cache_token() -> str:
+        try:
+            if FAQ_PATH.exists():
+                stat = FAQ_PATH.stat()
+                return f"{FAQ_PATH}:{stat.st_mtime_ns}:{stat.st_size}"
+        except Exception:
+            pass
+        return str(FAQ_PATH)
+
+    def check_password(pwd: str) -> bool:
+        expected = str(st.secrets.get("ADMIN_PASSWORD", os.environ.get("ADMIN_PASSWORD", "admin")))
+        return str(pwd or "") == expected
 
     TOP_K = 3
     st.set_page_config(page_title="情シス問い合わせAI", layout="wide")
@@ -815,16 +962,7 @@ def run_app():
         pass
 
     # ==== サイドバー ========
-
-
     # ===== KPI（営業デモ + 直近7日）=====
-    from .modules.main_view_runtime import (
-        ensure_admin_session_state,
-        render_admin_login_sidebar,
-        render_admin_tools_if_logged_in,
-        render_public_sidebar,
-        render_sales_kpi_sections,
-    )
 
     render_sales_kpi_sections(read_interactions=read_interactions)
     render_public_sidebar(
@@ -920,8 +1058,6 @@ def run_app():
         },
     ]
 
-    from .modules.faq_index_runtime import create_faq_index_runtime
-    from .modules.search_runtime import create_search_runtime
 
     search_ctx = create_search_runtime(
         st=st,
