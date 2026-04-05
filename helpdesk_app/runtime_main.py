@@ -2113,6 +2113,10 @@ def run_app():
                     step=500,
                     key="admin_hourly_cost",
                 )
+
+                avg_min_pdf = float(st.session_state.get("avg_min", 5))
+                deflect_pdf = float(st.session_state.get("deflect_rate", st.session_state.get("deflect", 0.7)))
+
                 df_month_all = read_interactions(days=60)
                 if df_month_all is None or len(df_month_all) == 0:
                     st.caption("今月の利用ログがまだありません。質問すると自動で蓄積します。")
@@ -2127,8 +2131,8 @@ def run_app():
                     try:
                         pdf_bytes = generate_effect_report_pdf(
                             df=df_month,
-                            avg_min=float(avg_min),
-                            deflect=float(deflect),
+                            avg_min=avg_min_pdf,
+                            deflect=deflect_pdf,
                             hourly_cost_yen=int(hourly_cost),
                         )
                         st.download_button(
@@ -2140,6 +2144,7 @@ def run_app():
                         )
                     except Exception as e:
                         st.error(f"PDF生成でエラー: {e}")
+
 
         # with st.expander("⏰ Render無料プラン常時起動支援", expanded=False):
         #     st.caption("Render無料プランのスリープを減らすため、GitHub Actionsから一定間隔でRender URLへアクセスする設定を生成します。")
