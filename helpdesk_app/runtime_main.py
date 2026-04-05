@@ -927,9 +927,9 @@ def run_app():
       doc.removeEventListener('mouseup', stopDrag);
       doc.removeEventListener('touchmove', onMove);
       doc.removeEventListener('touchend', stopDrag);
-      doc.addEventListener('mousemove', onMove, { passive: false });
+      doc.addEventListener('mousemove', onMove, {{ passive: false }});
       doc.addEventListener('mouseup', stopDrag);
-      doc.addEventListener('touchmove', onMove, { passive: false });
+      doc.addEventListener('touchmove', onMove, {{ passive: false }});
       doc.addEventListener('touchend', stopDrag);
 
       setTimeout(applyStored, 50);
