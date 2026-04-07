@@ -2177,17 +2177,14 @@ def run_app():
 
         if c1.button("🔐 パスワードを忘れた"):
             st.session_state.pending_q = "パスワードを忘れました"
-            st.session_state["scroll_to_answer"] = True
             st.rerun()
 
         if c2.button("🧩 アカウントがロックされた"):
             st.session_state.pending_q = "アカウントがロックされました"
-            st.session_state["scroll_to_answer"] = True
             st.rerun()
 
         if c3.button("🌐 VPNに接続できない"):
             st.session_state.pending_q = "VPNに接続できません"
-            st.session_state["scroll_to_answer"] = True
             st.rerun()
 
 
@@ -2202,8 +2199,8 @@ def run_app():
             unsafe_allow_html=True
         )
 
-    if show_welcome or is_locked:
-        render_quick_start_buttons()
+    # おすすめ質問は会話後も常に表示して使えるようにする
+    render_quick_start_buttons()
 
     # ======================
     # チャット履歴表示
@@ -2211,26 +2208,6 @@ def run_app():
     for m in st.session_state.messages:
         with st.chat_message(m.get("role", "assistant")):
             st.markdown(m.get("content", ""), unsafe_allow_html=True)
-
-
-    def render_scroll_to_latest_answer():
-        components.html(
-            """
-            <script>
-            setTimeout(() => {
-                const doc = window.parent.document;
-                const answers = doc.querySelectorAll('.answerbox');
-                const chatMessages = doc.querySelectorAll('[data-testid="stChatMessage"]');
-                const target = answers.length ? answers[answers.length - 1] : (chatMessages.length ? chatMessages[chatMessages.length - 1] : null);
-                if (target) {
-                    target.scrollIntoView({ behavior: "smooth", block: "start" });
-                }
-            }, 180);
-            </script>
-            """,
-            height=0,
-            width=0,
-        )
 
 
     def build_suggest_answer(user_q: str, hits) -> str:
@@ -2335,7 +2312,6 @@ def run_app():
 
     if user_q:
         st.session_state.pending_q = ""
-        st.session_state["scroll_to_answer"] = True
 
         st.session_state.messages.append({"role": "user", "content": user_q})
         with st.chat_message("user"):
@@ -2422,8 +2398,6 @@ def run_app():
                 top_cat = ""
         log_interaction(user_q, matched=(best_score >= answer_threshold), best_score=best_score, category=top_cat)
 
-        st.markdown('<div id="answer-area"></div>', unsafe_allow_html=True)
-
         with st.chat_message("assistant"):
             answer_html = str(answer).replace("\n", "<br>")
             st.markdown(f'<div class="answerbox">{answer_html}</div>', unsafe_allow_html=True)
@@ -2441,15 +2415,9 @@ def run_app():
 
         # nohit はフォーム表示のために再描画
         if "was_nohit" in locals() and was_nohit:
-            st.session_state["scroll_to_answer"] = True
             st.rerun()
 
         # おすすめ質問ボタンから自動送信した場合は、もう一度 rerun して入力欄を確実に表示
         if used_pending:
-            st.session_state["scroll_to_answer"] = True
             st.rerun()
-
-    if st.session_state.get("scroll_to_answer") and st.session_state.messages:
-        render_scroll_to_latest_answer()
-        st.session_state["scroll_to_answer"] = False
 
