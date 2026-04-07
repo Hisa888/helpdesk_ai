@@ -1,10 +1,21 @@
 def run_app():
+    import streamlit as st
     from pathlib import Path
     import pandas as pd
     import io
     import re
     import json
     import requests
+    from datetime import datetime, timedelta
+    import streamlit.components.v1 as components
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    try:
+        from sentence_transformers import SentenceTransformer
+        SENTENCE_TRANSFORMERS_AVAILABLE = True
+    except Exception:
+        SentenceTransformer = None
+        SENTENCE_TRANSFORMERS_AVAILABLE = False
 
     import os
     import re
@@ -418,7 +429,7 @@ def run_app():
             persist_faq_now()
         return len(clean)
 
-    from .modules.pdf_runtime import (
+    from helpdesk_app.modules.pdf_runtime import (
         REPORTLAB_AVAILABLE,
         generate_effect_report_pdf,
         generate_ops_manual_pdf,
@@ -426,7 +437,163 @@ def run_app():
         generate_sales_proposal_pdf_v25,
     )
 
+    from helpdesk_app.modules.settings_and_persistence import create_runtime_context
+    from helpdesk_app.modules.ui_helpers import render_match_bar
+    from helpdesk_app.admin_menu_complete import render_admin_complete_tools
+    from helpdesk_app.modules.main_view_runtime import (
+        ensure_admin_session_state,
+        render_admin_login_sidebar,
+        render_admin_tools_if_logged_in,
+        render_public_sidebar,
+        render_sales_kpi_sections,
+    )
+    from helpdesk_app.modules.faq_index_runtime import create_faq_index_runtime
+    from helpdesk_app.modules.search_runtime import create_search_runtime
 
+    settings_ctx = create_runtime_context(
+        st=st,
+        requests=requests,
+        base_llm_chat=lambda messages: "",
+        root_dir=Path("."),
+    )
+
+    FAQ_PATH = settings_ctx.FAQ_PATH
+    LOG_DIR = settings_ctx.LOG_DIR
+    COMPANY_NAME = settings_ctx.COMPANY_NAME
+    LOGO_PATH = settings_ctx.LOGO_PATH
+    CONTACT_URL = settings_ctx.CONTACT_URL
+    CONTACT_EMAIL = settings_ctx.CONTACT_EMAIL
+    LLM_SETTINGS = settings_ctx.LLM_SETTINGS
+    SEARCH_SETTINGS = settings_ctx.SEARCH_SETTINGS
+    DEFAULT_SEARCH_THRESHOLD = settings_ctx.DEFAULT_SEARCH_THRESHOLD
+    DEFAULT_SUGGEST_THRESHOLD = settings_ctx.DEFAULT_SUGGEST_THRESHOLD
+    default_ui_theme_settings = settings_ctx.default_ui_theme_settings
+    default_ui_layout_settings = settings_ctx.default_ui_layout_settings
+    sanitize_ui_theme_settings = settings_ctx.sanitize_ui_theme_settings
+    sanitize_ui_layout_settings = settings_ctx.sanitize_ui_layout_settings
+    default_llm_settings = settings_ctx.default_llm_settings
+    sanitize_llm_settings = settings_ctx.sanitize_llm_settings
+    current_llm_settings = settings_ctx.current_llm_settings
+    save_llm_settings = settings_ctx.save_llm_settings
+    default_search_settings = settings_ctx.default_search_settings
+    _sanitize_search_settings = settings_ctx._sanitize_search_settings
+    current_search_settings = settings_ctx.current_search_settings
+    save_search_settings = settings_ctx.save_search_settings
+    current_search_threshold = settings_ctx.current_search_threshold
+    current_suggest_threshold = settings_ctx.current_suggest_threshold
+    current_ui_theme_settings = settings_ctx.current_ui_theme_settings
+    current_ui_layout_settings = settings_ctx.current_ui_layout_settings
+    save_ui_theme_settings = settings_ctx.save_ui_theme_settings
+    save_ui_layout_settings = settings_ctx.save_ui_layout_settings
+    build_contact_link = settings_ctx.build_contact_link
+    persist_faq_now = settings_ctx.persist_faq_now
+    persist_log_now = settings_ctx.persist_log_now
+    llm_chat = settings_ctx.llm_chat
+
+    def _csv_bytes_as_utf8_sig(data) -> bytes:
+        import pandas as pd
+
+        if data is None:
+            return pd.DataFrame().to_csv(index=False).encode("utf-8-sig")
+
+        if isinstance(data, pd.DataFrame):
+            df = data
+        elif isinstance(data, list):
+            if len(data) == 0:
+                df = pd.DataFrame()
+            elif isinstance(data[0], dict):
+                df = pd.DataFrame(data)
+            else:
+                df = pd.DataFrame({"value": data})
+        elif isinstance(data, dict):
+            df = pd.DataFrame([data])
+        else:
+            df = pd.DataFrame({"value": [str(data)]})
+
+        return df.to_csv(index=False).encode("utf-8-sig")
+
+    def list_log_files() -> list[Path]:
+        try:
+            return sorted(LOG_DIR.glob("nohit_*.csv"), reverse=True)
+        except Exception:
+            return []
+
+    def make_logs_zip(files) -> bytes:
+        bio = io.BytesIO()
+        with zipfile.ZipFile(bio, "w", zipfile.ZIP_DEFLATED) as zf:
+            for p in files or []:
+                try:
+                    zf.writestr(Path(p).name, Path(p).read_bytes())
+                except Exception:
+                    continue
+        return bio.getvalue()
+
+    def count_nohit_logs(days: int = 7):
+        files = list_log_files()
+        if not files:
+            return 0, 0, 0
+        today_str = datetime.now().strftime("%Y%m%d")
+        today = datetime.now().date()
+        recent_days = {(today - timedelta(days=i)).strftime("%Y%m%d") for i in range(days)}
+        today_count = recent_count = total_count = 0
+        for p in files:
+            m = re.match(r"nohit_(\d{8})\.csv$", Path(p).name)
+            day = m.group(1) if m else ""
+            try:
+                cnt = int(len(read_csv_flexible(Path(p))))
+            except Exception:
+                cnt = 0
+            total_count += cnt
+            if day == today_str:
+                today_count += cnt
+            if day in recent_days:
+                recent_count += cnt
+        return today_count, recent_count, total_count
+
+    def read_interactions(days: int = 7) -> pd.DataFrame:
+        frames = []
+        for i in range(days):
+            d = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
+            p = LOG_DIR / f"interactions_{d}.csv"
+            if p.exists():
+                try:
+                    frames.append(read_csv_flexible(p))
+                except Exception:
+                    pass
+        if not frames:
+            return pd.DataFrame(columns=["timestamp", "question", "matched", "best_score", "category"])
+        df_all = pd.concat(frames, ignore_index=True)
+        if "matched" in df_all.columns:
+            df_all["matched"] = pd.to_numeric(df_all["matched"], errors="coerce").fillna(0).astype(int)
+        else:
+            df_all["matched"] = 0
+        if "best_score" in df_all.columns:
+            df_all["best_score"] = pd.to_numeric(df_all["best_score"], errors="coerce").fillna(0.0)
+        else:
+            df_all["best_score"] = 0.0
+        if "category" not in df_all.columns:
+            df_all["category"] = ""
+        return df_all
+
+    def format_minutes_to_hours(minutes: float) -> str:
+        try:
+            m = float(minutes)
+        except Exception:
+            m = 0.0
+        return f"{int(round(m))}分" if m < 60 else f"{m/60.0:.1f}時間"
+
+    def _faq_cache_token() -> str:
+        try:
+            if FAQ_PATH.exists():
+                stat = FAQ_PATH.stat()
+                return f"{FAQ_PATH}:{stat.st_mtime_ns}:{stat.st_size}"
+        except Exception:
+            pass
+        return str(FAQ_PATH)
+
+    def check_password(pwd: str) -> bool:
+        expected = str(st.secrets.get("ADMIN_PASSWORD", os.environ.get("ADMIN_PASSWORD", "admin")))
+        return str(pwd or "") == expected
 
     TOP_K = 3
     st.set_page_config(page_title="情シス問い合わせAI", layout="wide")
@@ -656,27 +823,40 @@ def run_app():
     }}
     #oai-sidebar-resizer {{
       position: fixed;
-      left: calc(var(--user-sidebar-width) - 4px);
-      top: 0; bottom: 0; width: 12px;
-      z-index: 999999; cursor: col-resize;
-      background: linear-gradient(180deg, transparent 0%, transparent 35%, var(--user-resizer-line) 35%, var(--user-resizer-line) 65%, transparent 65%, transparent 100%);
+      left: calc(var(--user-sidebar-width) - 7px);
+      top: 0;
+      bottom: 0;
+      width: 18px;
+      z-index: 1000000;
+      cursor: col-resize;
+      background: transparent;
+      opacity: 1;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+      pointer-events: auto;
     }}
     #oai-sidebar-resizer::after {{
       content: "";
       position: absolute;
-      left: 2px; top: 50%; transform: translateY(-50%);
-      width: 8px; height: 72px; border-radius: 999px;
-      background: var(--user-resizer-knob); box-shadow: 0 4px 18px rgba(56, 189, 248, 0.35);
+      left: 7px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 4px;
+      height: 96px;
+      border-radius: 999px;
+      background: var(--user-resizer-knob);
+      box-shadow: 0 4px 18px rgba(56, 189, 248, 0.35);
+      opacity: 0.95;
+    }}
+    #oai-sidebar-resizer:hover::after {{
+      width: 6px;
+      left: 6px;
+      filter: brightness(1.05);
     }}
     #oai-main-resizer {{
-      position: fixed;
-      right: max(calc((100vw - var(--user-main-max-width)) / 2 - 8px), 8px);
-      top: 120px; width: 14px; height: 120px;
-      z-index: 999998; cursor: ew-resize; border-radius: 999px;
-      background: linear-gradient(180deg, var(--user-resizer-line) 0%, var(--user-resizer-knob) 50%, var(--user-resizer-line) 100%);
-      opacity: 0.72;
+      display: none !important;
     }}
-    #oai-main-resizer:hover, #oai-sidebar-resizer:hover {{opacity: 1; filter: brightness(1.05);}}
     </style>
     """, unsafe_allow_html=True)
 
@@ -710,50 +890,47 @@ def run_app():
       }};
 
       const sidebarBar = ensureBar('oai-sidebar-resizer', '左右ドラッグで管理者画面幅を変更');
-      const mainBar = ensureBar('oai-main-resizer', '左右ドラッグでメイン画面幅を変更');
+      const oldMainBar = doc.getElementById('oai-main-resizer');
+      if (oldMainBar) oldMainBar.remove();
       applyStored();
 
-      let drag = null;
-      const onDown = (e) => {{
-        if (e.target && e.target.id === 'oai-sidebar-resizer') {{
-          drag = 'sidebar';
-          e.preventDefault();
-        }} else if (e.target && e.target.id === 'oai-main-resizer') {{
-          drag = 'main';
-          e.preventDefault();
-        }}
-      }};
-      const onMove = (e) => {{
-        if (!drag) return;
-        if (drag === 'sidebar') {{
-          const val = clamp(e.clientX, 240, 620);
-          root.style.setProperty('--user-sidebar-width', val + 'px');
-          storage.setItem(sidebarKey, String(val));
-        }} else if (drag === 'main') {{
-          const val = clamp(e.clientX - 80, 760, 2000);
-          root.style.setProperty('--user-main-max-width', val + 'px');
-          storage.setItem(mainKey, String(val));
-        }}
-      }};
-      const onUp = () => {{ drag = null; }};
-      const onDouble = (e) => {{
-        if (e.target && e.target.id === 'oai-sidebar-resizer') {{
-          storage.removeItem(sidebarKey);
-          root.style.setProperty('--user-sidebar-width', defaults.sidebar + 'px');
-        }} else if (e.target && e.target.id === 'oai-main-resizer') {{
-          storage.removeItem(mainKey);
-          root.style.setProperty('--user-main-max-width', defaults.main + 'px');
-        }}
+      let drag = false;
+
+      const startSidebarDrag = (e) => {{
+        drag = true;
+        e.preventDefault();
+        e.stopPropagation();
       }};
 
-      doc.removeEventListener('mousedown', onDown);
+      const onMove = (e) => {{
+        if (!drag) return;
+        const clientX = ('touches' in e && e.touches && e.touches.length) ? e.touches[0].clientX : e.clientX;
+        const val = clamp(clientX, 240, 620);
+        root.style.setProperty('--user-sidebar-width', val + 'px');
+        storage.setItem(sidebarKey, String(val));
+        e.preventDefault();
+      }};
+
+      const stopDrag = () => {{ drag = false; }};
+
+      const resetSidebarWidth = (e) => {{
+        e.preventDefault();
+        storage.removeItem(sidebarKey);
+        root.style.setProperty('--user-sidebar-width', defaults.sidebar + 'px');
+      }};
+
+      sidebarBar.onmousedown = startSidebarDrag;
+      sidebarBar.ontouchstart = startSidebarDrag;
+      sidebarBar.ondblclick = resetSidebarWidth;
+
       doc.removeEventListener('mousemove', onMove);
-      doc.removeEventListener('mouseup', onUp);
-      doc.removeEventListener('dblclick', onDouble);
-      doc.addEventListener('mousedown', onDown);
-      doc.addEventListener('mousemove', onMove);
-      doc.addEventListener('mouseup', onUp);
-      doc.addEventListener('dblclick', onDouble);
+      doc.removeEventListener('mouseup', stopDrag);
+      doc.removeEventListener('touchmove', onMove);
+      doc.removeEventListener('touchend', stopDrag);
+      doc.addEventListener('mousemove', onMove, {{ passive: false }});
+      doc.addEventListener('mouseup', stopDrag);
+      doc.addEventListener('touchmove', onMove, {{ passive: false }});
+      doc.addEventListener('touchend', stopDrag);
 
       setTimeout(applyStored, 50);
     }})();
@@ -811,16 +988,7 @@ def run_app():
         pass
 
     # ==== サイドバー ========
-
-
     # ===== KPI（営業デモ + 直近7日）=====
-    from .modules.main_view_runtime import (
-        ensure_admin_session_state,
-        render_admin_login_sidebar,
-        render_admin_tools_if_logged_in,
-        render_public_sidebar,
-        render_sales_kpi_sections,
-    )
 
     render_sales_kpi_sections(read_interactions=read_interactions)
     render_public_sidebar(
@@ -916,8 +1084,6 @@ def run_app():
         },
     ]
 
-    from .modules.faq_index_runtime import create_faq_index_runtime
-    from .modules.search_runtime import create_search_runtime
 
     search_ctx = create_search_runtime(
         st=st,
@@ -1535,39 +1701,6 @@ def run_app():
         faq_path=FAQ_PATH,
     )
 
-    #         with st.expander("💾 永続化ステータス（v13）", expanded=False):
-    #             st.caption(persistence_status_text())
-    #             st.code("""
-    # # Streamlit Cloud secrets.toml の例
-    # PERSIST_MODE = "github"
-    # GITHUB_REPO = "owner/repo"
-    # GITHUB_BRANCH = "main"
-    # GITHUB_BASE_PATH = "streamlit_data"
-    # GITHUB_TOKEN = "ghp_xxx"
-    # """.strip(), language="toml")
-    #             col_sync1, col_sync2 = st.columns(2)
-    #             with col_sync1:
-    #                 if st.button("📥 GitHubからFAQ再読込", width="stretch", disabled=not _github_persistence_enabled()):
-    #                     ok = github_download_file("faq.csv", FAQ_PATH)
-    #                     if ok:
-    #                         try:
-    #                             load_faq_index.clear()
-    #                             get_faq_index_state.clear()
-    #                             reset_faq_index_runtime()
-    #                         except Exception:
-    #                             pass
-    #                         st.success("GitHub上の faq.csv を再読込しました。")
-    #                         st.rerun()
-    #                     else:
-    #                         st.warning("GitHubからFAQを取得できませんでした。設定を確認してください。")
-    #             with col_sync2:
-    #                 if st.button("📤 FAQをGitHubへ保存", width="stretch", disabled=not _github_persistence_enabled()):
-    #                     ok = persist_faq_now()
-    #                     if ok:
-    #                         st.success("faq.csv を GitHub に保存しました。")
-    #                     else:
-    #                         st.warning("GitHubへの保存に失敗しました。設定を確認してください。")
-
     if st.session_state.is_admin:
         with st.expander("🎯 検索精度設定", expanded=False):
             current_cfg = current_search_settings()
@@ -1957,6 +2090,10 @@ def run_app():
                     step=500,
                     key="admin_hourly_cost",
                 )
+
+                avg_min_pdf = float(st.session_state.get("avg_min", 5))
+                deflect_pdf = float(st.session_state.get("deflect_rate", st.session_state.get("deflect", 0.7)))
+
                 df_month_all = read_interactions(days=60)
                 if df_month_all is None or len(df_month_all) == 0:
                     st.caption("今月の利用ログがまだありません。質問すると自動で蓄積します。")
@@ -1971,8 +2108,8 @@ def run_app():
                     try:
                         pdf_bytes = generate_effect_report_pdf(
                             df=df_month,
-                            avg_min=float(avg_min),
-                            deflect=float(deflect),
+                            avg_min=avg_min_pdf,
+                            deflect=deflect_pdf,
                             hourly_cost_yen=int(hourly_cost),
                         )
                         st.download_button(
@@ -1985,130 +2122,6 @@ def run_app():
                     except Exception as e:
                         st.error(f"PDF生成でエラー: {e}")
 
-        # with st.expander("⏰ Render無料プラン常時起動支援", expanded=False):
-        #     st.caption("Render無料プランのスリープを減らすため、GitHub Actionsから一定間隔でRender URLへアクセスする設定を生成します。")
-        #     st.warning("app.py単体では、サービスが完全にスリープした後に自力で自分自身を起こすことはできません。常時起動に近づけるには、外部からの定期アクセスが必要です。")
-
-        #     default_keepalive_url = normalize_public_base_url(os.environ.get("RENDER_EXTERNAL_URL", ""))
-        #     keepalive_url = st.text_input(
-        #         "Renderの公開URL",
-        #         value=default_keepalive_url,
-        #         placeholder="https://あなたのRenderURL.onrender.com",
-        #         help="Renderで公開しているこのアプリのURLを入力してください。例: https://helpdesk-ai-xxxx.onrender.com",
-        #         key="keepalive_render_url",
-        #     )
-        #     cron_options = {
-        #         "5分ごと": "*/5 * * * *",
-        #         "10分ごと": "*/10 * * * *",
-        #         "14分ごと": "*/14 * * * *",
-        #     }
-        #     picked_label = st.selectbox("GitHub Actionsの実行間隔", list(cron_options.keys()), index=1, key="keepalive_cron_label")
-        #     cron_expr = cron_options[picked_label]
-
-        #     normalized_url = normalize_public_base_url(keepalive_url)
-        #     if normalized_url:
-        #         st.code(normalized_url, language="text")
-        #         st.caption("このURLへGitHub Actionsから定期アクセスします。")
-        #     else:
-        #         st.info("まずは Render の公開URL を入力してください。")
-
-        #     workflow_yaml = build_render_keepalive_workflow_yaml(normalized_url, cron_expr=cron_expr)
-        #     zip_bytes = build_keepalive_zip_bytes(normalized_url, cron_expr=cron_expr)
-
-        #     col_keep1, col_keep2 = st.columns(2)
-        #     with col_keep1:
-        #         st.download_button(
-        #             "⬇ GitHub Actions設定ZIPをダウンロード",
-        #             data=zip_bytes,
-        #             file_name="render_keepalive_actions.zip",
-        #             mime="application/zip",
-        #             width="stretch",
-        #         )
-        #     with col_keep2:
-        #         st.download_button(
-        #             "⬇ render-keepalive.yml をダウンロード",
-        #             data=workflow_yaml.encode("utf-8"),
-        #             file_name="render-keepalive.yml",
-        #             mime="text/yaml",
-        #             width="stretch",
-        #         )
-
-        #     st.markdown("**導入手順**")
-        #     st.write("1. ダウンロードしたZIPを展開し、`.github/workflows/render-keepalive.yml` をGitHubリポジトリへ追加します。")
-        #     st.write("2. GitHubへpushすると、Actionsが定期実行されます。")
-        #     st.write("3. Render無料プランのスリープ復帰待ちを減らせます。")
-
-        #     with st.expander("生成される GitHub Actions YAML を見る", expanded=False):
-        #         st.code(workflow_yaml, language="yaml")
-
-        # st.markdown("---")
-            # with st.expander("🧠 FAQ自動生成（該当なしログ → FAQ案）", expanded=False):
-            #     st.caption("『該当なし』ログからFAQを自動生成し、faq.csvへ追記できます。")
-
-            #     log_files = list_log_files()
-            #     if not log_files:
-            #         st.info("まだ nohit_*.csv がありません。まず質問して『該当なし』を発生させてください。")
-            #     else:
-            #         labels = [f.name for f in log_files[:15]]
-            #         pick = st.selectbox("参照するログファイル", labels, index=0)
-            #         picked_path = next((p for p in log_files if p.name == pick), log_files[0])
-
-            #         max_q = st.slider("生成に使う質問数（重複除外後）", 10, 200, 60, step=10)
-            #         n_items = st.slider("生成するFAQ件数", 3, 20, 8)
-
-            #         col_seed1, col_seed2 = st.columns([2, 3])
-            #         with col_seed1:
-            #             if st.button("🧪 デモ用に定番質問を追加（20件）"):
-            #                 added = seed_nohit_questions(20)
-            #                 st.success(f"nohitログに {added} 件追加しました。")
-            #                 st.rerun()
-            #         with col_seed2:
-            #             st.caption("※ 本番前にFAQ生成を試すためのテストデータです（channel=seedで記録）。")
-
-            #         if st.button("🤖 FAQ案を自動生成", type="primary"):
-            #             with st.spinner("FAQ案を生成中..."):
-            #                 qs = load_nohit_questions_from_logs([picked_path], max_questions=max_q)
-
-            #                 # 生成前に「有効質問数」を可視化（原因切り分け）
-            #                 st.info(f"ログから抽出できた有効質問数（重複除外後）：{len(qs)} 件")
-            #                 if len(qs) < 5:
-            #                     st.session_state.generated_faq_df = pd.DataFrame(columns=["category", "question", "answer"])
-            #                     st.warning("有効な質問が少なすぎてFAQを生成できません。ログのCSV形式（カラム名/文字コード/区切り）を確認してください。")
-            #                 else:
-            #                     try:
-            #                         gen_df = generate_faq_candidates(qs, n_items=n_items)
-            #                     except Exception:
-            #                         gen_df = pd.DataFrame(columns=["category", "question", "answer"])
-            #                     st.session_state.generated_faq_df = gen_df
-
-            #         gen_df = st.session_state.get("generated_faq_df")
-            #         if isinstance(gen_df, pd.DataFrame) and len(gen_df) > 0:
-            #             st.markdown("### ✅ 生成結果（編集して保存できます）")
-            #             edited = st.data_editor(
-            #                 gen_df,
-            #                 num_rows="dynamic",
-            #                 width="stretch",
-            #                 key="faq_editor",
-            #             )
-
-            #             col_a, col_b = st.columns(2)
-            #             with col_a:
-            #                 if st.button("💾 faq.csv に追記"):
-            #                     added = append_faq_csv(FAQ_PATH, edited.rename(columns={"category": "category"}))
-            #                     if added > 0:
-            #                         st.success(f"faq.csv に {added} 件追記しました。")
-            #                         # 反映のため再読み込み
-            #                         st.session_state.generated_faq_df = pd.DataFrame()
-            #                         st.rerun()
-            #                     else:
-            #                         st.warning("追記できる新規FAQがありません（重複/空欄の可能性）。")
-
-            #             with col_b:
-            #                 if st.button("🧹 生成結果をクリア"):
-            #                     st.session_state.generated_faq_df = pd.DataFrame()
-            #                     st.rerun()
-            #         elif isinstance(gen_df, pd.DataFrame) and len(gen_df) == 0 and st.session_state.get("generated_faq_df") is not None:
-            #             st.warning("FAQ案が生成できませんでした。ログの内容が少ないか、出力形式が崩れています。")
     # ======================
     # セッション初期化
     # ======================
