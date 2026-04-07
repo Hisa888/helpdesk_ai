@@ -1,3 +1,3 @@
-from .legacy_runtime import run_app
+from .runtime_main import run_app
 
 __all__ = ["run_app"]
