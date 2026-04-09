@@ -449,6 +449,36 @@ def run_app():
     )
     from helpdesk_app.modules.faq_index_runtime import create_faq_index_runtime
     from helpdesk_app.modules.search_runtime import create_search_runtime
+    from helpdesk_app.modules.download_utils import (
+        csv_bytes_as_utf8_sig as download_csv_bytes_as_utf8_sig,
+        list_log_files as util_list_log_files,
+        make_logs_zip as util_make_logs_zip,
+    )
+    from helpdesk_app.modules.quick_start_panel import (
+        ensure_quick_start_session_state,
+        render_quick_start_hero,
+        render_quick_start_compact,
+    )
+    from helpdesk_app.modules.scroll_utils import (
+        ensure_scroll_state,
+        maybe_scroll_to_latest_answer,
+        request_scroll_to_answer,
+    )
+    from helpdesk_app.modules.answer_panel import (
+        build_suggest_answer as build_suggest_answer_panel,
+        render_answer_message,
+        render_used_hits_expander as render_used_hits_expander_panel,
+    )
+    from helpdesk_app.modules.chat_input_panel import (
+        append_user_message,
+        ensure_chat_session_state,
+        render_chat_input as render_chat_input_panel,
+    )
+    from helpdesk_app.modules.nohit_form_panel import render_nohit_extra_form as render_nohit_extra_form_panel
+    from helpdesk_app.modules.query_flow_runtime import (
+        finalize_answer_cycle,
+        process_user_query,
+    )
 
     settings_ctx = create_runtime_context(
         st=st,
@@ -491,42 +521,13 @@ def run_app():
     llm_chat = settings_ctx.llm_chat
 
     def _csv_bytes_as_utf8_sig(data) -> bytes:
-        import pandas as pd
-
-        if data is None:
-            return pd.DataFrame().to_csv(index=False).encode("utf-8-sig")
-
-        if isinstance(data, pd.DataFrame):
-            df = data
-        elif isinstance(data, list):
-            if len(data) == 0:
-                df = pd.DataFrame()
-            elif isinstance(data[0], dict):
-                df = pd.DataFrame(data)
-            else:
-                df = pd.DataFrame({"value": data})
-        elif isinstance(data, dict):
-            df = pd.DataFrame([data])
-        else:
-            df = pd.DataFrame({"value": [str(data)]})
-
-        return df.to_csv(index=False).encode("utf-8-sig")
+        return download_csv_bytes_as_utf8_sig(data)
 
     def list_log_files() -> list[Path]:
-        try:
-            return sorted(LOG_DIR.glob("nohit_*.csv"), reverse=True)
-        except Exception:
-            return []
+        return util_list_log_files(LOG_DIR)
 
     def make_logs_zip(files) -> bytes:
-        bio = io.BytesIO()
-        with zipfile.ZipFile(bio, "w", zipfile.ZIP_DEFLATED) as zf:
-            for p in files or []:
-                try:
-                    zf.writestr(Path(p).name, Path(p).read_bytes())
-                except Exception:
-                    continue
-        return bio.getvalue()
+        return util_make_logs_zip(files, csv_bytes_fn=_csv_bytes_as_utf8_sig)
 
     def count_nohit_logs(days: int = 7):
         files = list_log_files()
@@ -2145,47 +2146,24 @@ def run_app():
     if "llm_settings" not in st.session_state:
         st.session_state.llm_settings = sanitize_llm_settings(LLM_SETTINGS)
 
+    ensure_chat_session_state(st)
+    ensure_quick_start_session_state(st)
+    ensure_scroll_state(st)
+
 
     def render_used_hits_expander(used_hits, best_score: float, answer_threshold: float, was_nohit: bool = False):
-        with st.expander("🔎 回答の根拠を見る", expanded=False):
-            if was_nohit or not used_hits:
-                st.markdown('<div class="refbox">該当なし（スコアが低いため問い合わせ誘導）</div>', unsafe_allow_html=True)
-                return
-            st.caption(f"上位FAQ候補の一致度を表示しています（best score: {best_score:.2f} / 自動回答しきい値: {answer_threshold:.2f}）。")
-            for i, (row, score) in enumerate(used_hits, 1):
-                render_match_bar(score)
-                q_html = str(row.get("question", "")).replace("\n", "<br>")
-                a_html = str(row.get("answer", "")).replace("\n", "<br>")
-                cat = str(row.get("category", ""))
-                match_pct = int(max(0.0, min(1.0, float(score))) * 100)
-                st.markdown(
-                    f"""
-    <div class="refbox">
-    <b>FAQ{i}</b>（一致度：{match_pct}% / category={cat}）<br>
-    <b>Q:</b> {q_html}<br>
-    <b>A:</b> {a_html}
-    </div>
-    """,
-                    unsafe_allow_html=True,
-                )
+        return render_used_hits_expander_panel(
+            st=st,
+            render_match_bar=render_match_bar,
+            used_hits=used_hits,
+            best_score=best_score,
+            answer_threshold=answer_threshold,
+            was_nohit=was_nohit,
+        )
 
 
     def render_quick_start_buttons():
-        st.markdown('<div class="glass-card query-panel"><div class="eyebrow">Quick Start</div><h3>よくある問い合わせをワンクリックで試す</h3><p>デモで見せやすい代表質問を用意しています。クリックするとそのまま送信されます。</p></div>', unsafe_allow_html=True)
-        st.markdown("### 💡 おすすめ質問（クリックで送信）")
-        c1, c2, c3 = st.columns(3)
-
-        if c1.button("🔐 パスワードを忘れた"):
-            st.session_state.pending_q = "パスワードを忘れました"
-            st.rerun()
-
-        if c2.button("🧩 アカウントがロックされた"):
-            st.session_state.pending_q = "アカウントがロックされました"
-            st.rerun()
-
-        if c3.button("🌐 VPNに接続できない"):
-            st.session_state.pending_q = "VPNに接続できません"
-            st.rerun()
+        return render_quick_start_hero(st=st)
 
 
     show_welcome = len(st.session_state.messages) == 0
@@ -2199,8 +2177,8 @@ def run_app():
             unsafe_allow_html=True
         )
 
-    # おすすめ質問は会話後も常に表示して使えるようにする
-    render_quick_start_buttons()
+    if show_welcome:
+        render_quick_start_buttons()
 
     # ======================
     # チャット履歴表示
@@ -2211,213 +2189,61 @@ def run_app():
 
 
     def build_suggest_answer(user_q: str, hits) -> str:
-        if not hits:
-            return nohit_template()
-        row, score = hits[0]
-        q = str(row.get("question", "")).strip()
-        a = str(row.get("answer", "")).strip()
-        cat = str(row.get("category", "")).strip()
-        parts = [
-            "入力内容に近いFAQ候補が見つかりました。完全一致ではありませんが、まずはこちらを確認してください。",
-        ]
-        if q:
-            parts.append(f"【候補FAQ】{q}")
-        if cat:
-            parts.append(f"【カテゴリ】{cat}")
-        if a:
-            parts.append(f"【回答】\n{a}")
-        parts.append("解決しない場合は、下の『追加情報を記録』から状況を補足してください。")
-        return "\n\n".join(parts)
+        return build_suggest_answer_panel(user_q=user_q, hits=hits, nohit_template=nohit_template)
 
 
     def render_nohit_extra_form(info: dict | None = None, expanded: bool = True):
-        """『該当なし』直後に表示する追加情報フォーム（端末/利用場所/ネットワーク等）。"""
-        info = info or (st.session_state.get("pending_nohit", {}) or {})
-        with st.expander("📝 追加情報を記録（任意）", expanded=expanded):
-            st.caption("解決しない場合は、状況を少し補足するとFAQ改善に役立ちます。")
-            with st.form("nohit_extra_form", clear_on_submit=False):
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    device = st.selectbox(
-                        "端末",
-                        ["", "Windows", "Mac", "iPhone/iPad", "Android", "不明"],
-                        index=0,
-                        key="nohit_device",
-                    )
-                with c2:
-                    location = st.selectbox(
-                        "利用場所",
-                        ["", "社内", "社外", "不明"],
-                        index=0,
-                        key="nohit_location",
-                    )
-                with c3:
-                    network = st.selectbox(
-                        "ネットワーク",
-                        ["", "Wi-Fi", "有線", "VPN", "モバイル回線", "不明"],
-                        index=0,
-                        key="nohit_network",
-                    )
-
-                impact = st.selectbox(
-                    "影響範囲",
-                    ["", "自分のみ", "他の人も", "不明"],
-                    index=0,
-                    key="nohit_impact",
-                )
-                error_text = st.text_area(
-                    "エラー内容（任意）",
-                    placeholder="例：0x80190001 / '資格情報が無効です' など",
-                    key="nohit_error_text",
-                )
-
-                submitted = st.form_submit_button("✅ この内容で記録")
-                if submitted:
-                    ok = update_nohit_record(
-                        day=str(info.get("day", "")),
-                        timestamp=str(info.get("timestamp", "")),
-                        question=str(info.get("question", "")),
-                        extra={
-                            "device": device,
-                            "location": location,
-                            "network": network,
-                            "impact": impact,
-                            "error_text": error_text,
-                            "channel": "web",
-                        },
-                    )
-                    if ok:
-                        st.success("追加情報をログに保存しました。ありがとうございます！")
-                        # 次回以降はフォームを閉じる（保持は消す）
-                        st.session_state["pending_nohit_active"] = False
-                    else:
-                        st.warning("保存に失敗しました（もう一度お試しください）。")
+        return render_nohit_extra_form_panel(
+            st=st,
+            update_nohit_record=update_nohit_record,
+            info=info,
+            expanded=expanded,
+        )
 
 
     # ======================
     # 入力 → 検索 → 回答
     # ======================
-    # ===== 該当なし（nohit）の追加情報フォーム =====
     if st.session_state.get("pending_nohit_active"):
         render_nohit_extra_form(expanded=True)
 
-    # 先に chat_input を描画（画面下に固定されます）
-    chat_typed = st.chat_input("情シス問い合わせを入力してください")
+    if not show_welcome:
+        render_quick_start_compact(st=st)
 
-    # 入力が無いときは pending_q（おすすめボタン等）を使う
-    user_q = (chat_typed or st.session_state.get("pending_q", ""))
-
-    # 「おすすめ質問」など pending_q から来たかどうか
-    used_pending = (not chat_typed) and bool(st.session_state.get("pending_q", ""))
+    user_q, used_pending = render_chat_input_panel(st=st, placeholder="情シス問い合わせを入力してください")
 
     if user_q:
-        st.session_state.pending_q = ""
+        request_scroll_to_answer(st)
+        append_user_message(st=st, user_q=user_q)
 
-        st.session_state.messages.append({"role": "user", "content": user_q})
-        with st.chat_message("user"):
-            st.markdown(user_q)
+        result = process_user_query(
+            st=st,
+            user_q=user_q,
+            try_ultrafast_answer=try_ultrafast_answer,
+            retrieve_faq_cached=retrieve_faq_cached,
+            faq_cache_token_getter=_faq_cache_token,
+            ensure_faq_index_loaded=ensure_faq_index_loaded,
+            render_match_bar=render_match_bar,
+            current_search_threshold=current_search_threshold,
+            current_suggest_threshold=current_suggest_threshold,
+            nohit_template=nohit_template,
+            log_nohit=log_nohit,
+            build_suggest_answer=build_suggest_answer,
+            fastlane_direct_answer=_fastlane_direct_answer,
+            build_prompt=build_prompt,
+            llm_answer_cached=llm_answer_cached,
+            log_interaction=log_interaction,
+        )
 
-        ultrafast = try_ultrafast_answer(user_q)
-        if ultrafast:
-            hits = ultrafast.get("hits", [])
-            best_score = float(ultrafast.get("best_score", 0.0))
-        else:
-            packed_hits = retrieve_faq_cached(user_q, _faq_cache_token())
-            local_df, *_ = ensure_faq_index_loaded()
-            hits = []
-            for idx, score in packed_hits:
-                try:
-                    if local_df is not None and int(idx) >= 0:
-                        hits.append((local_df.iloc[int(idx)], float(score)))
-                except Exception:
-                    continue
-            best_score = hits[0][1] if hits else 0.0
+        finalize_answer_cycle(
+            st=st,
+            user_q=user_q,
+            result=result,
+            render_answer_message=render_answer_message,
+        )
 
-        if hits:
-            render_match_bar(best_score)
-
-        answer_threshold = current_search_threshold()
-        suggest_threshold = current_suggest_threshold()
-
-        if ultrafast:
-            used_hits = hits[:1]
-            answer = str(ultrafast.get("answer", "")).strip() or nohit_template()
-            was_nohit = False
-            was_suggest = False
-        elif best_score < suggest_threshold:
-            used_hits = []
-            answer = nohit_template()
-            ts_nohit = log_nohit(user_q)
-            st.session_state["last_nohit"] = {"day": datetime.now().strftime("%Y%m%d"), "timestamp": ts_nohit, "question": user_q}
-            was_nohit = True
-            was_suggest = False
-        elif best_score < answer_threshold:
-            used_hits = hits[:1]
-            answer = build_suggest_answer(user_q, used_hits)
-            was_nohit = False
-            was_suggest = True
-        else:
-            used_hits = hits
-            was_nohit = False
-            was_suggest = False
-            faq_answer = ""
-            top_question = ""
-            try:
-                faq_answer = str(hits[0][0].get("answer", "")).strip()
-                top_question = str(hits[0][0].get("question", "")).strip()
-            except Exception:
-                faq_answer = ""
-                top_question = ""
-
-            fastlane_answer = _fastlane_direct_answer(
-                user_q=user_q,
-                hits=hits,
-                best_score=float(best_score),
-                answer_threshold=float(answer_threshold),
-                suggest_threshold=float(suggest_threshold),
-            )
-
-            if fastlane_answer:
-                answer = fastlane_answer
-            else:
-                prompt = build_prompt(user_q, hits)
-                cached_answer = llm_answer_cached(user_q, prompt, _faq_cache_token(), top_question)
-                if cached_answer:
-                    answer = cached_answer
-                else:
-                    answer = faq_answer if faq_answer else "現在AIの回答機能でエラーが発生しています。しばらくしてから再度お試しください。"
-
-        st.session_state.used_hits = used_hits
-
-        # 利用ログ（削減時間の見える化用）
-        top_cat = ""
-        if used_hits:
-            try:
-                top_cat = str(used_hits[0][0].get("category", ""))
-            except Exception:
-                top_cat = ""
-        log_interaction(user_q, matched=(best_score >= answer_threshold), best_score=best_score, category=top_cat)
-
-        with st.chat_message("assistant"):
-            answer_html = str(answer).replace("\n", "<br>")
-            st.markdown(f'<div class="answerbox">{answer_html}</div>', unsafe_allow_html=True)
-
-            if 'was_nohit' in locals() and was_nohit:
-                # 「該当なし」のとき、追加情報フォームを"次のrerunでも"表示できるように保持
-                st.session_state["pending_nohit_active"] = True
-                st.session_state["pending_nohit"] = st.session_state.get("last_nohit", {})
-                st.info("該当なしログに追加しました。必要なら下の『追加情報を記録』で状況を補足できます。")
-            elif 'was_suggest' in locals() and was_suggest:
-                st.info(f"近いFAQ候補を表示しています（スコア: {best_score:.2f} / 自動回答しきい値: {answer_threshold:.2f}）。")
-                st.caption("管理者はサイドバーの『検索精度設定』から判定基準を調整できます。")
-
-        st.session_state.messages.append({"role": "assistant", "content": str(answer)})
-
-        # nohit はフォーム表示のために再描画
-        if "was_nohit" in locals() and was_nohit:
+        if result.get("was_nohit"):
             st.rerun()
 
-        # おすすめ質問ボタンから自動送信した場合は、もう一度 rerun して入力欄を確実に表示
-        if used_pending:
-            st.rerun()
+    maybe_scroll_to_latest_answer(st=st, components=components)
 
