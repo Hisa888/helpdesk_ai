@@ -17,7 +17,30 @@ def render_admin_faq_generation_panel(
     faq_path: str | Path,
 ) -> None:
     with st.expander("🧠 FAQ自動生成（該当なしログ → FAQ案）", expanded=False):
-        st.caption("該当なしログからFAQ案を作り、確認後に faq.csv へ追記できます。")
+        st.markdown('<div class="section-caption">該当なしログを、そのままFAQ改善アクションへつなげるための管理機能です。</div>', unsafe_allow_html=True)
+        st.markdown(
+            """
+<div class="proof-grid" style="margin-top: 8px;">
+  <div class="proof-card">
+    <div class="proof-icon">1</div>
+    <div class="title">ログを選ぶ</div>
+    <p>nohitログから、改善したい問い合わせ群を選択します。</p>
+  </div>
+  <div class="proof-card">
+    <div class="proof-icon">2</div>
+    <div class="title">FAQ案を生成</div>
+    <p>重複をまとめながら、回答案まで自動生成します。</p>
+  </div>
+  <div class="proof-card">
+    <div class="proof-icon">3</div>
+    <div class="title">編集して追加</div>
+    <p>内容を確認し、必要に応じて調整後に faq.csv へ反映できます。</p>
+  </div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
         log_files = list_log_files()
         if not log_files:
             st.info("まだ nohit_*.csv がありません。まず質問して『該当なし』を発生させてください。")

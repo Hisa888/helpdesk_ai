@@ -25,6 +25,7 @@ def render_admin_complete_tools(
 
     st.markdown("---")
     render_admin_complete_sections({
+        "st": st,
         "read_interactions": read_interactions,
         "count_nohit_logs": count_nohit_logs,
         "list_log_files": list_log_files,

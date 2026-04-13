@@ -5,8 +5,39 @@ from helpdesk_app.modules.admin_faq_generation_panel import render_admin_faq_gen
 from helpdesk_app.modules.admin_log_download_panel import render_admin_log_download_panel
 
 
+def _render_admin_zone_intro() -> str:
+    return """
+<div class="glass-card" style="margin: 8px 0 14px 0;">
+  <div class="eyebrow" style="font-size:12px; color:#0369a1; font-weight:700; letter-spacing:.08em; text-transform:uppercase;">Admin Control Center</div>
+  <h3 style="margin:6px 0 8px 0; font-size:24px;">管理者エリア</h3>
+  <p style="margin:0 0 14px 0; color:var(--text-sub);">運用状況の確認、ログ回収、FAQ改善までをひとつの導線で扱えるように整理した管理者向けエリアです。</p>
+  <div class="proof-grid">
+    <div class="proof-card">
+      <div class="proof-icon">📊</div>
+      <div class="title">ダッシュボードで説明</div>
+      <p>問い合わせ数・自動対応率・削減効果をその場で提示できます。</p>
+    </div>
+    <div class="proof-card">
+      <div class="proof-icon">📝</div>
+      <div class="title">ログを回収</div>
+      <p>nohitログをまとめて確認し、改善ポイントを見つけやすくします。</p>
+    </div>
+    <div class="proof-card">
+      <div class="proof-icon">🧠</div>
+      <div class="title">FAQ改善へ接続</div>
+      <p>該当なしログからFAQ案を生成し、そのまま追加できます。</p>
+    </div>
+  </div>
+</div>
+"""
+
+
 def render_admin_complete_sections(ctx: dict) -> None:
     """Render split admin dashboard/download/FAQ-generation sections from a single context."""
+
+    st = ctx.get("st")
+    if st is not None:
+        st.markdown(_render_admin_zone_intro(), unsafe_allow_html=True)
 
     render_admin_dashboard_panel(
         read_interactions=ctx["read_interactions"],
