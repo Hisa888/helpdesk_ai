@@ -25,7 +25,16 @@ def is_welcome_state(messages: Iterable[Mapping[str, object]]) -> bool:
 
 def render_welcome_prompt(st) -> None:
     st.markdown(
-        '<div class="glass-card query-panel"><div class="eyebrow">AI Demo</div><h3>情シスの問い合わせをそのまま入力してください</h3><p>例：パスワードを忘れました / VPNにつながらない / ディスプレイが真っ暗です</p></div>',
+        """
+<div class="glass-card query-panel">
+  <div class="eyebrow">Sales Demo Ready</div>
+  <h3>社内IT問い合わせの一次対応を、見せやすく・導入しやすく</h3>
+  <p>この画面は、実際の問い合わせ対応だけでなく、営業デモでも価値が伝わる構成です。FAQ検索、自己解決促進、問い合わせ標準化までを1つの画面で体験できます。</p>
+  <div class="demo-note">
+    まずは <b>パスワードを忘れました</b> や <b>VPNにつながりません</b> など、よくある質問をそのまま入力してください。
+  </div>
+</div>
+""",
         unsafe_allow_html=True,
     )
 

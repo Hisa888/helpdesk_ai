@@ -48,17 +48,8 @@ def render_base_theme_css(st) -> None:
 .block-container {padding-top: 2rem !important; padding-bottom: 9rem !important; max-width: 1180px;}
 h1, h2, h3 {line-height: 1.25 !important;}
 
-html, body {
-  overflow-x: hidden !important;
-}
 [data-testid="stAppViewContainer"] {
   background: radial-gradient(circle at top left, #f0f9ff 0%, #ffffff 32%, #f8fafc 100%);
-  overflow-x: hidden !important;
-}
-section.main,
-[data-testid="stMain"],
-[data-testid="stMainBlockContainer"] {
-  overflow-x: hidden !important;
 }
 [data-testid="stSidebar"] {
   background: linear-gradient(180deg, #0f172a 0%, #111827 100%);
@@ -243,12 +234,6 @@ def apply_user_ui_settings(*, st, components, ui_theme: dict, ui_layout: dict) -
 }}
 [data-testid="stAppViewContainer"] {{
   background: radial-gradient(circle at top left, var(--user-main-bg-start) 0%, var(--user-main-bg-mid) 32%, var(--user-main-bg-end) 100%) !important;
-  overflow-x: hidden !important;
-}}
-section.main,
-[data-testid="stMain"],
-[data-testid="stMainBlockContainer"] {{
-  overflow-x: hidden !important;
 }}
 .block-container {{
   max-width: var(--user-main-max-width) !important;

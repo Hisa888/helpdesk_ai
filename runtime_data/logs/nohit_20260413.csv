@@ -1,2 +1,4 @@
 ﻿timestamp,question,device,location,network,error_text,impact,channel
-2026-04-13T22:59:11,ねみー,,,,,,web
+2026-04-13T22:59:11,ねみー,nan,nan,nan,nan,nan,nan
+2026-04-13T23:07:14,ねむい,Windows,社内,有線,"試験です！
+これから再度試験！",自分のみ,web

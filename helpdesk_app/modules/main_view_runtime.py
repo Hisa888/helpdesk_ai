@@ -24,6 +24,7 @@ def render_sales_kpi_sections(*, read_interactions: Callable[[int], pd.DataFrame
             saved_yen30 = int(round(saved_h30 * hourly_cost_kpi)) if hourly_cost_kpi else 0
 
             st.markdown('<div class="section-title">📊 営業デモサマリー</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-caption">利用ログから、導入効果をすぐ見せられるようにしています。</div>', unsafe_allow_html=True)
             st.markdown(
                 f'''
 <div class="kpi-grid">
@@ -68,6 +69,7 @@ def render_sales_kpi_sections(*, read_interactions: Callable[[int], pd.DataFrame
             saved_yen7 = int(round(saved_h7 * hourly_cost_kpi)) if hourly_cost_kpi else 0
 
             st.markdown('<div class="section-title">📈 直近の利用状況</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-caption">導入するとどう良くなるかを、問い合わせ実績とセットで見せられます。</div>', unsafe_allow_html=True)
             st.markdown(
                 f'''
 <div class="kpi-grid">
@@ -91,17 +93,43 @@ def render_sales_kpi_sections(*, read_interactions: Callable[[int], pd.DataFrame
     <div class="value">{saved_h7:.1f}h</div>
     <div class="sub">約{saved_yen7:,}円（{hourly_cost_kpi:,}円/時間）</div>
   </div>
-  <div class="kpi">
-    <div class="label">今日の問い合わせ</div>
-    <div class="value">{total_today}</div>
-    <div class="sub">当日分</div>
+</div>
+''',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f'''
+<div class="proof-grid">
+  <div class="proof-card">
+    <div class="proof-icon">🧠</div>
+    <div class="title">FAQで自己解決を促進</div>
+    <p>直近7日で <b>{matched7}件</b> の問い合わせがAI側で自動対応できています。</p>
+  </div>
+  <div class="proof-card">
+    <div class="proof-icon">💬</div>
+    <div class="title">利用されやすい導線</div>
+    <p>今日の問い合わせは <b>{total_today}件</b>。現場が使い続けやすいUIかどうかも見せやすい状態です。</p>
+  </div>
+  <div class="proof-card">
+    <div class="proof-icon">💰</div>
+    <div class="title">導入効果を数字で説明</div>
+    <p>直近7日だけでも <b>{saved_h7:.1f}時間</b>、金額換算で <b>約{saved_yen7:,}円</b> の削減イメージを提示できます。</p>
   </div>
 </div>
 ''',
                 unsafe_allow_html=True,
             )
         elif df30 is None or len(df30) == 0:
-            st.caption("（利用ログがまだありません。質問するとKPIが表示されます）")
+            st.markdown(
+                '''
+<div class="glass-card" style="margin-top:10px;">
+  <div class="eyebrow">Demo Note</div>
+  <h3 style="margin:4px 0 8px 0;">まずは質問してログを作ると、効果がより伝わります</h3>
+  <p style="margin:0; color: var(--text-sub);">利用ログがまだないためKPIは空ですが、画面下のクイックスタートから代表質問を流すと、営業デモ向けの数値が表示されます。</p>
+</div>
+''',
+                unsafe_allow_html=True,
+            )
     except Exception:
         pass
 
@@ -241,28 +269,8 @@ def render_public_sidebar(
             except Exception:
                 pass
 
-        if df_int is not None and len(df_int) > 0:
-            st.markdown("### 📈 見える化（直近7日）")
-            df_plot = df_int.copy()
-            df_plot["date"] = pd.to_datetime(df_plot["timestamp"], errors="coerce").dt.date
-            daily = (
-                df_plot.groupby("date", dropna=True)
-                .agg(total=("question", "count"), matched=("matched", "sum"))
-                .reset_index()
-                .sort_values("date")
-            )
-            daily["auto_rate"] = (daily["matched"] / daily["total"]).replace([pd.NA, float("inf")], 0.0) * 100.0
-            daily["saved_min"] = daily["matched"] * float(avg_min) * float(deflect)
-            daily["saved_min_cum"] = daily["saved_min"].cumsum()
-
-            st.caption("📈 7日間の問い合わせ件数推移")
-            st.line_chart(daily.set_index("date")[["total"]])
-
-            st.caption("🧠 AI自動対応率の推移（FAQヒット率）")
-            st.line_chart(daily.set_index("date")[["auto_rate"]])
-
-            st.caption("⏱ 削減時間の累計（推定）")
-            st.line_chart(daily.set_index("date")[["saved_min_cum"]])
+        # 直近7日の見える化グラフは、管理者ログイン後に
+        # 「📊 管理ダッシュボード（拡張版）」内へ移動して表示します。
 
         st.markdown("### 📥 ログ（該当なし）ダウンロード")
         log_files = list_log_files()
