@@ -1,4 +1,19 @@
 {
   "answer_threshold": 0.42,
-  "suggest_threshold": 0.26
+  "suggest_threshold": 0.26,
+  "word_weight": 0.54,
+  "char_weight": 0.46,
+  "exact_bonus": 0.28,
+  "contains_bonus": 0.14,
+  "token_bonus_max": 0.24,
+  "concept_bonus_max": 0.24,
+  "prefix_bonus": 0.07,
+  "semantic_enabled": true,
+  "semantic_boost": 0.28,
+  "semantic_candidate_count": 8,
+  "semantic_min_query_len": 8,
+  "semantic_trigger_min": 0.24,
+  "semantic_trigger_max": 0.48,
+  "semantic_skip_fastlane": true,
+  "top_k": 3
 }
