@@ -12,7 +12,9 @@ def render_search_settings_panel(
         current_cfg = current_search_settings()
         st.caption("管理者が検索の厳しさを分かりやすく調整できます。まずは上の基本設定だけ触れば十分です。")
         st.info(
-            f"現在値：自動回答 {current_cfg['answer_threshold']:.2f} / 候補表示 {current_cfg['suggest_threshold']:.2f} / "
+            f"現在値：FAQ自動回答 {current_cfg['answer_threshold']:.2f} / 候補表示 {current_cfg['suggest_threshold']:.2f} / "
+            f"Doc採用しきい値 {float(current_cfg.get('doc_rag_threshold', 0.55)):.2f} / "
+            f"DocがFAQを上回る差分 {float(current_cfg.get('doc_compare_margin', 0.05)):.2f} / "
             f"単語重視 {int(current_cfg['word_weight'] * 100)}% / 文字重視 {int(current_cfg['char_weight'] * 100)}%"
         )
 
@@ -64,6 +66,43 @@ def render_search_settings_panel(
 - 候補表示以上: 近いFAQ候補を表示
 - 候補表示未満: 該当なしとして追加情報フォームへ""")
 
+
+        st.markdown("#### ② FAQ / Doc 比較設定")
+        doc_rag_threshold = st.slider(
+            "Doc採用しきい値",
+            min_value=0.10,
+            max_value=1.20,
+            value=float(current_cfg.get("doc_rag_threshold", 0.55)),
+            step=0.01,
+            key="admin_doc_rag_threshold_slider",
+            help="社内ドキュメントの一致度がこの値以上なら、Doc回答候補として使います。高いほど慎重です。",
+        )
+        doc_compare_margin = st.slider(
+            "DocがFAQを上回る差分",
+            min_value=0.00,
+            max_value=0.50,
+            value=float(current_cfg.get("doc_compare_margin", 0.05)),
+            step=0.01,
+            key="admin_doc_compare_margin_slider",
+            help="FAQとDocの両方がしきい値を超えたとき、DocスコアがFAQスコアをこの値以上上回ったらDocを採用します。",
+        )
+        st.caption(
+            "判定ルール: FAQが自動回答しきい値以上ならFAQ候補になります。DocがDoc採用しきい値以上で、さらにFAQより差分以上強い場合はDocを採用します。"
+        )
+
+        st.markdown("#### ③ FAQ項目別の重み")
+        st.caption("FAQのどの項目を検索で強く見るかを調整します。通常は question / intent / keywords を高め、answer は低めがおすすめです。")
+        w1, w2, w3 = st.columns(3)
+        with w1:
+            question_weight = st.slider("question（ユーザー言語）", 0.00, 5.00, float(current_cfg.get("question_weight", 3.00)), 0.10, key="search_question_weight")
+            answer_weight = st.slider("answer（結論→手順）", 0.00, 5.00, float(current_cfg.get("answer_weight", 0.50)), 0.10, key="search_answer_weight")
+        with w2:
+            intent_weight = st.slider("intent（意味）", 0.00, 5.00, float(current_cfg.get("intent_weight", 2.50)), 0.10, key="search_intent_weight")
+            keywords_weight = st.slider("keywords（言い換え）", 0.00, 5.00, float(current_cfg.get("keywords_weight", 2.00)), 0.10, key="search_keywords_weight")
+        with w3:
+            category_weight = st.slider("category（分類）", 0.00, 5.00, float(current_cfg.get("category_weight", 1.00)), 0.10, key="search_category_weight")
+            st.info("目安: question 3.0 / intent 2.5 / keywords 2.0 / category 1.0 / answer 0.5")
+
         with st.expander("🔧 詳細設定（上級者向け）", expanded=False):
             st.caption("より細かく精度を触りたい場合だけ使ってください。未設定なら基本設定のままでも十分です。")
 
@@ -86,7 +125,7 @@ def render_search_settings_panel(
 
         col_th1, col_th2 = st.columns(2)
         with col_th1:
-            if st.button("💾 検索設定を保存", width="stretch"):
+            if st.button("💾 検索設定を保存", width="stretch", key="save_search_settings_btn"):
                 ok, settings = save_search_settings(
                     admin_answer_threshold,
                     admin_suggest_threshold,
@@ -106,6 +145,13 @@ def render_search_settings_panel(
                         "semantic_trigger_min": semantic_trigger_min,
                         "semantic_trigger_max": semantic_trigger_max,
                         "top_k": top_k,
+                        "doc_rag_threshold": doc_rag_threshold,
+                        "doc_compare_margin": doc_compare_margin,
+                        "question_weight": question_weight,
+                        "answer_weight": answer_weight,
+                        "intent_weight": intent_weight,
+                        "keywords_weight": keywords_weight,
+                        "category_weight": category_weight,
                     },
                 )
                 st.session_state.search_threshold = settings["answer_threshold"]
@@ -118,9 +164,14 @@ def render_search_settings_panel(
                     )
                 else:
                     st.warning("ローカル保存またはGitHub保存に失敗した可能性があります。設定値自体はこのセッションに反映しています。")
+                try:
+                    st.cache_resource.clear()
+                    st.cache_data.clear()
+                except Exception:
+                    pass
                 st.rerun()
         with col_th2:
-            if st.button("↩ 初期値に戻す", width="stretch"):
+            if st.button("↩ 初期値に戻す", width="stretch", key="reset_search_settings_btn"):
                 ok, settings = save_search_settings(extra_settings=default_search_settings())
                 st.session_state.search_threshold = settings["answer_threshold"]
                 st.session_state.suggest_threshold = settings["suggest_threshold"]
@@ -129,4 +180,9 @@ def render_search_settings_panel(
                     st.success("検索設定を初期値に戻しました。")
                 else:
                     st.warning("初期値に戻しましたが、外部保存に失敗した可能性があります。")
+                try:
+                    st.cache_resource.clear()
+                    st.cache_data.clear()
+                except Exception:
+                    pass
                 st.rerun()

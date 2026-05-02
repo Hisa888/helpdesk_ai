@@ -57,10 +57,12 @@ from helpdesk_app.modules.ui_helpers import render_match_bar
 
 
 
-def render_runtime_surfaces(*, st, components, services) -> None:
-    render_sales_kpi_sections(read_interactions=services.read_interactions)
+def render_runtime_surfaces(*, st, components, services, app_mode: str = "demo", demo_mode: bool = True) -> None:
+    if demo_mode:
+        render_sales_kpi_sections(read_interactions=services.read_interactions)
     render_public_sidebar(
-        contact_link=services.contact_link,
+        contact_link=services.contact_link if demo_mode else "",
+        demo_mode=demo_mode,
         count_nohit_logs=services.count_nohit_logs,
         read_interactions=services.read_interactions,
         list_log_files=services.list_log_files,
@@ -84,6 +86,12 @@ def render_runtime_surfaces(*, st, components, services) -> None:
         "append_faq_csv": services.append_faq_csv,
         "seed_nohit_questions": services.seed_nohit_questions,
         "faq_path": services.FAQ_PATH,
+        "build_document_rag_index": services.build_document_rag_index,
+        "get_document_rag_manifest": services.get_document_rag_manifest,
+        "clear_document_rag": services.clear_document_rag,
+        "supported_doc_rag_extensions": services.SUPPORTED_DOC_RAG_EXTENSIONS,
+        "generate_manual_faq_candidates": services.generate_manual_faq_candidates,
+        "supported_manual_faq_extensions": services.SUPPORTED_MANUAL_FAQ_EXTENSIONS,
         "current_search_settings": services.current_search_settings,
         "save_search_settings": services.save_search_settings,
         "default_search_settings": services.default_search_settings,
@@ -103,7 +111,11 @@ def render_runtime_surfaces(*, st, components, services) -> None:
         "FAQ_PATH": services.FAQ_PATH,
         "faq_df_to_excel_bytes": services.faq_df_to_excel_bytes,
         "read_faq_uploaded_file": services.read_faq_uploaded_file,
+        "read_faq_operation_uploaded_file": services.read_faq_operation_uploaded_file,
+        "apply_faq_upload_operations": services.apply_faq_upload_operations,
+        "append_faq_import_history": services.append_faq_import_history,
         "save_faq_csv_full": services.save_faq_csv_full,
+        "get_current_admin_name": services.get_current_admin_name,
         "load_faq_index": services.load_faq_index,
         "get_faq_index_state": services.get_faq_index_state,
         "reset_faq_index_runtime": services.reset_faq_index_runtime,
@@ -165,6 +177,7 @@ def render_runtime_surfaces(*, st, components, services) -> None:
             "retrieve_faq_cached": services.retrieve_faq_cached,
             "faq_cache_token_getter": services.faq_cache_token_getter,
             "ensure_faq_index_loaded": services.ensure_faq_index_loaded,
+            "current_search_settings": services.current_search_settings,
             "current_search_threshold": services.current_search_threshold,
             "current_suggest_threshold": services.current_suggest_threshold,
             "nohit_template": services.nohit_template,
@@ -175,6 +188,10 @@ def render_runtime_surfaces(*, st, components, services) -> None:
             "build_prompt": services.build_prompt,
             "llm_answer_cached": services.llm_answer_cached,
             "log_interaction": services.log_interaction,
+            "search_document_rag": services.search_document_rag,
+            "answer_with_document_rag": services.answer_with_document_rag,
+            "doc_rag_threshold": services.DEFAULT_DOC_RAG_THRESHOLD,
+            "llm_chat": services.llm_chat,
             "maybe_scroll_to_latest_answer": maybe_scroll_to_latest_answer,
         })
     )

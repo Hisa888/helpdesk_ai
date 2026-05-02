@@ -1,5 +1,33 @@
-.venv/
-.env
-Secrets
+# Python
 __pycache__/
 *.pyc
+
+# virtual env
+.venv/
+venv/
+
+# secrets
+.env
+.streamlit/secrets.toml
+Secrets
+Secrets/
+
+# runtime data
+runtime_data/
+logs/
+
+# database
+*.db
+*.sqlite
+*.sqlite3
+
+# log csv / runtime csv
+runtime_data/**/*.csv
+logs/**/*.csv
+
+# zip backups
+*.zip
+
+# OS
+.DS_Store
+Thumbs.db

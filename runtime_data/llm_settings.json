@@ -1,6 +1,0 @@
-{
-  "provider": "groq",
-  "groq_model": "llama-3.1-8b-instant",
-  "ollama_model": "qwen2.5:7b",
-  "ollama_base_url": "http://localhost:11434"
-}

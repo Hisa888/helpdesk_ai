@@ -680,14 +680,19 @@ def generate_sales_proposal_pdf_v25() -> bytes:
     """旧UI互換。v25名で呼ばれても現行の提案資料PDF生成へ委譲する。"""
     return generate_sales_proposal_pdf()
 
-def render_match_bar(score: float):
-    """一致度（0-1）をバーで表示"""
+def render_match_bar(score: float, label: str = "一致度"):
+    """一致度（0-1）をバーで表示
+
+    label を指定すると、FAQ一致度 / ドキュメント一致度のように
+    ユーザーが意味を判別できる表示にできます。
+    """
     try:
         v = float(score)
     except Exception:
         v = 0.0
     v = max(0.0, min(1.0, v))
-    st.progress(v, text=f"一致度：{int(v*100)}%")
+    label = str(label or "一致度").strip()
+    st.progress(v, text=f"{label}：{int(v*100)}%")
 
 
 def count_nohit_logs(days: int = 7):

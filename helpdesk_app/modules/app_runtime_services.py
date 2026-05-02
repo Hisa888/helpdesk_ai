@@ -18,7 +18,11 @@ from helpdesk_app.faq_io import (
     normalize_faq_columns,
     read_csv_flexible,
     read_faq_uploaded_file,
+    read_faq_operation_uploaded_file,
+    apply_faq_upload_operations,
+    append_faq_import_history,
     save_faq_csv_full,
+    initialize_faq_database,
 )
 from helpdesk_app.llm_service import create_llm_runtime
 from helpdesk_app.modules.admin_faq_generation_utils import (
@@ -26,6 +30,11 @@ from helpdesk_app.modules.admin_faq_generation_utils import (
     generate_faq_candidates as build_generate_faq_candidates,
 )
 from helpdesk_app.modules.admin_log_runtime import create_admin_log_runtime
+from helpdesk_app.modules.document_rag_runtime import create_document_rag_runtime
+from helpdesk_app.modules.manual_faq_generation_utils import (
+    SUPPORTED_MANUAL_FAQ_EXTENSIONS,
+    generate_manual_faq_candidates as build_generate_manual_faq_candidates,
+)
 from helpdesk_app.modules.faq_answer_flow_runtime import create_faq_answer_flow_runtime
 from helpdesk_app.modules.pdf_runtime import (
     REPORTLAB_AVAILABLE,
@@ -239,6 +248,7 @@ def create_runtime_services(*, st, requests, root_dir: str | Path = ".") -> Simp
         base_llm_chat=lambda messages: "",
         root_dir=Path(root_dir),
     )
+    initialize_faq_database(settings_ctx.FAQ_PATH)
 
     llm_runtime = create_llm_runtime(
         st=st,
@@ -253,14 +263,32 @@ def create_runtime_services(*, st, requests, root_dir: str | Path = ".") -> Simp
         persist_log_now=settings_ctx.persist_log_now,
     )
 
+    document_rag_runtime = create_document_rag_runtime(
+        st=st,
+        Path=Path,
+        DATA_DIR=settings_ctx.DATA_DIR,
+        llm_chat=llm_chat,
+        persist_runtime_file=settings_ctx.persist_runtime_file,
+        SENTENCE_TRANSFORMERS_AVAILABLE=SENTENCE_TRANSFORMERS_AVAILABLE,
+        SentenceTransformer=SentenceTransformer,
+    )
+
     def faq_cache_token() -> str:
+        """FAQ検索キャッシュ用トークン。
+
+        DB化後は runtime_data/helpdesk.db が正本になるため、CSVだけでなくDB本体と
+        WALファイルの更新も見る。これによりCSV同期をOFFにした場合でも検索キャッシュを
+        正しく更新できる。
+        """
         try:
-            if settings_ctx.FAQ_PATH.exists():
-                stat = settings_ctx.FAQ_PATH.stat()
-                return f"{settings_ctx.FAQ_PATH}:{stat.st_mtime_ns}:{stat.st_size}"
+            parts = [str(settings_ctx.FAQ_PATH)]
+            for path in [settings_ctx.FAQ_PATH, settings_ctx.FAQ_PATH.parent / "helpdesk.db", settings_ctx.FAQ_PATH.parent / "helpdesk.db-wal"]:
+                if path.exists():
+                    stat = path.stat()
+                    parts.append(f"{path.name}:{stat.st_mtime_ns}:{stat.st_size}")
+            return "|".join(parts)
         except Exception:
-            pass
-        return str(settings_ctx.FAQ_PATH)
+            return str(settings_ctx.FAQ_PATH)
 
     answer_flow_ctx = create_faq_answer_flow_runtime(
         st=st,
@@ -278,6 +306,16 @@ def create_runtime_services(*, st, requests, root_dir: str | Path = ".") -> Simp
         SentenceTransformer=SentenceTransformer,
     )
 
+    # Warm up FAQ index before the first user question.
+    # Streamlit reruns often, so run only when FAQ token changed.
+    try:
+        warmup_token = faq_cache_token()
+        if st.session_state.get("faq_search_warmup_token") != warmup_token:
+            st.session_state["faq_search_warmup_info"] = answer_flow_ctx.warmup_faq_search_index(warmup_token)
+            st.session_state["faq_search_warmup_token"] = warmup_token
+    except Exception:
+        pass
+
     def generate_faq_candidates(nohit_questions: list[str], n_items: int = 8) -> pd.DataFrame:
         return build_generate_faq_candidates(
             nohit_questions=nohit_questions,
@@ -294,9 +332,65 @@ def create_runtime_services(*, st, requests, root_dir: str | Path = ".") -> Simp
             persist_faq_now=settings_ctx.persist_faq_now,
         )
 
-    def check_password(pwd: str) -> bool:
-        expected = str(st.secrets.get("ADMIN_PASSWORD", os.environ.get("ADMIN_PASSWORD", "admin")))
-        return str(pwd or "") == expected
+    def generate_manual_faq_candidates(source_text: str, n_items: int = 8, direct_candidates: pd.DataFrame | None = None) -> pd.DataFrame:
+        return build_generate_manual_faq_candidates(
+            source_text=source_text,
+            n_items=n_items,
+            llm_chat=llm_chat,
+            direct_candidates=direct_candidates,
+        )
+
+    def _admin_secret_value(name: str, default: str = "") -> str:
+        try:
+            return str(st.secrets.get(name, os.environ.get(name, default)) or default)
+        except Exception:
+            return str(os.environ.get(name, default) or default)
+
+    def _admin_users_map() -> dict[str, str]:
+        """ADMIN_USERS=user1:pass1,user2:pass2 形式にも対応する。"""
+        raw = _admin_secret_value("ADMIN_USERS", "")
+        users: dict[str, str] = {}
+        for part in raw.split(","):
+            if ":" not in part:
+                continue
+            uid, pw = part.split(":", 1)
+            uid = uid.strip()
+            if uid:
+                users[uid] = pw.strip()
+        return users
+
+    def get_current_admin_name() -> str:
+        # FAQの「更新者」は表示名ではなく、ログインIDを使用する。
+        try:
+            login_id = st.session_state.get("admin_login_id", "")
+        except Exception:
+            login_id = ""
+        if str(login_id or "").strip():
+            return str(login_id).strip()
+
+        # 未ログイン時のフォールバック。通常のFAQ反映ではここには来ない。
+        fallback = _admin_secret_value("ADMIN_LOGIN_ID", _admin_secret_value("ADMIN_USER_ID", "admin"))
+        return str(fallback or "admin").strip() or "admin"
+
+    def check_password(login_id: str, pwd: str | None = None) -> bool:
+        login_id_clean = str(login_id or "").strip()
+        password = str(pwd or "")
+
+        users = _admin_users_map()
+        if users:
+            ok = users.get(login_id_clean) == password
+        else:
+            expected_id = _admin_secret_value("ADMIN_LOGIN_ID", _admin_secret_value("ADMIN_USER_ID", "admin"))
+            expected_pwd = _admin_secret_value("ADMIN_PASSWORD", "admin")
+            ok = login_id_clean == str(expected_id or "admin").strip() and password == expected_pwd
+
+        if ok:
+            try:
+                st.session_state["admin_login_id"] = login_id_clean
+                st.session_state["admin_display_name"] = login_id_clean
+            except Exception:
+                pass
+        return bool(ok)
 
     contact_link = settings_ctx.build_contact_link()
 
@@ -310,12 +404,17 @@ def create_runtime_services(*, st, requests, root_dir: str | Path = ".") -> Simp
         faq_cache_token_getter=faq_cache_token,
         generate_faq_candidates=generate_faq_candidates,
         append_faq_csv=append_faq_csv,
+        generate_manual_faq_candidates=generate_manual_faq_candidates,
         build_slack_bot_zip_bytes=build_slack_bot_zip_bytes,
         faq_df_to_excel_bytes=faq_df_to_excel_bytes,
         normalize_faq_columns=normalize_faq_columns,
         read_csv_flexible=read_csv_flexible,
         read_faq_uploaded_file=read_faq_uploaded_file,
+        read_faq_operation_uploaded_file=read_faq_operation_uploaded_file,
+        apply_faq_upload_operations=apply_faq_upload_operations,
+        append_faq_import_history=append_faq_import_history,
         save_faq_csv_full=save_faq_csv_full,
+        get_current_admin_name=get_current_admin_name,
         REPORTLAB_AVAILABLE=REPORTLAB_AVAILABLE,
         generate_effect_report_pdf=generate_effect_report_pdf,
         generate_ops_manual_pdf=generate_ops_manual_pdf,
@@ -362,11 +461,21 @@ def create_runtime_services(*, st, requests, root_dir: str | Path = ".") -> Simp
         retrieve_faq_cached=answer_flow_ctx.retrieve_faq_cached,
         try_ultrafast_answer=answer_flow_ctx.try_ultrafast_answer,
         ensure_faq_index_loaded=answer_flow_ctx.ensure_faq_index_loaded,
+        warmup_faq_search_index=answer_flow_ctx.warmup_faq_search_index,
         nohit_template=answer_flow_ctx.nohit_template,
         _fastlane_direct_answer=answer_flow_ctx._fastlane_direct_answer,
         build_prompt=answer_flow_ctx.build_prompt,
         llm_answer_cached=answer_flow_ctx.llm_answer_cached,
         load_faq_index=answer_flow_ctx.load_faq_index,
+        prime_faq_index_from_df=answer_flow_ctx.prime_faq_index_from_df,
         get_faq_index_state=answer_flow_ctx.get_faq_index_state,
         reset_faq_index_runtime=answer_flow_ctx.reset_faq_index_runtime,
+        build_document_rag_index=document_rag_runtime.build_document_rag_index,
+        get_document_rag_manifest=document_rag_runtime.get_document_rag_manifest,
+        clear_document_rag=document_rag_runtime.clear_document_rag,
+        search_document_rag=document_rag_runtime.search_document_rag,
+        answer_with_document_rag=document_rag_runtime.answer_with_document_rag,
+        SUPPORTED_DOC_RAG_EXTENSIONS=document_rag_runtime.SUPPORTED_DOC_RAG_EXTENSIONS,
+        DEFAULT_DOC_RAG_THRESHOLD=document_rag_runtime.DEFAULT_DOC_RAG_THRESHOLD,
+        SUPPORTED_MANUAL_FAQ_EXTENSIONS=SUPPORTED_MANUAL_FAQ_EXTENSIONS,
     )

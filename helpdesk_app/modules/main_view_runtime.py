@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import os
 from typing import Callable, Iterable
 
 import pandas as pd
@@ -137,6 +138,7 @@ def render_sales_kpi_sections(*, read_interactions: Callable[[int], pd.DataFrame
 def render_public_sidebar(
     *,
     contact_link: str,
+    demo_mode: bool = True,
     count_nohit_logs: Callable[[int], tuple[int, int, int]],
     read_interactions: Callable[[int], pd.DataFrame | None],
     list_log_files: Callable[[], list],
@@ -146,8 +148,9 @@ def render_public_sidebar(
 ) -> None:
     with st.sidebar:
         st.markdown("### 📌 このAIでできること")
-        st.markdown(
-            """
+        if demo_mode:
+            st.markdown(
+                """
         このAIは、社内のIT問い合わせを自己解決につなげるための **情シス問い合わせ支援AI** です。
 
         主な機能
@@ -166,11 +169,11 @@ def render_public_sidebar(
         ・導入効果レポートPDFの出力  
         ・操作説明書 / 提案資料PDFのダウンロード
         """
-        )
+            )
 
-        st.markdown("### 📈 想定効果（例）")
-        st.markdown(
-            """
+            st.markdown("### 📈 想定効果（例）")
+            st.markdown(
+                """
         このAIを導入すると、次のような効果が期待できます。
 
         ・よくある問い合わせを自己解決できるようになる  
@@ -187,7 +190,21 @@ def render_public_sidebar(
         → 月 **約500分（約8時間）削減**  
         → 年間 **約96時間削減**
         """
-        )
+            )
+        else:
+            st.markdown(
+                """
+        社内のIT問い合わせを自己解決につなげるための **情シス問い合わせ支援AI** です。
+
+        主な機能
+
+        ・FAQデータを検索し、最も近い回答を自動表示  
+        ・社内ドキュメントも検索対象として利用  
+        ・回答の根拠となるFAQ候補と一致度を表示  
+        ・該当するFAQがない場合は問い合わせテンプレートを提示  
+        ・問い合わせログを自動記録し、FAQ改善に活用
+        """
+            )
 
         st.markdown("### 🧭 使い方")
         st.markdown(
@@ -209,121 +226,73 @@ def render_public_sidebar(
         AIの回答精度を継続的に改善できます
         """
         )
-        if contact_link:
-            st.markdown(
-                f'''
-<div class="glass-card" style="margin-top: 18px; padding: 20px;">
-  <div class="eyebrow">Consulting CTA</div>
-  <h3 style="margin:4px 0 8px 0;">このまま導入相談につなげられます</h3>
-  <p style="margin:0 0 12px 0; color: var(--text-sub);">デモ確認後、そのままヒアリング・導入相談へ進めるための導線です。</p>
-  <a href="{contact_link}" target="_blank" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;padding:10px 16px;border-radius:10px;font-weight:700;">🚀 導入のご相談</a>
+
+        if demo_mode and contact_link:
+            cta_html = f"""
+<div class=\"glass-card\" style=\"margin-top: 18px; padding: 20px;\">
+  <div class=\"eyebrow\">Consulting CTA</div>
+  <h3 style=\"margin:4px 0 8px 0;\">このまま導入相談につなげられます</h3>
+  <p style=\"margin:0 0 12px 0; color: var(--text-sub);\">デモ確認後、そのままヒアリング・導入相談へ進めるための導線です。</p>
+  <a href=\"{contact_link}\" target=\"_blank\" style=\"display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;padding:10px 16px;border-radius:10px;font-weight:700;\">🚀 導入のご相談</a>
 </div>
-''',
-                unsafe_allow_html=True,
-            )
+"""
+            st.markdown(cta_html, unsafe_allow_html=True)
 
-        st.markdown("### 📊 問い合わせログ状況（該当なし）")
-        t_cnt, w_cnt, total_cnt = count_nohit_logs(days=7)
-        col_a, col_b, col_c = st.columns(3)
-        col_a.metric("今日", t_cnt)
-        col_b.metric("過去7日", w_cnt)
-        col_c.metric("累計", total_cnt)
+        # ログ・削減時間・ログダウンロード系はサイドバーでは表示しない。
+        # 管理者ログイン後、中央の「管理者エリア」内に集約して表示する。
 
-        st.markdown("### ⏱ 削減時間シミュレーター")
-        avg_min = st.slider(
-            "1件あたりの平均対応時間（分）",
-            1,
-            20,
-            int(st.session_state.get("avg_min", 5)),
-            help="情シスが1件対応する平均時間の目安",
-            key="avg_min",
+
+def _default_admin_login_id() -> str:
+    try:
+        value = st.secrets.get(
+            "ADMIN_LOGIN_ID",
+            st.secrets.get("ADMIN_USER_ID", os.environ.get("ADMIN_LOGIN_ID", os.environ.get("ADMIN_USER_ID", "admin"))),
         )
-        deflect_pct = st.slider(
-            "AIで解決できる割合（推定）",
-            30,
-            100,
-            int(st.session_state.get("deflect_pct", 70)),
-            help="AI回答で自己解決に至る割合の推定",
-            key="deflect_pct",
-        )
-        deflect = deflect_pct / 100.0
-        st.session_state["deflect"] = deflect
-
-        df_int = read_interactions(days=7)
-        if df_int is None or len(df_int) == 0:
-            st.caption("まだ利用ログがありません（質問すると自動で蓄積します）。")
-        else:
-            matched_7d = int(df_int["matched"].sum()) if "matched" in df_int.columns else 0
-            total_7d = int(len(df_int))
-            nohit_7d = total_7d - matched_7d
-            saved_min_7d = matched_7d * float(avg_min) * float(deflect)
-            st.metric("推定削減（過去7日）", format_minutes_to_hours(saved_min_7d))
-            st.caption(f"内訳：自動対応 {matched_7d} 件 / 該当なし {nohit_7d} 件（合計 {total_7d} 件）")
-
-            try:
-                today_prefix = datetime.now().strftime("%Y-%m-%d")
-                df_today = df_int[df_int["timestamp"].astype(str).str.startswith(today_prefix)]
-                matched_today = int(df_today["matched"].sum()) if len(df_today) else 0
-                saved_min_today = matched_today * float(avg_min) * float(deflect)
-                st.metric("推定削減（今日）", format_minutes_to_hours(saved_min_today))
-            except Exception:
-                pass
-
-        # 直近7日の見える化グラフは、管理者ログイン後に
-        # 「📊 管理ダッシュボード（拡張版）」内へ移動して表示します。
-
-        st.markdown("### 📥 ログ（該当なし）ダウンロード")
-        log_files = list_log_files()
-        if not log_files:
-            st.caption("まだログはありません。")
-        else:
-            latest = log_files[0]
-            latest_bytes = csv_bytes_as_utf8_sig(latest)
-            st.download_button(
-                "⬇ 最新ログCSVをダウンロード",
-                data=latest_bytes,
-                file_name=latest.name,
-                mime="text/csv",
-                width="stretch",
-            )
-
-            zip_bytes = make_logs_zip(log_files)
-            st.download_button(
-                "⬇ ログをZIPでまとめてDL",
-                data=zip_bytes,
-                file_name="nohit_logs.zip",
-                mime="application/zip",
-                width="stretch",
-            )
-
-            with st.expander("ログ一覧を見る"):
-                for p in log_files[:20]:
-                    st.write(f"• {p.name}")
+    except Exception:
+        value = os.environ.get("ADMIN_LOGIN_ID", os.environ.get("ADMIN_USER_ID", "admin"))
+    return str(value or "admin").strip() or "admin"
 
 
 def ensure_admin_session_state() -> None:
     if "is_admin" not in st.session_state:
         st.session_state.is_admin = False
+    if "admin_login_id" not in st.session_state:
+        st.session_state.admin_login_id = ""
+    if "admin_display_name" not in st.session_state:
+        # 更新者はログインIDを優先する。未ログイン時の表示用だけ既定値を持つ。
+        st.session_state.admin_display_name = ""
 
 
-def render_admin_login_sidebar(*, check_password: Callable[[str], bool]) -> None:
+def render_admin_login_sidebar(*, check_password: Callable[..., bool]) -> None:
     with st.sidebar:
+        mode_label = "デモ用" if bool(st.session_state.get("demo_mode", True)) else "本番用"
+        st.caption(f"画面モード: {mode_label}")
         st.markdown("## 🛠 管理者")
         if not st.session_state.is_admin:
-            pwd = st.text_input("管理者パスワード", type="password")
-            if st.button("ログイン"):
-                if check_password(pwd):
+            default_login_id = _default_admin_login_id()
+            login_id = st.text_input("ログインID", value=default_login_id, key="admin_login_id_input")
+            pwd = st.text_input("管理者パスワード", type="password", key="admin_password_input")
+            if st.button("ログイン", key="admin_login_btn"):
+                login_id_clean = str(login_id or "").strip()
+                if not login_id_clean:
+                    st.error("ログインIDを入力してください")
+                elif check_password(login_id_clean, pwd):
                     st.session_state.is_admin = True
+                    st.session_state.admin_login_id = login_id_clean
+                    # FAQ更新者はこのログインIDを使用する。
+                    st.session_state.admin_display_name = login_id_clean
                     st.success("ログイン成功")
                     st.rerun()
                 else:
-                    st.error("パスワードが違います")
+                    st.error("ログインIDまたはパスワードが違います")
         else:
-            st.success("ログイン中")
-            if st.button("ログアウト"):
+            login_label = st.session_state.get("admin_login_id") or st.session_state.get("admin_display_name") or "管理者"
+            st.success(f"ログイン中：{login_label}")
+            if st.button("ログアウト", key="admin_logout_btn"):
                 st.session_state.is_admin = False
+                st.session_state.admin_login_id = ""
+                st.session_state.admin_display_name = ""
                 st.rerun()
-
 
 def render_admin_tools_if_logged_in(
     *,

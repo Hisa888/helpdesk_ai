@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from helpdesk_app.modules.contact_cta_panel import render_answer_contact_cta
+
 
 def render_nohit_extra_form(*, st, update_nohit_record, info: dict | None = None, expanded: bool = True):
     info = info or (st.session_state.get("pending_nohit", {}) or {})
@@ -8,6 +10,7 @@ def render_nohit_extra_form(*, st, update_nohit_record, info: dict | None = None
     st.write("")
     with st.expander("追加情報を記録（任意）", expanded=expanded):
         st.caption("解決しない場合は、状況を少し補足するとFAQ改善に役立ちます。")
+        render_answer_contact_cta(st=st, was_nohit=True)
 
         c1, c2, c3 = st.columns(3)
 

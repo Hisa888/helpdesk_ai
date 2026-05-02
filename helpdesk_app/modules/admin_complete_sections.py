@@ -3,6 +3,8 @@ from __future__ import annotations
 from helpdesk_app.modules.admin_dashboard_panel import render_admin_dashboard_panel
 from helpdesk_app.modules.admin_faq_generation_panel import render_admin_faq_generation_panel
 from helpdesk_app.modules.admin_log_download_panel import render_admin_log_download_panel
+from helpdesk_app.modules.document_rag_panel import render_document_rag_panel
+from helpdesk_app.modules.manual_faq_generation_panel import render_manual_faq_generation_panel
 
 
 def _render_admin_zone_intro() -> str:
@@ -55,3 +57,19 @@ def render_admin_complete_sections(ctx: dict) -> None:
         seed_nohit_questions=ctx["seed_nohit_questions"],
         faq_path=ctx["faq_path"],
     )
+    if ctx.get("build_document_rag_index"):
+        render_document_rag_panel(
+            build_document_rag_index=ctx["build_document_rag_index"],
+            get_document_rag_manifest=ctx["get_document_rag_manifest"],
+            clear_document_rag=ctx["clear_document_rag"],
+            supported_extensions=ctx.get("supported_doc_rag_extensions", ("pdf", "docx", "xlsx", "xlsm", "txt", "md")),
+        )
+
+    if ctx.get("generate_manual_faq_candidates"):
+        render_manual_faq_generation_panel(
+            st=ctx["st"],
+            faq_path=ctx["faq_path"],
+            generate_manual_faq_candidates=ctx["generate_manual_faq_candidates"],
+            append_faq_csv=ctx["append_faq_csv"],
+            supported_extensions=ctx.get("supported_manual_faq_extensions", ("pdf", "docx", "xlsx", "xlsm", "txt", "md")),
+        )

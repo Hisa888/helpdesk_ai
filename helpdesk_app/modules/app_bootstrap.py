@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from html import escape
 from pathlib import Path
 
 
@@ -119,8 +120,10 @@ h1, h2, h3 {line-height: 1.25 !important;}
 .query-panel h3 {margin: 5px 0 6px 0; font-size: 22px; color: var(--text-main);}
 .query-panel p {margin: 0; color: var(--text-sub); font-size: 14px;}
 .hero-eyebrow {font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; opacity: .9; margin-bottom: 8px;}
-.hero-consult {margin-top: 18px;}
-.hero-consult a {display:inline-block; background:#ffffff; color:#0f172a; text-decoration:none; padding:10px 16px; border-radius:12px; font-weight:800;}
+.hero-consult {margin-top: 22px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;}
+.hero-consult a {display:inline-flex; align-items:center; justify-content:center; min-height:52px; background:#ffffff; color:#0f172a !important; text-decoration:none !important; padding:14px 24px; border-radius:16px; font-size:18px; font-weight:900; box-shadow:0 14px 30px rgba(15,23,42,0.18);}
+.hero-consult a:hover {filter: brightness(1.03); transform: translateY(-1px);}
+.hero-consult-copy {font-size:13px; font-weight:800; color:rgba(255,255,255,0.92);}
 
 .kpi-grid {display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 14px 0 18px 0;}
 @media (max-width: 1100px){ .kpi-grid {grid-template-columns: repeat(2, minmax(0, 1fr));} }
@@ -384,7 +387,7 @@ def apply_user_ui_settings(*, st, components, ui_theme: dict, ui_layout: dict) -
     )
 
 
-def render_brand_header(*, st, logo_path: str, company_name: str, contact_link: str) -> None:
+def render_brand_header(*, st, logo_path: str, company_name: str, contact_link: str = "", demo_mode: bool = True) -> None:
     logo_path_obj = Path(logo_path)
     st.markdown('<div class="topbar-card">', unsafe_allow_html=True)
     col_logo, col_name, col_btn = st.columns([1, 7, 2])
@@ -397,21 +400,47 @@ def render_brand_header(*, st, logo_path: str, company_name: str, contact_link: 
         st.markdown(f'<div class="brand-title">{company_name}</div>', unsafe_allow_html=True)
         st.markdown('<div class="brand-sub">社内問い合わせの自己解決率を高める、情シス向けAIヘルプデスク</div>', unsafe_allow_html=True)
     with col_btn:
-        if contact_link:
-            st.link_button("📩 導入相談", contact_link, width="stretch")
+        if demo_mode:
+            if contact_link:
+                st.link_button("📩 導入相談", contact_link, width="stretch")
+            else:
+                st.button("📩 導入相談（リンク未設定）", disabled=True, width="stretch", key="brand_header_contact_disabled")
         else:
-            st.button("📩 導入相談（リンク未設定）", disabled=True, width="stretch")
+            st.caption("本番モード")
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-def render_hero_header(*, st, contact_link: str) -> None:
+def render_hero_header(*, st, contact_link: str = "", demo_mode: bool = True) -> None:
+    safe_contact_link = escape(str(contact_link or ""), quote=True)
+    contact_html = ""
+    if safe_contact_link:
+        target_attrs = "" if safe_contact_link.lower().startswith("mailto:") else ' target="_blank" rel="noopener noreferrer"'
+        contact_html = (
+            f"<div class='hero-consult'>"
+            f"<a href='{safe_contact_link}'{target_attrs}>📩 導入相談はこちら</a>"
+            f"<span class='hero-consult-copy'>デモ確認後、すぐ相談へ進めます</span>"
+            f"</div>"
+        )
+
+    if demo_mode:
+        eyebrow = "導入デモ / 情シス問い合わせAI"
+        title = "情シス問い合わせを削減するAI"
+        lead = "FAQを根拠付きで即回答し、未解決は問い合わせ導線へつなぎ、ナレッジを継続的に蓄積します。営業デモ、管理者運用、効果レポートまで1画面で見せられる営業仕様です。"
+        extra_badge = '<span class="badge">📄 提案・操作資料DL</span>'
+    else:
+        eyebrow = "社内利用 / 情シス問い合わせAI"
+        title = "社内IT問い合わせを自己解決するAI"
+        lead = "FAQと社内ナレッジをもとに、よくあるIT問い合わせへすばやく回答します。回答できない場合は、必要情報を整理して問い合わせにつなげます。"
+        extra_badge = ""
+        contact_html = ""
+
     st.markdown(
         f"""
 <div class="hero-shell">
 <div class="hero">
-<div class="hero-eyebrow">導入デモ / 情シス問い合わせAI</div>
-<h1>情シス問い合わせを削減するAI</h1>
-<p>FAQを根拠付きで即回答し、未解決は問い合わせ導線へつなぎ、ナレッジを継続的に蓄積します。営業デモ、管理者運用、効果レポートまで1画面で見せられる営業仕様です。</p>
+<div class="hero-eyebrow">{eyebrow}</div>
+<h1>{title}</h1>
+<p>{lead}</p>
 <div class="cta-row">
 <span class="cta">✔ FAQで即回答</span>
 <span class="cta">✔ 未解決は問い合わせ誘導</span>
@@ -423,9 +452,9 @@ def render_hero_header(*, st, contact_link: str) -> None:
 <span class="badge">📝 ログ / 該当なし蓄積</span>
 <span class="badge">🔐 管理者でFAQ育成</span>
 <span class="badge">📊 KPI・導入効果可視化</span>
-<span class="badge">📄 提案・操作資料DL</span>
+{extra_badge}
 </div>
-{"<div class='hero-consult'><a href='" + contact_link + "' target='_blank'>📩 導入相談はこちら</a></div>" if contact_link else ""}
+{contact_html}
 </div>
 </div>
 """,

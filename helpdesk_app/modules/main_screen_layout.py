@@ -75,6 +75,7 @@ def render_main_screen_layout(
     retrieve_faq_cached: Callable,
     faq_cache_token_getter: Callable,
     ensure_faq_index_loaded: Callable,
+    current_search_settings: Callable[[], dict],
     current_search_threshold: Callable[[], float],
     current_suggest_threshold: Callable[[], float],
     nohit_template: str,
@@ -85,6 +86,10 @@ def render_main_screen_layout(
     build_prompt: Callable,
     llm_answer_cached: Callable,
     log_interaction: Callable,
+    search_document_rag: Callable,
+    answer_with_document_rag: Callable,
+    doc_rag_threshold: float,
+    llm_chat: Callable,
     maybe_scroll_to_latest_answer: Callable,
 ) -> dict[str, Any]:
     show_welcome = is_welcome_state(st.session_state.get("messages", []))
@@ -129,6 +134,7 @@ def render_main_screen_layout(
         faq_cache_token_getter=faq_cache_token_getter,
         ensure_faq_index_loaded=ensure_faq_index_loaded,
         render_match_bar=render_match_bar,
+        current_search_settings=current_search_settings,
         current_search_threshold=current_search_threshold,
         current_suggest_threshold=current_suggest_threshold,
         nohit_template=nohit_template,
@@ -143,6 +149,10 @@ def render_main_screen_layout(
         build_prompt=build_prompt,
         llm_answer_cached=llm_answer_cached,
         log_interaction=log_interaction,
+        search_document_rag=search_document_rag,
+        answer_with_document_rag=answer_with_document_rag,
+        doc_rag_threshold=doc_rag_threshold,
+        llm_chat=llm_chat,
     )
 
     if interaction_result.get("needs_rerun"):

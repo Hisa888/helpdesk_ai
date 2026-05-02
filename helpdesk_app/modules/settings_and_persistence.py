@@ -318,7 +318,9 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
             return False
 
     def persist_faq_now() -> bool:
-        return persist_runtime_file(FAQ_PATH, label="faq")
+        # FAQアップロード時にGitHub APIのGET/PUT完了を画面で待つと体感が遅くなるため、
+        # ログと同じくバックグラウンド送信にする。ローカル保存/DB保存は先に完了している。
+        return persist_runtime_file_async(FAQ_PATH, label="faq")
 
     def persist_log_now(path: Path) -> bool:
         return persist_runtime_file_async(path, label="log")
@@ -410,6 +412,14 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
             "semantic_trigger_max": 0.48,
             "semantic_skip_fastlane": True,
             "top_k": 3,
+            "doc_rag_threshold": 0.55,
+            "doc_compare_margin": 0.05,
+            # FAQ項目別の検索重み。question/intent/keywordsを強め、answer/categoryは補助にする。
+            "question_weight": 3.00,
+            "answer_weight": 0.50,
+            "intent_weight": 2.50,
+            "keywords_weight": 2.00,
+            "category_weight": 1.00,
         }
 
     def _sanitize_search_settings(data: dict | None) -> dict:
@@ -443,6 +453,13 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
             semantic_trigger_max = semantic_trigger_min
         semantic_skip_fastlane = _safe_bool(src.get("semantic_skip_fastlane", base["semantic_skip_fastlane"]), base["semantic_skip_fastlane"])
         top_k = int(round(_safe_float_range(src.get("top_k", base["top_k"]), base["top_k"], 1, 5)))
+        doc_rag_threshold = _safe_float_range(src.get("doc_rag_threshold", base["doc_rag_threshold"]), base["doc_rag_threshold"], 0.10, 1.20)
+        doc_compare_margin = _safe_float_range(src.get("doc_compare_margin", base["doc_compare_margin"]), base["doc_compare_margin"], 0.00, 0.50)
+        question_weight = _safe_float_range(src.get("question_weight", base["question_weight"]), base["question_weight"], 0.0, 5.0)
+        answer_weight = _safe_float_range(src.get("answer_weight", base["answer_weight"]), base["answer_weight"], 0.0, 5.0)
+        intent_weight = _safe_float_range(src.get("intent_weight", base["intent_weight"]), base["intent_weight"], 0.0, 5.0)
+        keywords_weight = _safe_float_range(src.get("keywords_weight", base["keywords_weight"]), base["keywords_weight"], 0.0, 5.0)
+        category_weight = _safe_float_range(src.get("category_weight", base["category_weight"]), base["category_weight"], 0.0, 5.0)
         return {
             "answer_threshold": round(answer, 2),
             "suggest_threshold": round(suggest, 2),
@@ -461,6 +478,13 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
             "semantic_trigger_max": round(semantic_trigger_max, 2),
             "semantic_skip_fastlane": semantic_skip_fastlane,
             "top_k": top_k,
+            "doc_rag_threshold": round(doc_rag_threshold, 2),
+            "doc_compare_margin": round(doc_compare_margin, 2),
+            "question_weight": round(question_weight, 2),
+            "answer_weight": round(answer_weight, 2),
+            "intent_weight": round(intent_weight, 2),
+            "keywords_weight": round(keywords_weight, 2),
+            "category_weight": round(category_weight, 2),
         }
 
     def load_search_settings() -> dict:

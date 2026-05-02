@@ -24,6 +24,12 @@ def _render_buttons(st, *, quick_starts: Sequence[Tuple[str, str, str]], key_suf
 
 
 def render_quick_start_hero(st, *, quick_starts: Sequence[Tuple[str, str, str]] = DEFAULT_QUICK_STARTS) -> None:
+    # 本番モードでは営業デモ用のQuick Start（よくある問い合わせボタン）は表示しない。
+    # 入力欄へのアンカーだけ残し、通常の問い合わせ入力から利用してもらう。
+    if not bool(st.session_state.get("demo_mode", True)):
+        st.markdown('<div id="query-start"></div>', unsafe_allow_html=True)
+        return
+
     st.markdown(
         """
 <div class="hero-shell">
@@ -121,6 +127,9 @@ def render_quick_start_hero(st, *, quick_starts: Sequence[Tuple[str, str, str]] 
 
 
 def render_quick_start_compact(st, *, quick_starts: Sequence[Tuple[str, str, str]] = DEFAULT_QUICK_STARTS) -> None:
+    # 本番モードでは画面途中の簡易Quick Startも非表示にする。
+    if not bool(st.session_state.get("demo_mode", True)):
+        return
     st.markdown('<div class="eyebrow" style="margin-top:8px;">Quick Start</div>', unsafe_allow_html=True)
     st.caption("よく使う質問をすぐ送信できます")
     _render_buttons(st, quick_starts=quick_starts, key_suffix="compact")

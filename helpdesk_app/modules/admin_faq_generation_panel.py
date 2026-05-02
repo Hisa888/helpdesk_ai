@@ -49,8 +49,16 @@ def render_admin_faq_generation_panel(
         labels = [p.name for p in log_files[:15]]
         pick = st.selectbox("参照するログファイル", labels, index=0, key="admin_ext_nohit_pick")
         picked_path = next((p for p in log_files if p.name == pick), log_files[0])
-        max_q = st.slider("生成に使う質問数（重複除外後）", 10, 200, 60, step=10, key="admin_ext_max_q")
-        n_items = st.slider("生成するFAQ件数", 3, 20, 8, key="admin_ext_n_items")
+        max_q = st.slider("生成に使う質問数（重複除外後）", 10, 500, 100, step=10, key="admin_ext_max_q")
+        n_items = st.number_input(
+            "生成するFAQ件数（0=可能な範囲で最大）",
+            min_value=0,
+            value=8,
+            step=10,
+            key="admin_ext_n_items",
+            help="20件上限は撤廃済みです。0の場合は、選択したログ内容から可能な範囲で最大件数を生成します。",
+        )
+        n_items = int(n_items or 0)
 
         col1, col2 = st.columns([2, 3])
         with col1:
@@ -66,14 +74,14 @@ def render_admin_faq_generation_panel(
                 questions = load_nohit_questions_from_logs([picked_path], max_questions=max_q)
                 st.session_state["admin_generated_nohit_questions"] = questions
                 if len(questions) < 5:
-                    st.session_state["generated_faq_df_ext"] = pd.DataFrame(columns=["category", "question", "answer"])
+                    st.session_state["generated_faq_df_ext"] = pd.DataFrame(columns=["question", "answer", "intent", "keywords", "category", "answer_format"])
                     st.warning("有効な質問が少なすぎてFAQを生成できません。")
                 else:
                     try:
                         generated_df = generate_faq_candidates(questions, n_items=n_items)
                     except Exception as e:
                         st.error(f"FAQ案生成でエラー: {e}")
-                        generated_df = pd.DataFrame(columns=["category", "question", "answer"])
+                        generated_df = pd.DataFrame(columns=["question", "answer", "intent", "keywords", "category", "answer_format"])
                     st.session_state["generated_faq_df_ext"] = generated_df
 
         generated_df = st.session_state.get("generated_faq_df_ext")

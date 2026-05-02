@@ -15,6 +15,12 @@ ADMIN_COMPLETE_TOOLS_KEYS = [
     "append_faq_csv",
     "seed_nohit_questions",
     "faq_path",
+    "build_document_rag_index",
+    "get_document_rag_manifest",
+    "clear_document_rag",
+    "supported_doc_rag_extensions",
+    "generate_manual_faq_candidates",
+    "supported_manual_faq_extensions",
 ]
 
 
@@ -65,6 +71,7 @@ MAIN_SCREEN_LAYOUT_KEYS = [
     "retrieve_faq_cached",
     "faq_cache_token_getter",
     "ensure_faq_index_loaded",
+    "current_search_settings",
     "current_search_threshold",
     "current_suggest_threshold",
     "nohit_template",
@@ -76,6 +83,10 @@ MAIN_SCREEN_LAYOUT_KEYS = [
     "llm_answer_cached",
     "log_interaction",
     "maybe_scroll_to_latest_answer",
+    "search_document_rag",
+    "answer_with_document_rag",
+    "doc_rag_threshold",
+    "llm_chat",
 ]
 
 

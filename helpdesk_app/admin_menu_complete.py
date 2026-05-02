@@ -20,6 +20,12 @@ def render_admin_complete_tools(
     append_faq_csv: Callable[..., int],
     seed_nohit_questions: Callable[..., int],
     faq_path: str | Path,
+    build_document_rag_index=None,
+    get_document_rag_manifest=None,
+    clear_document_rag=None,
+    supported_doc_rag_extensions=None,
+    generate_manual_faq_candidates=None,
+    supported_manual_faq_extensions=None,
 ) -> None:
     """Backward-compatible thin wrapper for split admin complete sections."""
 
@@ -35,4 +41,10 @@ def render_admin_complete_tools(
         "append_faq_csv": append_faq_csv,
         "seed_nohit_questions": seed_nohit_questions,
         "faq_path": faq_path,
+        "build_document_rag_index": build_document_rag_index,
+        "get_document_rag_manifest": get_document_rag_manifest,
+        "clear_document_rag": clear_document_rag,
+        "supported_doc_rag_extensions": supported_doc_rag_extensions,
+        "generate_manual_faq_candidates": generate_manual_faq_candidates,
+        "supported_manual_faq_extensions": supported_manual_faq_extensions,
     })

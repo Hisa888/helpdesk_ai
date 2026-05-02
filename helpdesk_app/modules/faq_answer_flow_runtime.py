@@ -33,6 +33,12 @@ CANONICAL_PATTERNS = [
     (r"パスワード再発行|パスワード初期化", "パスワード リセット"),
     (r"立ち上がらない|起ち上がらない|立ちあがらない|起ちあがらない", "起動しない"),
     (r"電源がつかない|電源が付かない|電源がはいらない", "電源が入らない"),
+    # ユーザー語・スラングをFAQにヒットしやすい正式表現へ寄せる
+    (r"モニター|モニタ|画面|ディスプレー", "ディスプレイ"),
+    (r"真っ暗|まっくら|黒い|ブラックアウト|映らん|うつらない|表示されない|表示しない", "映らない"),
+    (r"死んだ|壊れた|壊れてる|故障した|故障|反応しない", "映らない 不具合"),
+    (r"つかない|付かない|点かない", "入らない"),
+    (r"ディスプレイ\s*入らない|ディスプレイ\s*映らない 不具合|ディスプレイ\s*映らない", "ディスプレイ 映らない"),
     (r"ログイン出来ない|ログインできません", "ログインできない"),
     (r"接続できない|接続できません|接続出来ない|接続出来ません|接続しない|接続されない|つながりません|繋がりません|繋がらない|繋げない|つなげない", "つながらない"),
     (r"利用できない|使用できない", "使えない"),
@@ -50,6 +56,7 @@ CONCEPT_ALIASES = {
     "login": ["ログイン", "サインイン", "認証", "アカウント"],
     "password": ["パスワード", "password", "pw", "リセット", "再設定", "初期化"],
     "boot": ["起動", "立ち上が", "立上", "電源", "シャットダウン", "再起動"],
+    "display": ["ディスプレイ", "モニター", "モニタ", "画面", "映らない", "真っ暗", "ブラックアウト", "表示されない"],
     "mail": ["メール", "outlook", "受信", "送信"],
     "print": ["印刷", "プリンタ", "printer", "print"],
     "lock": ["ロック", "凍結", "無効", "停止"],
@@ -59,6 +66,7 @@ CONCEPT_ALIASES = {
     "office_app": ["excel", "word", "powerpoint", "access", "onenote", "office"],
     "browser_app": ["chrome", "edge", "firefox", "ブラウザ", "web", "sso"],
     "mail_app": ["outlook", "exchange", "共有メール", "メーリングリスト", "メールアプリ"],
+    "software_install": ["アプリ", "アプリケーション", "ソフト", "ソフトウェア", "インストール", "導入", "追加", "利用したい", "使いたい"],
 }
 
 FASTLANE_INTENT_RULES = [
@@ -75,10 +83,22 @@ FASTLANE_INTENT_RULES = [
         "faq_any": ["ロック", "凍結", "無効", "停止", "アカウント"],
     },
     {
+        "name": "display_no_signal",
+        "query_any": ["ディスプレイ", "モニター", "モニタ", "画面"],
+        "query_any2": ["映らない", "真っ暗", "黒い", "ブラックアウト", "死んだ", "壊れた", "表示されない", "つかない", "付かない"],
+        "faq_any": ["ディスプレイ", "モニター", "モニタ", "画面", "映らない", "表示されない", "外部ディスプレイ"],
+    },
+    {
         "name": "vpn_connect",
         "query_any": ["vpn", "リモートアクセス", "社外接続"],
         "query_any2": ["つながらない", "接続", "入らない", "失敗", "できない"],
         "faq_any": ["vpn", "リモートアクセス", "接続"],
+    },
+    {
+        "name": "software_install",
+        "query_any": ["アプリ", "アプリケーション", "ソフト", "ソフトウェア", "ツール"],
+        "query_any2": ["インストール", "導入", "追加", "利用したい", "使いたい", "申請"],
+        "faq_any": ["アプリ", "アプリケーション", "ソフト", "ソフトウェア", "インストール", "導入", "追加", "申請"],
     },
 ]
 
@@ -171,11 +191,13 @@ def create_faq_answer_flow_runtime(
         _build_sentence_embeddings=faq_index_ctx._build_sentence_embeddings,
         _get_sentence_embeddings_cached=faq_index_ctx._get_sentence_embeddings_cached,
         _search_with_sentence_transformers=faq_index_ctx._search_with_sentence_transformers,
+        prime_faq_index_from_df=faq_index_ctx.prime_faq_index_from_df,
         load_faq_index=faq_index_ctx.load_faq_index,
         get_faq_index_state=faq_index_ctx.get_faq_index_state,
         reset_faq_index_runtime=faq_index_ctx.reset_faq_index_runtime,
         ensure_faq_index_loaded=faq_index_ctx.ensure_faq_index_loaded,
         get_faq_index_cached=faq_index_ctx.get_faq_index_cached,
+        warmup_faq_search_index=faq_index_ctx.warmup_faq_search_index,
         _build_fast_lookup_maps=faq_index_ctx._build_fast_lookup_maps,
         nohit_template=build_nohit_template,
     )

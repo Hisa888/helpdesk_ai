@@ -53,7 +53,16 @@ def csv_bytes_as_utf8_sig(data) -> bytes:
 
 def list_log_files(log_dir: Path) -> list[Path]:
     try:
-        return sorted(log_dir.glob("nohit_*.csv"), reverse=True)
+        patterns = ["nohit_*.csv", "candidate_learning_*.csv"]
+        files = []
+        seen = set()
+        for pattern in patterns:
+            for p in log_dir.glob(pattern):
+                key = str(p.resolve())
+                if key not in seen:
+                    seen.add(key)
+                    files.append(p)
+        return sorted(files, reverse=True)
     except Exception:
         return []
 
