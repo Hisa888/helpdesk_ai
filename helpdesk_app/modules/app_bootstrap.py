@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def initialize_app_shell(*, st, components, current_ui_theme_settings, current_ui_layout_settings):
-    st.set_page_config(page_title="情シス問い合わせAI", layout="wide")
+    st.set_page_config(page_title="情シス問い合わせAI", layout="wide", initial_sidebar_state="expanded")
     startup_status = st.empty()
     startup_status.caption("🚀 情シス問い合わせAI を起動しています…")
 
@@ -199,11 +199,27 @@ def apply_user_ui_settings(*, st, components, ui_theme: dict, ui_layout: dict) -
   --user-resizer-line: {ui_theme['resizer_line']};
   --user-resizer-knob: {ui_theme['resizer_knob']};
 }}
-[data-testid="stSidebar"] {{
+/* サイドバー幅は「開いている時だけ」上書きします。
+   閉じている時まで width を固定すると、Streamlit標準の >> ボタン位置や再表示処理と競合します。 */
+[data-testid="stSidebar"]:not([aria-expanded="false"]) {{
   min-width: var(--user-sidebar-width) !important;
   max-width: var(--user-sidebar-width) !important;
   width: var(--user-sidebar-width) !important;
   background: linear-gradient(180deg, var(--user-sidebar-bg-start) 0%, var(--user-sidebar-bg-end) 100%) !important;
+}}
+[data-testid="stSidebar"][aria-expanded="false"] {{
+  min-width: 0 !important;
+  max-width: 0 !important;
+  width: 0 !important;
+  overflow: hidden !important;
+}}
+/* Streamlit標準のサイドバー再表示ボタン。独自ボタンは使わず、標準ボタンだけを左上に寄せます。 */
+[data-testid="collapsedControl"] {{
+  position: fixed !important;
+  left: 16px !important;
+  top: 16px !important;
+  z-index: 1000001 !important;
+  transform: none !important;
 }}
 [data-testid="stSidebar"] * {{color: var(--user-sidebar-text) !important;}}
 [data-testid="stSidebar"] small,
@@ -251,20 +267,27 @@ def apply_user_ui_settings(*, st, components, ui_theme: dict, ui_layout: dict) -
   background: var(--user-card-bg) !important;
   border-color: var(--user-card-border) !important;
 }}
+/* 左メニューと中央画面の境界ドラッグバー。
+   重要：独自の「>>」ボタンは作らず、開閉は Streamlit 標準ボタンに任せます。
+   ドラッグバーは stSidebar の子要素に置くため、左メニューを閉じると一緒に消えます。 */
+[data-testid="stSidebar"]:not([aria-expanded="false"]) {{
+  position: relative !important;
+  overflow: visible !important;
+}}
 #oai-sidebar-resizer {{
-  position: fixed;
-  left: calc(var(--user-sidebar-width) - 7px);
-  top: 0;
-  bottom: 0;
-  width: 18px;
-  z-index: 1000000;
-  cursor: col-resize;
-  background: transparent;
-  opacity: 1;
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-  pointer-events: auto;
+  position: absolute !important;
+  right: -9px !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  width: 18px !important;
+  z-index: 1000000 !important;
+  cursor: col-resize !important;
+  background: transparent !important;
+  opacity: 1 !important;
+  touch-action: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  pointer-events: auto !important;
 }}
 #oai-sidebar-resizer::after {{
   content: "";
@@ -284,7 +307,11 @@ def apply_user_ui_settings(*, st, components, ui_theme: dict, ui_layout: dict) -
   left: 6px;
   filter: brightness(1.05);
 }}
-#oai-main-resizer {{
+[data-testid="stSidebar"][aria-expanded="false"] #oai-sidebar-resizer,
+#oai-main-resizer,
+#oai-sidebar-reopen-button,
+.oai-sidebar-reopen-button,
+.oai-native-sidebar-open-fake {{
   display: none !important;
   opacity: 0 !important;
   pointer-events: none !important;
@@ -298,90 +325,190 @@ def apply_user_ui_settings(*, st, components, ui_theme: dict, ui_layout: dict) -
     )
 
     components.html(
-        f"""
+        """
 <script>
-(function() {{
-  const doc = window.parent.document;
+(function() {
+  const win = window.parent || window;
+  const doc = win.document;
   const root = doc.documentElement;
-  const storage = window.parent.localStorage || window.localStorage;
+  const storage = win.localStorage || window.localStorage;
   const sidebarKey = 'oai_sidebar_width';
-  const mainKey = 'oai_main_max_width';
+  const defaultSidebar = __DEFAULT_SIDEBAR_WIDTH__;
   const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
-  const defaults = {{ sidebar: {int(ui_layout['sidebar_width'])}, main: {int(ui_layout['main_max_width'])} }};
 
-  const applyStored = () => {{
-    const sw = parseInt(storage.getItem(sidebarKey) || String(defaults.sidebar), 10);
-    const mw = parseInt(storage.getItem(mainKey) || String(defaults.main), 10);
-    if (!Number.isNaN(sw)) root.style.setProperty('--user-sidebar-width', clamp(sw, 240, 620) + 'px');
-    if (!Number.isNaN(mw)) root.style.setProperty('--user-main-max-width', clamp(mw, 760, 2000) + 'px');
-  }};
+  // 過去版の監視処理を停止。今回は setInterval / MutationObserver は使いません。
+  try {
+    if (win.__oaiSidebarCollapseObserver) {
+      win.__oaiSidebarCollapseObserver.disconnect();
+      win.__oaiSidebarCollapseObserver = null;
+    }
+  } catch (e) {}
+  try {
+    if (win.__oaiSidebarCollapseSyncTimer) {
+      win.clearInterval(win.__oaiSidebarCollapseSyncTimer);
+      win.__oaiSidebarCollapseSyncTimer = null;
+    }
+  } catch (e) {}
 
-  const ensureBar = (id, title) => {{
-    let el = doc.getElementById(id);
-    if (!el) {{
-      el = doc.createElement('div');
-      el.id = id;
-      el.title = title;
-      doc.body.appendChild(el);
-    }}
-    return el;
-  }};
+  // 前回実行分のドラッグイベントだけを解除。
+  try {
+    if (typeof win.__oaiSidebarResizeCleanup === 'function') {
+      win.__oaiSidebarResizeCleanup();
+    }
+  } catch (e) {}
 
-  const sidebarBar = ensureBar('oai-sidebar-resizer', '左右ドラッグで管理者画面幅を変更');
-  storage.removeItem(mainKey);
-  root.style.removeProperty('--user-main-max-width');
+  // 初期表示は必ず左メニューを開く。
+  // Streamlitはブラウザ側にサイドバーの開閉状態が残ることがあるため、
+  // set_page_config(initial_sidebar_state='expanded') に加えて、初回ロード時だけ標準の「>>」を一度押します。
+  // 連続監視は使わず、数回だけ再試行するので応答停止の原因になりません。
+  const ensureInitialSidebarExpanded = () => {
+    if (win.__oaiInitialSidebarExpandedApplied || win.__oaiInitialSidebarExpandedScheduled) return;
+    win.__oaiInitialSidebarExpandedScheduled = true;
 
-  const removeOldMainResizer = () => {{
-    const oldMainBar = doc.getElementById('oai-main-resizer');
-    if (oldMainBar) oldMainBar.remove();
-  }};
-  removeOldMainResizer();
-  setTimeout(removeOldMainResizer, 50);
-  setTimeout(removeOldMainResizer, 250);
-  applyStored();
+    let tries = 0;
+    const run = () => {
+      tries += 1;
+      const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+      const collapsedControl = doc.querySelector('[data-testid="collapsedControl"] button, [data-testid="collapsedControl"]');
+      const isCollapsed = !!sidebar && sidebar.getAttribute('aria-expanded') === 'false';
 
-  let drag = false;
+      if (isCollapsed && collapsedControl) {
+        collapsedControl.click();
+        win.__oaiInitialSidebarExpandedApplied = true;
+        return;
+      }
 
-  const startSidebarDrag = (e) => {{
-    drag = true;
+      if (tries < 5 && !win.__oaiInitialSidebarExpandedApplied) {
+        win.setTimeout(run, tries === 1 ? 120 : 260);
+      } else {
+        win.__oaiInitialSidebarExpandedApplied = true;
+      }
+    };
+
+    win.setTimeout(run, 80);
+  };
+
+  ensureInitialSidebarExpanded();
+
+  // 旧独自「>>」ボタンと旧メイン幅リサイズバーは使用しない。
+  try {
+    ['oai-main-resizer', 'oai-sidebar-reopen-button'].forEach((id) => {
+      const el = doc.getElementById(id);
+      if (el) el.remove();
+    });
+  } catch (e) {}
+
+  // 旧バージョンで標準の >> ボタンに付けた強制スタイルを戻します。
+  try {
+    doc.querySelectorAll('.oai-native-sidebar-open').forEach((el) => {
+      el.classList.remove('oai-native-sidebar-open');
+      ['left','top','position','z-index','transform','display','opacity','pointer-events'].forEach((prop) => {
+        el.style.removeProperty(prop);
+      });
+    });
+  } catch (e) {}
+
+  const applyStoredSidebarWidth = () => {
+    let stored = null;
+    try { stored = parseInt(storage.getItem(sidebarKey) || '', 10); } catch (e) {}
+    const val = Number.isFinite(stored) ? clamp(stored, 240, 620) : defaultSidebar;
+    root.style.setProperty('--user-sidebar-width', val + 'px');
+  };
+
+  const attachResizer = () => {
+    const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+    if (!sidebar) return null;
+
+    let bar = doc.getElementById('oai-sidebar-resizer');
+    if (!bar) {
+      bar = doc.createElement('div');
+      bar.id = 'oai-sidebar-resizer';
+      bar.title = '左右ドラッグで左メニュー幅を変更 / ダブルクリックで初期幅に戻す';
+    }
+    // body ではなく sidebar の子要素にすることで、閉じた時に残らないようにする。
+    if (bar.parentElement !== sidebar) sidebar.appendChild(bar);
+    return bar;
+  };
+
+  applyStoredSidebarWidth();
+  let bar = null;
+
+  let dragging = false;
+
+  const startDrag = (e) => {
+    dragging = true;
+    doc.body.style.cursor = 'col-resize';
+    doc.body.style.userSelect = 'none';
     e.preventDefault();
     e.stopPropagation();
-  }};
+  };
 
-  const onMove = (e) => {{
-    if (!drag) return;
-    const clientX = ('touches' in e && e.touches && e.touches.length) ? e.touches[0].clientX : e.clientX;
+  const onMove = (e) => {
+    if (!dragging) return;
+    const clientX = (e.touches && e.touches.length) ? e.touches[0].clientX : e.clientX;
     const val = clamp(clientX, 240, 620);
     root.style.setProperty('--user-sidebar-width', val + 'px');
-    storage.setItem(sidebarKey, String(val));
+    try { storage.setItem(sidebarKey, String(val)); } catch (err) {}
     e.preventDefault();
-  }};
+  };
 
-  const stopDrag = () => {{ drag = false; }};
+  const stopDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    doc.body.style.cursor = '';
+    doc.body.style.userSelect = '';
+  };
 
-  const resetSidebarWidth = (e) => {{
+  const resetWidth = (e) => {
     e.preventDefault();
-    storage.removeItem(sidebarKey);
-    root.style.setProperty('--user-sidebar-width', defaults.sidebar + 'px');
-  }};
+    try { storage.removeItem(sidebarKey); } catch (err) {}
+    root.style.setProperty('--user-sidebar-width', defaultSidebar + 'px');
+  };
 
-  sidebarBar.onmousedown = startSidebarDrag;
-  sidebarBar.ontouchstart = startSidebarDrag;
-  sidebarBar.ondblclick = resetSidebarWidth;
+  const bindResizer = () => {
+    const activeBar = attachResizer();
+    if (activeBar) {
+      activeBar.onmousedown = startDrag;
+      activeBar.ontouchstart = startDrag;
+      activeBar.ondblclick = resetWidth;
+    }
+    return activeBar;
+  };
 
-  doc.removeEventListener('mousemove', onMove);
-  doc.removeEventListener('mouseup', stopDrag);
-  doc.removeEventListener('touchmove', onMove);
-  doc.removeEventListener('touchend', stopDrag);
-  doc.addEventListener('mousemove', onMove, {{ passive: false }});
+  bar = bindResizer();
+  setTimeout(bindResizer, 120);
+  setTimeout(bindResizer, 500);
+
+  doc.addEventListener('mousemove', onMove, { passive: false });
   doc.addEventListener('mouseup', stopDrag);
-  doc.addEventListener('touchmove', onMove, {{ passive: false }});
+  doc.addEventListener('mouseleave', stopDrag);
+  doc.addEventListener('touchmove', onMove, { passive: false });
   doc.addEventListener('touchend', stopDrag);
 
-  setTimeout(applyStored, 50);
-}})();
+  win.__oaiSidebarResizeCleanup = function() {
+    try { doc.removeEventListener('mousemove', onMove); } catch (e) {}
+    try { doc.removeEventListener('mouseup', stopDrag); } catch (e) {}
+    try { doc.removeEventListener('mouseleave', stopDrag); } catch (e) {}
+    try { doc.removeEventListener('touchmove', onMove); } catch (e) {}
+    try { doc.removeEventListener('touchend', stopDrag); } catch (e) {}
+    try {
+      const b = doc.getElementById('oai-sidebar-resizer');
+      if (b) {
+        b.onmousedown = null;
+        b.ontouchstart = null;
+        b.ondblclick = null;
+      }
+    } catch (e) {}
+  };
+
+  try {
+    root.removeAttribute('data-oai-sidebar-collapsed');
+    root.style.removeProperty('--user-main-max-width');
+    storage.removeItem('oai_main_max_width');
+  } catch (e) {}
+})();
 </script>
-""",
+""".replace("__DEFAULT_SIDEBAR_WIDTH__", str(int(ui_layout["sidebar_width"]))),
         height=0,
         width=0,
     )
