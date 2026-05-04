@@ -18,7 +18,10 @@ ADMIN_COMPLETE_TOOLS_KEYS = [
     "build_document_rag_index",
     "get_document_rag_manifest",
     "clear_document_rag",
+    "list_document_rag_documents",
+    "delete_document_rag_document",
     "supported_doc_rag_extensions",
+    "get_current_admin_name",
     "generate_manual_faq_candidates",
     "supported_manual_faq_extensions",
 ]
@@ -79,6 +82,7 @@ MAIN_SCREEN_LAYOUT_KEYS = [
     "build_suggest_answer_for_runtime",
     "build_suggest_answer_panel",
     "_fastlane_direct_answer",
+    "_top_hit_is_ambiguous",
     "build_prompt",
     "llm_answer_cached",
     "log_interaction",

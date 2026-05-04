@@ -24,6 +24,7 @@ def process_user_query(
     log_nohit,
     build_suggest_answer,
     fastlane_direct_answer,
+    top_hit_is_ambiguous=None,
     build_prompt,
     llm_answer_cached,
     log_interaction,
@@ -119,9 +120,19 @@ def process_user_query(
         faq_auto_ok = best_score >= answer_threshold
         doc_auto_ok = bool(doc_hits) and doc_best_score >= doc_threshold
         prefer_doc = doc_auto_ok and (not faq_auto_ok or doc_best_score >= (float(best_score) + doc_compare_margin))
+        ambiguous_auto = False
+        if faq_auto_ok and callable(top_hit_is_ambiguous):
+            try:
+                # 高スコアでも候補差が小さい、または個別語が合っていない場合は、
+                # 嘘の自動回答を避けて「もしかしてこれ？」に回す。
+                ambiguous_auto = bool(top_hit_is_ambiguous(
+                    user_q, hits, answer_threshold=float(answer_threshold), search_cfg=search_cfg
+                ))
+            except Exception:
+                ambiguous_auto = False
 
         if hits:
-            faq_label = "FAQ一致度（採用）" if (faq_auto_ok and not prefer_doc) else "FAQ一致度（参考候補）"
+            faq_label = "FAQ一致度（採用）" if (faq_auto_ok and not prefer_doc and not ambiguous_auto) else "FAQ一致度（参考候補）"
             render_match_bar(best_score, label=faq_label)
         if doc_hits:
             doc_label = "ドキュメント一致度（採用）" if prefer_doc else "ドキュメント一致度（参考候補）"
@@ -134,7 +145,7 @@ def process_user_query(
             was_nohit = False
             was_suggest = False
             used_doc_rag = True
-        elif faq_auto_ok:
+        elif faq_auto_ok and not ambiguous_auto:
             used_hits = hits
             answer_format = get_row_answer_format(hits[0][0]) if hits else "markdown"
             was_nohit = False
@@ -172,6 +183,14 @@ def process_user_query(
             was_nohit = False
             was_suggest = False
             used_doc_rag = True
+        elif ambiguous_auto:
+            maybe_count = max(1, int(search_cfg.get("maybe_candidate_count", 3)))
+            used_hits = hits[:maybe_count]
+            suggestion_candidates = used_hits
+            answer = build_suggest_answer(user_q, used_hits)
+            answer_format = get_row_answer_format(used_hits[0][0]) if used_hits else "markdown"
+            was_nohit = False
+            was_suggest = True
         elif best_score < suggest_threshold:
             maybe_threshold = float(search_cfg.get("maybe_candidate_threshold", 0.03))
             maybe_count = max(1, int(search_cfg.get("maybe_candidate_count", 3)))

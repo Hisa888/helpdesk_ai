@@ -23,7 +23,10 @@ def render_admin_complete_tools(
     build_document_rag_index=None,
     get_document_rag_manifest=None,
     clear_document_rag=None,
+    list_document_rag_documents=None,
+    delete_document_rag_document=None,
     supported_doc_rag_extensions=None,
+    get_current_admin_name=None,
     generate_manual_faq_candidates=None,
     supported_manual_faq_extensions=None,
 ) -> None:
@@ -44,7 +47,10 @@ def render_admin_complete_tools(
         "build_document_rag_index": build_document_rag_index,
         "get_document_rag_manifest": get_document_rag_manifest,
         "clear_document_rag": clear_document_rag,
+        "list_document_rag_documents": list_document_rag_documents,
+        "delete_document_rag_document": delete_document_rag_document,
         "supported_doc_rag_extensions": supported_doc_rag_extensions,
+        "get_current_admin_name": get_current_admin_name,
         "generate_manual_faq_candidates": generate_manual_faq_candidates,
         "supported_manual_faq_extensions": supported_manual_faq_extensions,
     })

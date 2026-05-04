@@ -79,6 +79,19 @@ def create_faq_index_runtime(
             parts.append(_repeat_weighted_norm(str(row.get(field, "")), weights.get(field, 1.0)))
         return " / ".join([p for p in parts if p]).strip()
 
+    def _split_rule_terms(value) -> set[str]:
+        import re
+        text = str(value or "").strip()
+        if not text:
+            return set()
+        text = re.sub(r"[\r\n、，,;；|｜/／]+", " ", text)
+        terms = set()
+        for part in text.split():
+            n = normalize_search_text(part)
+            if n:
+                terms.add(n)
+        return terms
+
     @st.cache_resource
     def _load_sentence_transformer_model():
         if not SENTENCE_TRANSFORMERS_AVAILABLE or SentenceTransformer is None:
@@ -132,7 +145,11 @@ def create_faq_index_runtime(
             return _empty_index()
 
         df = df.copy()
-        for col in ["question", "answer", "intent", "keywords", "category", "answer_format"]:
+        for col in [
+            "question", "answer", "intent", "keywords", "category", "answer_format",
+            "required_keywords", "exclude_keywords", "ambiguity_keywords",
+            "prefer_candidate", "auto_answer_allowed",
+        ]:
             if col not in df.columns:
                 df[col] = "markdown" if col == "answer_format" else ""
             df[col] = df[col].fillna("").astype(str)
@@ -150,6 +167,9 @@ def create_faq_index_runtime(
         df["search_text_norm"] = df.apply(_weighted_search_text_norm, axis=1).astype(str)
         df["search_tokens"] = df["search_text_norm"].apply(extract_search_tokens)
         df["search_concepts"] = df["search_text_norm"].apply(extract_concepts)
+        df["required_terms_norm"] = df["required_keywords"].apply(_split_rule_terms) if "required_keywords" in df.columns else [set() for _ in range(len(df))]
+        df["exclude_terms_norm"] = df["exclude_keywords"].apply(_split_rule_terms) if "exclude_keywords" in df.columns else [set() for _ in range(len(df))]
+        df["ambiguity_terms_norm"] = df["ambiguity_keywords"].apply(_split_rule_terms) if "ambiguity_keywords" in df.columns else [set() for _ in range(len(df))]
 
         try:
             word_vectorizer = TfidfVectorizer(ngram_range=(1, 2))
@@ -329,21 +349,28 @@ def create_faq_index_runtime(
         password_rows = []
         rule_rows = {rule.get("name", f"rule_{i}"): [] for i, rule in enumerate(FASTLANE_INTENT_RULES)}
 
+        normalized_rule_words = {}
+        for i, rule in enumerate(FASTLANE_INTENT_RULES):
+            rule_name = rule.get("name", f"rule_{i}")
+            normalized_rule_words[rule_name] = [normalize_search_text(w) for w in rule.get("faq_any", []) if w]
+
         for idx, row in local_df.iterrows():
             qn = str(row.get("question_norm", "")).strip()
             if qn:
                 exact.setdefault(qn, []).append(int(idx))
-            q_text = normalize_search_text(str(row.get("question", "")))
-            a_text = normalize_search_text(str(row.get("answer", "")))
-            i_text = normalize_search_text(str(row.get("intent", "")))
-            k_text = normalize_search_text(str(row.get("keywords", "")))
-            c_text = normalize_search_text(str(row.get("category", "")))
+            # すでに作成済みの正規化列を使う。毎回answer全文を正規化すると、
+            # FAQが1000件を超える環境で検索が極端に遅くなる。
+            q_text = str(row.get("question_norm", ""))
+            a_text = str(row.get("answer_norm", ""))
+            i_text = str(row.get("intent_norm", ""))
+            k_text = str(row.get("keywords_norm", ""))
+            c_text = str(row.get("category_norm", ""))
             whole = f"{q_text} {i_text} {k_text} {c_text} {a_text}"
             if any(w in whole for w in ["パスワード", "password", "pw", "リセット", "再設定", "初期化"]):
                 password_rows.append(int(idx))
             for i, rule in enumerate(FASTLANE_INTENT_RULES):
                 rule_name = rule.get("name", f"rule_{i}")
-                faq_words = [normalize_search_text(w) for w in rule.get("faq_any", []) if w]
+                faq_words = normalized_rule_words.get(rule_name, [])
                 if any(w and w in whole for w in faq_words):
                     rule_rows.setdefault(rule_name, []).append(int(idx))
 

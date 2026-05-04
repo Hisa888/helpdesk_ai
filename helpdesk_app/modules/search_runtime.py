@@ -35,8 +35,13 @@ def create_search_runtime(
         s = s.translate(FULLWIDTH_TRANS)
         for pattern, repl in CANONICAL_PATTERNS:
             s = re.sub(pattern, repl, s)
+        # 「〜するための」「どれですか」などの質問文の飾りは、検索ノイズになりやすいので落とす。
+        # 例: 「システム導入するための申請書はどれですか？」→「システム導入 申請書 書式」
+        s = re.sub(r"(してください|お願いします|教えてください|教えて|ですか|でしょうか|ますか)", " ", s)
+        s = re.sub(r"(するための|するため|のための|のため)", " ", s)
+        s = re.sub(r"(どれ|どの|どちら|どれを|どのような|なに|何)", " ", s)
         s = re.sub(r"([^a-z0-9])pc([^a-z0-9])", r"\1 pc \2", f" {s} ")
-        s = re.sub(r"[\/／・,、。．・:：;；\-ー_（）()\[\]{}『』「」\"'`]+", " ", s)
+        s = re.sub(r"[\/／・,、。．・:：;；\-ー_（）()\[\]{}『』「」\"'`？?！!]+", " ", s)
         s = re.sub(r"\s+", " ", s).strip()
         return s
 
@@ -44,6 +49,10 @@ def create_search_runtime(
         s = normalize_search_text(text)
         if not s:
             return set()
+        # 検索安全性には先頭の質問/意図/キーワードが重要。長文回答まで全て
+        # トークン化すると1000件超FAQで遅くなるため上限を設ける。
+        if len(s) > 4000:
+            s = s[:4000]
         tokens = set()
         for part in s.split():
             part = part.strip()
@@ -51,8 +60,25 @@ def create_search_runtime(
                 tokens.add(part)
         for tok in re.findall(r"[a-z0-9]+|[぀-ヿ一-鿿]{2,}", s):
             tokens.add(tok)
-        split_hints = ["できない", "つながらない", "起動しない", "ログイン", "パスワード", "電源", "ディスプレイ", "モニター", "画面", "映らない", "印刷", "メール", "アカウント", "vpn", "wifi", "アプリ", "ソフト", "インストール", "導入", "申請"]
-        for tok in list(tokens):
+        split_hints = [
+            "できない", "つながらない", "起動しない", "ログイン", "パスワード", "電源",
+            "ロック", "ロックされた", "アカウントロック", "ロック解除",
+            "ディスプレイ", "モニター", "画面", "映らない", "印刷", "メール", "アカウント",
+            "vpn", "wifi", "アプリ", "ソフト", "インストール", "導入", "申請",
+            "申請書", "書式", "システム導入", "導入申請", "外部システム", "新規アプリケーション",
+            "トライアル", "試用", "検証", "権限付与", "アクセス許可",
+            # 申請書・書式の個別名称。これが無いと「書式」「申請書」だけが強くなり、
+            # 別の申請書FAQを誤採用しやすくなる。
+            "起案書", "念書", "承諾書", "管理簿", "アクセスログ", "ログ確認管理簿",
+            "テレワーク", "テレワーク勤務", "テレワーク機器受領書",
+            "情報システム責任者", "情報システム権限者", "受諾書",
+            "セキュリティチェックシート", "顧客指定システム",
+            "マイナンバー室", "サーバルーム", "サイトアクセス許可",
+        ]
+        for phrase in split_hints:
+            if phrase and phrase in s:
+                tokens.add(phrase)
+        for tok in list(tokens)[:200]:
             for hint in split_hints:
                 if hint in tok and tok != hint:
                     tokens.add(hint)
@@ -84,6 +110,303 @@ def create_search_runtime(
         "category": 1.0,
     }
 
+    # 「申請書」「書式」のような汎用語だけで自動回答すると誤回答になりやすい。
+    # 重要なのは「起案書」「サイトアクセス許可」「システム導入」などの個別業務語なので、
+    # その語が候補FAQに入っているかを強く見ます。
+    GENERIC_QUERY_TERMS = {
+        "申請", "申請書", "書式", "資料", "書類", "ファイル", "テンプレート",
+        "どれ", "どの", "どこ", "あります", "ありますか", "ある", "教えて",
+        "方法", "手順", "使用", "利用", "使う", "使い", "確認", "ため",
+        "あり", "ある", "は", "の", "を", "に", "で", "と", "から", "まで",
+    }
+
+    FORM_SPECIFIC_TERMS = [
+        "システム導入", "外部システム", "新規アプリケーション", "導入申請",
+        "サイトアクセス許可", "url許可", "webアクセス", "アクセス許可",
+        "起案書", "念書", "承諾書", "管理簿", "it資産管理表",
+        "アクセスログ", "ログ確認管理簿",
+        "テレワーク勤務許可申請書", "テレワーク機器受領書", "テレワーク",
+        "情報システム責任者", "情報システム権限者", "受諾書",
+        "セキュリティチェックシート", "顧客指定システム",
+        "マイナンバー室", "サーバルーム", "アプリインストール",
+        "機器貸与", "tel", "回線", "回線機器",
+    ]
+
+    # 同じ「申請書」「書式」でも業務語が違うと別FAQです。
+    # ここにある語は、TF-IDFのスコアより優先して「合っている/違う」を判断します。
+    BUSINESS_TERM_ALIASES = {
+        "起案書": ["起案書", "起案", "稟議", "りんぎ"],
+        "念書": ["念書"],
+        "承諾書": ["承諾書", "同意書"],
+        "システム導入": ["システム導入", "外部システム", "新規アプリケーション", "新規アプリ", "導入申請"],
+        "サイトアクセス許可": ["サイトアクセス許可", "url許可", "webアクセス", "アクセス許可", "サイト閲覧", "ブロック解除", "ホワイトリスト"],
+        "アプリインストール": ["アプリインストール", "ソフトインストール", "インストール依頼", "ソフト追加", "アプリ追加"],
+        "アカウント権限": ["アカウント権限", "権限付与", "権限設定", "権限解除", "id作成", "id削除", "アクセス権"],
+        "管理者権限": ["管理者権限", "管理者権限付与"],
+        "機器貸与": ["機器貸与", "貸与", "貸出", "pc貸与", "端末貸与"],
+        "回線機器": ["回線", "回線機器", "ネットワーク機器", "ルーター", "スイッチ"],
+        "pc設置": ["pc/tel", "pc設置", "pc移動", "pc撤去", "電話", "電話機", "tel"],
+        "セキュリティチェックシート": ["セキュリティチェックシート", "チェックシート"],
+        "顧客指定システム": ["顧客指定システム", "顧客システム", "指定システム"],
+        "情報システム責任者": ["情報システム責任者", "責任者指名"],
+        "情報システム権限者": ["情報システム権限者", "権限者指名", "受諾書"],
+        "アクセスログ": ["アクセスログ", "ログ確認管理簿", "ログ台帳"],
+        "テレワーク": ["テレワーク", "在宅勤務", "勤務許可", "機器受領"],
+        "マイナンバー室": ["マイナンバー室", "個人番号室"],
+        "サーバルーム": ["サーバルーム", "サーバ室"],
+        "ロック": ["ロック", "ロックされた", "アカウントロック", "ロック解除"],
+        "bitlocker": ["bitlocker", "回復キー", "ビットロッカー"],
+    }
+
+    BUSINESS_TERM_ALIASES_NORM = {
+        normalize_search_text(canonical): [normalize_search_text(a) for a in aliases if normalize_search_text(a)]
+        for canonical, aliases in BUSINESS_TERM_ALIASES.items()
+    }
+
+    LOW_VALUE_SPECIFIC_TERMS = {"pc", "パソコン", "端末", "windows", "tel", "電話", "ロックされた"}
+
+    FALSE_WORDS = {"false", "0", "no", "n", "off", "ng", "不可", "禁止", "無効", "しない", "いいえ"}
+    TRUE_WORDS = {"true", "1", "yes", "y", "on", "ok", "可", "有効", "する", "はい"}
+
+    def _safe_bool_text(value, default: bool = False) -> bool:
+        s = str(value or "").strip().lower()
+        if not s:
+            return default
+        if s in TRUE_WORDS:
+            return True
+        if s in FALSE_WORDS:
+            return False
+        return default
+
+    def _split_rule_terms(value) -> set[str]:
+        text = str(value or "").strip()
+        if not text:
+            return set()
+        # Excelで入力しやすい区切りを許可する。
+        text = re.sub(r"[\r\n、，,;；|｜/／]+", " ", text)
+        terms = set()
+        for part in text.split():
+            n = normalize_search_text(part)
+            if n:
+                terms.add(n)
+        return terms
+
+    def _row_full_norm(row) -> str:
+        return " ".join([
+            str(row.get("question_norm", "")),
+            str(row.get("intent_norm", "")),
+            str(row.get("keywords_norm", "")),
+            str(row.get("category_norm", "")),
+            str(row.get("answer_norm", "")),
+            normalize_search_text(str(row.get("required_keywords", ""))),
+            normalize_search_text(str(row.get("exclude_keywords", ""))),
+            normalize_search_text(str(row.get("ambiguity_keywords", ""))),
+        ]).strip()
+
+    def _business_terms_in_text(text: str) -> set[str]:
+        s = normalize_search_text(text)
+        found: set[str] = set()
+        if not s:
+            return found
+        for canonical_norm, aliases_norm in BUSINESS_TERM_ALIASES_NORM.items():
+            if any(alias and alias in s for alias in aliases_norm):
+                found.add(canonical_norm)
+        return found
+
+    def extract_specific_search_terms(text: str) -> set[str]:
+        """検索の決め手になる個別語を抽出する。
+
+        例: 「起案書の書式はありますか？」 -> {"起案書"}
+            「サイトアクセス許可の申請書はどれ？」 -> {"サイトアクセス許可", "アクセス許可"}
+
+        「申請書」「書式」だけでは汎用語なので、自動回答の根拠にはしない。
+        """
+        s = normalize_search_text(text)
+        if not s:
+            return set()
+
+        terms: set[str] = set()
+        for term in FORM_SPECIFIC_TERMS:
+            nt = normalize_search_text(term)
+            if nt and nt in s:
+                terms.add(nt)
+
+        # 正規表現で拾える語も候補化。ただし汎用語・短すぎる語は除外。
+        raw_tokens = set()
+        for part in s.split():
+            if part:
+                raw_tokens.add(part.strip())
+        for tok in re.findall(r"[a-z0-9]+|[぀-ヿ一-鿿]{2,}", s):
+            raw_tokens.add(tok.strip())
+
+        generic = {normalize_search_text(x) for x in GENERIC_QUERY_TERMS}
+        for tok in raw_tokens:
+            if not tok or tok in generic:
+                continue
+            # 「起案書の書式はあり」のような助詞込みの長い自然文を個別語にしてしまうと、
+            # 正しいFAQまで不一致扱いになるため、業務語辞書で拾えない短い固有語だけを採用する。
+            if re.search(r"(です|ます|ください|どれ|どこ|あります|あり|の|は|を|に|で)", tok) and not re.search(r"[a-z0-9]", tok):
+                continue
+            if len(tok) >= 2 and len(tok) <= 12:
+                terms.add(tok)
+
+        # 業務語辞書で拾えたものを最優先で返す。
+        terms.update(_business_terms_in_text(s))
+        return {t for t in terms if t and t not in generic and t not in LOW_VALUE_SPECIFIC_TERMS}
+
+    def _specific_term_bonus(query_norm: str, faq_norm_all: str, question_norm: str = "") -> float:
+        terms = extract_specific_search_terms(query_norm)
+        if not terms:
+            return 0.0
+        matched = [t for t in terms if t and t in faq_norm_all]
+        score = 0.0
+        if matched:
+            # 個別語が一致したFAQを強く優先する。
+            score += 0.34 * len(matched)
+            if any(t in question_norm for t in matched):
+                score += 0.28
+            # 「起案書」＋「書式/資料/申請書」などは、該当FAQがあれば自動回答してよい。
+            if any(g in query_norm for g in ["申請書", "書式", "資料", "書類", "どこ", "どれ"]):
+                score += 0.24
+        else:
+            # 個別語を含む質問なのに候補側に無い場合、汎用的な申請書FAQの誤回答を抑える。
+            if any(g in faq_norm_all for g in ["申請書", "書式", "資料"]):
+                score -= 0.30
+        return float(score)
+
+    def _safety_adjustment(query_norm: str, row, search_cfg: dict | None = None) -> tuple[float, list[str]]:
+        """業務用語一致・除外条件・行別ルールでスコア補正する。
+
+        戻り値: (加減点, 理由リスト)
+        理由リストは自動回答可否判定にも使う。
+        """
+        cfg = search_cfg or {}
+        row_text = _row_full_norm(row)
+        reasons: list[str] = []
+        adjust = 0.0
+
+        specific_terms = extract_specific_search_terms(query_norm) | _business_terms_in_text(query_norm)
+
+        if specific_terms:
+            matched_specific = set()
+            for t in specific_terms:
+                if not t:
+                    continue
+                if t in row_text:
+                    matched_specific.add(t)
+                    continue
+                # t が「起案書」などの正規業務語なら、その別名がFAQ側にあるかだけ確認する。
+                # FAQ本文全体を毎回正規化すると重くなるため、row_text は既に正規化済みの文字列だけを見る。
+                aliases = BUSINESS_TERM_ALIASES_NORM.get(t, [])
+                if any(a and a in row_text for a in aliases):
+                    matched_specific.add(t)
+            if matched_specific:
+                adjust += float(cfg.get("specific_term_bonus", 0.70)) * min(3, len(matched_specific))
+                reasons.append("specific_match")
+            else:
+                # 質問に「起案書」などの個別語があるのにFAQ側に無い場合は、
+                # 「書式」「申請書」だけ合っていても誤回答になりやすい。
+                adjust -= float(cfg.get("specific_mismatch_penalty", 0.70))
+                reasons.append("specific_mismatch")
+
+        required_terms = set(row.get("required_terms_norm", set()) or set())
+        if not required_terms:
+            required_terms = _split_rule_terms(row.get("required_keywords", ""))
+        if required_terms:
+            if any(t and t in query_norm for t in required_terms):
+                adjust += 0.25
+                reasons.append("required_match")
+            else:
+                adjust -= float(cfg.get("required_keyword_mismatch_penalty", 0.90))
+                reasons.append("required_mismatch")
+
+        exclude_terms = set(row.get("exclude_terms_norm", set()) or set())
+        if not exclude_terms:
+            exclude_terms = _split_rule_terms(row.get("exclude_keywords", ""))
+        if exclude_terms and any(t and t in query_norm for t in exclude_terms):
+            adjust -= float(cfg.get("exclude_keyword_penalty", 1.00))
+            reasons.append("exclude_match")
+
+        ambiguity_terms = set(row.get("ambiguity_terms_norm", set()) or set())
+        if not ambiguity_terms:
+            ambiguity_terms = _split_rule_terms(row.get("ambiguity_keywords", ""))
+        if ambiguity_terms and any(t and t in query_norm for t in ambiguity_terms):
+            reasons.append("ambiguity_rule")
+
+        if _safe_bool_text(row.get("prefer_candidate", ""), default=False):
+            reasons.append("prefer_candidate")
+
+        if str(row.get("auto_answer_allowed", "")).strip() and not _safe_bool_text(row.get("auto_answer_allowed", ""), default=True):
+            reasons.append("auto_disabled")
+
+        return float(adjust), reasons
+
+    def _top_row_allows_auto(query_norm: str, row, search_cfg: dict | None = None) -> tuple[bool, list[str]]:
+        cfg = search_cfg or {}
+        _adj, reasons = _safety_adjustment(query_norm, row, cfg)
+        if any(r in reasons for r in ["specific_mismatch", "required_mismatch", "exclude_match", "ambiguity_rule", "prefer_candidate", "auto_disabled"]):
+            return False, reasons
+        return True, reasons
+
+    def _top_hit_is_ambiguous(query_norm: str, hits, *, answer_threshold: float, search_cfg: dict) -> bool:
+        """高スコアでも自動回答せず「もしかしてこれ？」に回すべきか判定する。"""
+        query_norm = normalize_search_text(query_norm)
+        if not hits:
+            return False
+        try:
+            best_score = float(hits[0][1])
+        except Exception:
+            return False
+        if best_score < float(answer_threshold):
+            return False
+
+        top_row = hits[0][0]
+        top_text = _row_full_norm(top_row)
+
+        # 共通安全検索ガード。
+        # 業務用語不一致・必須語不一致・除外語一致・候補優先・自動回答禁止がある場合は、
+        # 高スコアでも自動回答せず「もしかしてこれ？」に回す。
+        if bool(search_cfg.get("strict_safety_mode", True)):
+            try:
+                allow_auto, _reasons = _top_row_allows_auto(query_norm, top_row, search_cfg)
+                if not allow_auto:
+                    return True
+            except Exception:
+                pass
+
+        q_concepts = extract_concepts(query_norm)
+        # 「パソコンがロックされた」は、画面ロック・Windowsサインイン・AD/M365アカウントロック・BitLockerなど
+        # 意味が分かれるため、十分な確信がない限り自動回答せず候補表示に回す。
+        if "lock" in q_concepts and "pc_device" in q_concepts:
+            account_hint_words = ["アカウント", "ログイン", "サインイン", "ad", "microsoft", "365", "パスワード"]
+            has_account_hint = any(w in query_norm for w in account_hint_words)
+            if not has_account_hint:
+                return True
+            if "lock" not in top_text:
+                return True
+
+        specific_terms = extract_specific_search_terms(query_norm)
+        if specific_terms:
+            top_has_specific = any(t in top_text for t in specific_terms)
+            other_has_specific = False
+            for row, _score in hits[1:5]:
+                row_text = _row_full_norm(row)
+                if any(t in row_text for t in specific_terms):
+                    other_has_specific = True
+                    break
+            if (not top_has_specific) and other_has_specific:
+                return True
+
+        try:
+            gap = best_score - float(hits[1][1]) if len(hits) >= 2 else 1.0
+            min_gap = float(search_cfg.get("auto_answer_min_gap", 0.08))
+            high_conf = float(search_cfg.get("high_confidence_score", 0.82))
+            if best_score < high_conf and gap < min_gap:
+                return True
+        except Exception:
+            pass
+        return False
+
     def _field_weight_settings() -> dict[str, float]:
         cfg = current_search_settings() if callable(current_search_settings) else {}
         out: dict[str, float] = {}
@@ -99,6 +422,10 @@ def create_search_runtime(
         norm = normalize_search_text(text)
         if not norm or weight <= 0:
             return ""
+        # 長すぎる回答本文をそのまま検索テキストへ入れると、
+        # トークン抽出とTF-IDF作成が極端に遅くなるため上限を設ける。
+        if len(norm) > 1800:
+            norm = norm[:1800]
         repeats = max(1, min(12, int(round(weight * 2))))
         return " ".join([norm] * repeats)
 
@@ -123,7 +450,11 @@ def create_search_runtime(
         if df is None or len(df) == 0:
             return pd.DataFrame(columns=["question", "answer", "intent", "keywords", "category", "answer_format"])
         df = df.copy()
-        for col in ["question", "answer", "intent", "keywords", "category", "answer_format"]:
+        for col in [
+            "question", "answer", "intent", "keywords", "category", "answer_format",
+            "required_keywords", "exclude_keywords", "ambiguity_keywords",
+            "prefer_candidate", "auto_answer_allowed",
+        ]:
             if col not in df.columns:
                 df[col] = "markdown" if col == "answer_format" else ""
             df[col] = df[col].fillna("").astype(str)
@@ -137,6 +468,9 @@ def create_search_runtime(
         df["search_text_norm"] = df.apply(_weighted_search_text_norm, axis=1).astype(str)
         df["search_tokens"] = df["search_text_norm"].apply(extract_search_tokens)
         df["search_concepts"] = df["search_text_norm"].apply(extract_concepts)
+        df["required_terms_norm"] = df["required_keywords"].apply(_split_rule_terms) if "required_keywords" in df.columns else [set() for _ in range(len(df))]
+        df["exclude_terms_norm"] = df["exclude_keywords"].apply(_split_rule_terms) if "exclude_keywords" in df.columns else [set() for _ in range(len(df))]
+        df["ambiguity_terms_norm"] = df["ambiguity_keywords"].apply(_split_rule_terms) if "ambiguity_keywords" in df.columns else [set() for _ in range(len(df))]
         return df
 
     faq_index_ctx = create_faq_index_runtime(
@@ -210,6 +544,17 @@ def create_search_runtime(
         if any(k in query_norm for k in ["インストール", "導入", "追加", "申請"]):
             if any(k in faq_norm_all for k in ["インストール", "導入", "追加", "申請"]):
                 score += 0.20
+        if any(k in query_norm for k in ["申請書", "書式"]):
+            if any(k in faq_norm_all for k in ["申請書", "書式"]):
+                score += 0.26
+        if "システム導入" in query_norm and "システム導入" in faq_norm_all:
+            score += 0.34
+        if "システム導入" in query_norm and any(k in faq_norm_all for k in ["外部システム", "新規アプリケーション", "導入申請"]):
+            score += 0.18
+        if "システム導入" in query_norm and not any(k in query_norm for k in ["トライアル", "試用", "検討", "検証", "poc"]):
+            if any(k in faq_norm_all for k in ["トライアル", "試用", "検討", "検証", "poc"]):
+                score -= 0.14
+        score += _specific_term_bonus(query_norm, faq_norm_all, question_norm)
         if any(k in query_norm for k in ["ディスプレイ", "モニター", "モニタ", "画面"]):
             if any(k in faq_norm_all for k in ["ディスプレイ", "モニター", "モニタ", "画面", "外部ディスプレイ"]):
                 score += 0.34
@@ -271,6 +616,23 @@ def create_search_runtime(
                     penalty -= 0.22
                 if "boot" in q_concepts and ({"office_app", "browser_app", "mail_app"} & row_concepts):
                     penalty -= 0.35
+            if "lock" in q_concepts:
+                # 「パソコンがロックされた」で、起動遅延/フリーズ系FAQへ誤爆するのを防ぐ。
+                if "lock" not in row_concepts:
+                    penalty -= 0.55
+                if "lock" in row_concepts:
+                    penalty += 0.18
+                if ("pc_device" in q_concepts) and ("lock" not in row_concepts):
+                    penalty -= 0.25
+                if ({"boot", "office_app", "browser_app", "mail_app", "display"} & row_concepts) and ("lock" not in row_concepts):
+                    penalty -= 0.18
+                if "pc_device" in q_concepts:
+                    mobile_words = ["iphone", "ipad", "android", "スマホ", "ガラホ", "モバイル", "モバイルル", "スマートフォン", "携帯"]
+                    if any(w in row_text for w in mobile_words):
+                        penalty -= 3.00
+                    # PCロックは、Windows/AD/M365アカウントロックの可能性が高いので候補に上げる。
+                    if any(w in row_text for w in ["アカウント", "ad", "windows", "microsoft", "365", "ログイン", "サインイン"]):
+                        penalty += 2.00
             if "boot" in q_concepts and not ({"office_app", "browser_app", "mail_app"} & q_concepts):
                 if {"office_app", "browser_app", "mail_app"} & row_concepts and "pc_device" not in row_concepts:
                     penalty -= 0.18
@@ -279,6 +641,14 @@ def create_search_runtime(
                     penalty -= 0.35
                 elif "display" not in row_concepts:
                     penalty -= 0.12
+            if "system_introduction" in q_concepts:
+                if "system_introduction" not in row_concepts:
+                    penalty -= 0.18
+                if "trial" in row_concepts and "trial" not in q_concepts:
+                    # 「システム導入するための申請書」ではトライアル/検証用を優先しない
+                    penalty -= 0.16
+            if "application_form" in q_concepts and "application_form" not in row_concepts:
+                penalty -= 0.10
             return float(penalty)
         except Exception:
             return 0.0
@@ -296,12 +666,20 @@ def create_search_runtime(
         return packed
 
     def _sparse_tfidf_scores(query_vector, matrix):
-        """TF-IDFはL2正規化済みなので、cosine_similarityより内積の方が軽い。"""
+        """TF-IDFはL2正規化済みなので、cosine_similarityより内積の方が軽い。
+
+        SciPyの疎行列は np.asarray(sparse_matrix) だけでは数値配列にならず、
+        object配列化して後続のargpartitionやmax判定が壊れる環境がある。
+        必ず toarray() で dense な1次元float配列へ変換する。
+        """
         try:
-            return np.asarray(query_vector @ matrix.T).ravel()
+            prod = query_vector @ matrix.T
+            if hasattr(prod, "toarray"):
+                return np.asarray(prod.toarray()).ravel().astype(float)
+            return np.asarray(prod).ravel().astype(float)
         except Exception:
             try:
-                return cosine_similarity(query_vector, matrix).flatten()
+                return np.asarray(cosine_similarity(query_vector, matrix)).flatten().astype(float)
             except Exception:
                 return np.array([], dtype=float)
 
@@ -315,6 +693,21 @@ def create_search_runtime(
             return np.argsort(scores)[::-1]
         idx = np.argpartition(scores, -count)[-count:]
         return idx[np.argsort(scores[idx])[::-1]]
+
+    def _confidence_score(raw_score: float) -> float:
+        """内部補正後スコアを、画面用の0〜0.99の一致度へ単調変換する。
+
+        0.99で単純カットすると上位候補が全部99%に見えてしまうため、
+        0.99を超えた分は90〜99%の範囲に圧縮する。
+        """
+        try:
+            raw = max(0.0, float(raw_score))
+        except Exception:
+            return 0.0
+        if raw <= 0.99:
+            return raw
+        compressed = 0.90 + (0.09 * min(1.0, (raw - 0.99) / 2.5))
+        return float(min(0.99, max(0.0, compressed)))
 
     @st.cache_data(show_spinner=False, ttl=60)
     def _load_candidate_learning_rows(cache_key: str = "candidate_learning"):
@@ -496,6 +889,44 @@ def create_search_runtime(
                         row_text = str(row.get("search_text_norm", ""))
                         if any(w in row_text for w in ["ディスプレイ", "モニター", "モニタ", "画面", "映らない", "表示されない"]):
                             candidate_idxs.add(int(j))
+                if "lock" in q_tmp_concepts:
+                    for j, row in local_df.iterrows():
+                        row_text = " ".join([
+                            str(row.get("question_norm", "")),
+                            str(row.get("intent_norm", "")),
+                            str(row.get("keywords_norm", "")),
+                            str(row.get("category_norm", "")),
+                            str(row.get("answer_norm", "")),
+                            str(row.get("search_text_norm", "")),
+                        ])
+                        if any(w in row_text for w in ["ロック", "ロックされた", "アカウントロック", "ロック解除", "ログイン不可"]):
+                            candidate_idxs.add(int(j))
+                if "application_form" in q_tmp_concepts:
+                    for j, row in local_df.iterrows():
+                        row_text = str(row.get("search_text_norm", ""))
+                        if any(w in row_text for w in ["申請書", "書式", "申請方法"]):
+                            candidate_idxs.add(int(j))
+                if "system_introduction" in q_tmp_concepts:
+                    for j, row in local_df.iterrows():
+                        row_text = str(row.get("search_text_norm", ""))
+                        if any(w in row_text for w in ["システム導入", "外部システム", "新規アプリケーション", "導入申請"]):
+                            candidate_idxs.add(int(j))
+
+                # 「起案書」「念書」「サイトアクセス許可」などの個別語がある場合は、
+                # TF-IDF上位に入っていなくても候補プールへ必ず入れる。
+                specific_terms = extract_specific_search_terms(query_norm)
+                if specific_terms:
+                    for j, row in local_df.iterrows():
+                        row_text = " ".join([
+                            str(row.get("question_norm", "")),
+                            str(row.get("intent_norm", "")),
+                            str(row.get("keywords_norm", "")),
+                            str(row.get("category_norm", "")),
+                            str(row.get("answer_norm", "")),
+                            str(row.get("search_text_norm", "")),
+                        ])
+                        if any(t in row_text for t in specific_terms):
+                            candidate_idxs.add(int(j))
             except Exception:
                 pass
 
@@ -531,11 +962,46 @@ def create_search_runtime(
                         pass
                 if q_concepts:
                     try:
-                        sims[i] += concept_bonus_max * (len(q_concepts & set(concept_values[i])) / max(1, len(q_concepts)))
+                        row_concepts = set(concept_values[i])
+                        sims[i] += concept_bonus_max * (len(q_concepts & row_concepts) / max(1, len(q_concepts)))
                     except Exception:
-                        pass
+                        row_concepts = set()
+                else:
+                    row_concepts = set()
+
+                # 申請書・書式系は、一般的な自然文だとTF-IDFだけでは低スコアになりやすい。
+                # 業務語（システム導入＋申請書）を明示的に後押しする。
+                try:
+                    if any(k in query_norm for k in ["申請書", "書式"]) and any(k in stxt for k in ["申請書", "書式"]):
+                        sims[i] += float(search_cfg.get("application_form_bonus", 0.24))
+                    if "システム導入" in query_norm and "システム導入" in stxt:
+                        sims[i] += float(search_cfg.get("system_intro_bonus", 0.34))
+                    if "system_introduction" in q_concepts and "system_introduction" in row_concepts:
+                        sims[i] += float(search_cfg.get("system_intro_concept_bonus", 0.22))
+                    if "application_form" in q_concepts and "application_form" in row_concepts:
+                        sims[i] += float(search_cfg.get("application_form_concept_bonus", 0.18))
+                    if "lock" in q_concepts and "lock" in row_concepts:
+                        sims[i] += float(search_cfg.get("lock_concept_bonus", 0.34))
+                    if "lock" in q_concepts and "lock" not in row_concepts:
+                        sims[i] -= float(search_cfg.get("lock_mismatch_penalty", 0.45))
+                    if "system_introduction" in q_concepts and "trial" in row_concepts and "trial" not in q_concepts:
+                        sims[i] -= float(search_cfg.get("trial_mismatch_penalty", 0.18))
+
+                    # 個別語一致補正：
+                    # 例「起案書の書式はありますか？」では「書式」より「起案書」を最優先する。
+                    sims[i] += _specific_term_bonus(query_norm, stxt, qn)
+                except Exception:
+                    pass
+
                 if prefix and str(qn).startswith(prefix):
                     sims[i] += prefix_bonus_value
+                try:
+                    # 共通安全検索ガード。
+                    # 業務用語不一致・除外語一致・必須語不一致をスコアに反映する。
+                    safe_adj, _safe_reasons = _safety_adjustment(query_norm, local_df.iloc[i], search_cfg)
+                    sims[i] += safe_adj
+                except Exception:
+                    pass
                 try:
                     sims[i] += _domain_penalty(query_norm, local_df.iloc[i])
                 except Exception:
@@ -565,7 +1031,12 @@ def create_search_runtime(
                     sims[sem_candidate_idxs] = sims[sem_candidate_idxs] + (sem_arr[sem_candidate_idxs] * float(search_cfg.get("semantic_boost", 0.28)))
 
             idxs = _top_indices(sims, top_k)
-            return [(local_df.iloc[int(i)], float(sims[int(i)])) for i in idxs if float(sims[int(i)]) > 0]
+            # 画面表示・ログでは一致度として扱うため、最終スコアは0〜0.99に丸める。
+            return [
+                (local_df.iloc[int(i)], _confidence_score(float(sims[int(i)])))
+                for i in idxs
+                if float(sims[int(i)]) > 0
+            ]
         except Exception:
             return []
 
@@ -656,6 +1127,10 @@ def create_search_runtime(
         _is_fastlane_query_text=_is_fastlane_query_text,
         _score_fast_candidate=_score_fast_candidate,
         _domain_penalty=_domain_penalty,
+        _safety_adjustment=_safety_adjustment,
+        _top_row_allows_auto=_top_row_allows_auto,
+        extract_specific_search_terms=extract_specific_search_terms,
+        _top_hit_is_ambiguous=_top_hit_is_ambiguous,
         try_ultrafast_answer=try_ultrafast_answer,
         retrieve_faq_cached=retrieve_faq_cached,
         retrieve_faq=retrieve_faq,

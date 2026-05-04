@@ -1,6 +1,24 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from helpdesk_app.modules.pdf_panel_utils import resolve_monthly_effect_df
+
+
+PPT_GUIDE_FILENAME = "情シス問い合わせAI操作ガイド.pptx"
+PPT_GUIDE_PATH = Path(__file__).resolve().parents[1] / "assets" / PPT_GUIDE_FILENAME
+PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+
+def _read_bytes_if_exists(path: Path) -> bytes | None:
+    """アプリ同梱資料を安全に読み込む。"""
+    try:
+        if path.exists() and path.is_file():
+            return path.read_bytes()
+    except Exception:
+        return None
+    return None
+
 
 def render_admin_material_pdfs(ns: dict) -> None:
     st = ns["st"]
@@ -9,12 +27,10 @@ def render_admin_material_pdfs(ns: dict) -> None:
     generate_sales_proposal_pdf = ns["generate_sales_proposal_pdf"]
 
     with st.expander("📘 管理者向け資料（PDF）", expanded=False):
-        if not REPORTLAB_AVAILABLE:
-            st.warning("PDF出力には reportlab が必要です。requirements.txt に reportlab を追加してください。")
-            return
+        st.caption("操作説明書・画面付きPPT・提案資料をダウンロードできます。")
 
-        col_a, col_b = st.columns(2)
-        with col_a:
+        # 1. 操作説明書PDF
+        if REPORTLAB_AVAILABLE:
             ops_pdf = generate_ops_manual_pdf()
             st.download_button(
                 "📄 操作説明書PDFをダウンロード",
@@ -23,7 +39,24 @@ def render_admin_material_pdfs(ns: dict) -> None:
                 mime="application/pdf",
                 width="stretch",
             )
-        with col_b:
+        else:
+            st.warning("操作説明書PDF・提案資料PDFの出力には reportlab が必要です。requirements.txt に reportlab を追加してください。")
+
+        # 2. 操作説明書PPT（画面付き）
+        ppt_bytes = _read_bytes_if_exists(PPT_GUIDE_PATH)
+        if ppt_bytes:
+            st.download_button(
+                "📊 操作説明書PPTをダウンロード（画面付き）",
+                data=ppt_bytes,
+                file_name=PPT_GUIDE_FILENAME,
+                mime=PPTX_MIME,
+                width="stretch",
+            )
+        else:
+            st.info("操作説明書PPT（画面付き）が見つかりません。assets フォルダに PPT ファイルを配置してください。")
+
+        # 3. 提案資料PDF
+        if REPORTLAB_AVAILABLE:
             proposal_pdf = generate_sales_proposal_pdf()
             st.download_button(
                 "📑 提案資料PDFをダウンロード",
@@ -32,7 +65,8 @@ def render_admin_material_pdfs(ns: dict) -> None:
                 mime="application/pdf",
                 width="stretch",
             )
-        st.caption("※ どちらもアプリの現状に合わせて自動生成されます（必要に応じて文面はカスタマイズ可能）。")
+
+        st.caption("※ 操作説明書PPT（画面付き）はアプリに同梱した資料をそのままダウンロードします。PDF資料はアプリの現状に合わせて自動生成されます。")
 
 
 

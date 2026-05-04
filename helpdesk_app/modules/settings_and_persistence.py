@@ -411,7 +411,7 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
             "semantic_trigger_min": 0.24,
             "semantic_trigger_max": 0.48,
             "semantic_skip_fastlane": True,
-            "top_k": 3,
+            "top_k": 5,
             "doc_rag_threshold": 0.55,
             "doc_compare_margin": 0.05,
             # FAQ項目別の検索重み。question/intent/keywordsを強め、answer/categoryは補助にする。
@@ -420,6 +420,16 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
             "intent_weight": 2.50,
             "keywords_weight": 2.00,
             "category_weight": 1.00,
+            # 安全検索ガード: 嘘回答を避け、迷う場合は候補表示に回す。
+            "strict_safety_mode": True,
+            "auto_answer_min_gap": 0.10,
+            "high_confidence_score": 0.80,
+            "maybe_candidate_threshold": 0.01,
+            "maybe_candidate_count": 5,
+            "specific_term_bonus": 0.70,
+            "specific_mismatch_penalty": 0.70,
+            "required_keyword_mismatch_penalty": 0.90,
+            "exclude_keyword_penalty": 1.00,
         }
 
     def _sanitize_search_settings(data: dict | None) -> dict:
@@ -460,6 +470,15 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
         intent_weight = _safe_float_range(src.get("intent_weight", base["intent_weight"]), base["intent_weight"], 0.0, 5.0)
         keywords_weight = _safe_float_range(src.get("keywords_weight", base["keywords_weight"]), base["keywords_weight"], 0.0, 5.0)
         category_weight = _safe_float_range(src.get("category_weight", base["category_weight"]), base["category_weight"], 0.0, 5.0)
+        strict_safety_mode = _safe_bool(src.get("strict_safety_mode", base["strict_safety_mode"]), base["strict_safety_mode"])
+        auto_answer_min_gap = _safe_float_range(src.get("auto_answer_min_gap", base["auto_answer_min_gap"]), base["auto_answer_min_gap"], 0.00, 0.50)
+        high_confidence_score = _safe_float_range(src.get("high_confidence_score", base["high_confidence_score"]), base["high_confidence_score"], 0.10, 1.20)
+        maybe_candidate_threshold = _safe_float_range(src.get("maybe_candidate_threshold", base["maybe_candidate_threshold"]), base["maybe_candidate_threshold"], 0.00, 0.50)
+        maybe_candidate_count = int(round(_safe_float_range(src.get("maybe_candidate_count", base["maybe_candidate_count"]), base["maybe_candidate_count"], 1, 10)))
+        specific_term_bonus = _safe_float_range(src.get("specific_term_bonus", base["specific_term_bonus"]), base["specific_term_bonus"], 0.00, 2.00)
+        specific_mismatch_penalty = _safe_float_range(src.get("specific_mismatch_penalty", base["specific_mismatch_penalty"]), base["specific_mismatch_penalty"], 0.00, 2.00)
+        required_keyword_mismatch_penalty = _safe_float_range(src.get("required_keyword_mismatch_penalty", base["required_keyword_mismatch_penalty"]), base["required_keyword_mismatch_penalty"], 0.00, 2.00)
+        exclude_keyword_penalty = _safe_float_range(src.get("exclude_keyword_penalty", base["exclude_keyword_penalty"]), base["exclude_keyword_penalty"], 0.00, 2.00)
         return {
             "answer_threshold": round(answer, 2),
             "suggest_threshold": round(suggest, 2),
@@ -485,6 +504,15 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
             "intent_weight": round(intent_weight, 2),
             "keywords_weight": round(keywords_weight, 2),
             "category_weight": round(category_weight, 2),
+            "strict_safety_mode": strict_safety_mode,
+            "auto_answer_min_gap": round(auto_answer_min_gap, 2),
+            "high_confidence_score": round(high_confidence_score, 2),
+            "maybe_candidate_threshold": round(maybe_candidate_threshold, 2),
+            "maybe_candidate_count": maybe_candidate_count,
+            "specific_term_bonus": round(specific_term_bonus, 2),
+            "specific_mismatch_penalty": round(specific_mismatch_penalty, 2),
+            "required_keyword_mismatch_penalty": round(required_keyword_mismatch_penalty, 2),
+            "exclude_keyword_penalty": round(exclude_keyword_penalty, 2),
         }
 
     def load_search_settings() -> dict:

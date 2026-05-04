@@ -123,6 +123,21 @@ def render_search_settings_panel(
                 semantic_trigger_min = st.slider("意味検索を始める下限スコア", 0.00, 1.20, float(current_cfg["semantic_trigger_min"]), 0.01, key="search_semantic_trigger_min")
                 semantic_trigger_max = st.slider("意味検索を始める上限スコア", max(semantic_trigger_min, 0.00), 1.50, float(max(current_cfg["semantic_trigger_max"], semantic_trigger_min)), 0.01, key="search_semantic_trigger_max")
 
+            st.markdown("##### 安全検索ガード")
+            st.caption("嘘回答を避けるため、業務用語が合わない場合や候補差が小さい場合は自動回答せず『もしかしてこれですか？』に回します。")
+            g1, g2 = st.columns(2)
+            with g1:
+                strict_safety_mode = st.checkbox("安全検索ガードを有効にする", value=bool(current_cfg.get("strict_safety_mode", True)), key="search_strict_safety_mode")
+                auto_answer_min_gap = st.slider("1位と2位の最低差分", 0.00, 0.50, float(current_cfg.get("auto_answer_min_gap", 0.10)), 0.01, key="search_auto_answer_min_gap")
+                high_confidence_score = st.slider("高信頼スコア", 0.10, 1.20, float(current_cfg.get("high_confidence_score", 0.80)), 0.01, key="search_high_confidence_score")
+                maybe_candidate_threshold = st.slider("低スコア候補表示しきい値", 0.00, 0.50, float(current_cfg.get("maybe_candidate_threshold", 0.01)), 0.01, key="search_maybe_candidate_threshold")
+                maybe_candidate_count = st.slider("もしかして候補数", 1, 10, int(current_cfg.get("maybe_candidate_count", 5)), 1, key="search_maybe_candidate_count")
+            with g2:
+                specific_term_bonus = st.slider("業務用語一致ボーナス", 0.00, 2.00, float(current_cfg.get("specific_term_bonus", 0.70)), 0.01, key="search_specific_term_bonus")
+                specific_mismatch_penalty = st.slider("業務用語不一致ペナルティ", 0.00, 2.00, float(current_cfg.get("specific_mismatch_penalty", 0.70)), 0.01, key="search_specific_mismatch_penalty")
+                required_keyword_mismatch_penalty = st.slider("必須キーワード不一致ペナルティ", 0.00, 2.00, float(current_cfg.get("required_keyword_mismatch_penalty", 0.90)), 0.01, key="search_required_keyword_mismatch_penalty")
+                exclude_keyword_penalty = st.slider("除外キーワード一致ペナルティ", 0.00, 2.00, float(current_cfg.get("exclude_keyword_penalty", 1.00)), 0.01, key="search_exclude_keyword_penalty")
+
         col_th1, col_th2 = st.columns(2)
         with col_th1:
             if st.button("💾 検索設定を保存", width="stretch", key="save_search_settings_btn"):
@@ -152,6 +167,15 @@ def render_search_settings_panel(
                         "intent_weight": intent_weight,
                         "keywords_weight": keywords_weight,
                         "category_weight": category_weight,
+                        "strict_safety_mode": strict_safety_mode,
+                        "auto_answer_min_gap": auto_answer_min_gap,
+                        "high_confidence_score": high_confidence_score,
+                        "maybe_candidate_threshold": maybe_candidate_threshold,
+                        "maybe_candidate_count": maybe_candidate_count,
+                        "specific_term_bonus": specific_term_bonus,
+                        "specific_mismatch_penalty": specific_mismatch_penalty,
+                        "required_keyword_mismatch_penalty": required_keyword_mismatch_penalty,
+                        "exclude_keyword_penalty": exclude_keyword_penalty,
                     },
                 )
                 st.session_state.search_threshold = settings["answer_threshold"]

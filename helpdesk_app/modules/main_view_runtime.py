@@ -242,14 +242,57 @@ def render_public_sidebar(
         # 管理者ログイン後、中央の「管理者エリア」内に集約して表示する。
 
 
-def _default_admin_login_id() -> str:
+def _secret_raw(name: str, default=None):
     try:
-        value = st.secrets.get(
-            "ADMIN_LOGIN_ID",
-            st.secrets.get("ADMIN_USER_ID", os.environ.get("ADMIN_LOGIN_ID", os.environ.get("ADMIN_USER_ID", "admin"))),
-        )
+        if name in st.secrets:
+            return st.secrets.get(name, default)
     except Exception:
-        value = os.environ.get("ADMIN_LOGIN_ID", os.environ.get("ADMIN_USER_ID", "admin"))
+        pass
+    return os.environ.get(name, default)
+
+
+def _first_secret(names: list[str], default: str = "") -> str:
+    for name in names:
+        raw = _secret_raw(name, None)
+        if raw is not None and str(raw).strip() != "":
+            return str(raw).strip()
+    return str(default or "").strip()
+
+
+def _clean_token(value) -> str:
+    return str(value or "").strip().strip("'\"").strip()
+
+
+def _first_admin_user_from_users_setting() -> str:
+    raw = _secret_raw("ADMIN_USERS", "")
+    if isinstance(raw, dict) or hasattr(raw, "items"):
+        try:
+            for uid, _pw in raw.items():
+                uid_s = _clean_token(uid)
+                if uid_s:
+                    return uid_s
+        except Exception:
+            return ""
+
+    items = raw if isinstance(raw, (list, tuple, set)) else [raw]
+    for item in items:
+        text = str(item or "")
+        for part in text.replace("\r", "\n").replace(";", ",").replace("\n", ",").split(","):
+            part = _clean_token(part)
+            if ":" in part:
+                uid, _pw = part.split(":", 1)
+                uid_s = _clean_token(uid)
+                if uid_s:
+                    return uid_s
+    return ""
+
+
+def _default_admin_login_id() -> str:
+    # ADMIN_USERS がある場合は、最初のIDをログインID欄の初期値にする。
+    first_user = _first_admin_user_from_users_setting()
+    if first_user:
+        return first_user
+    value = _first_secret(["ADMIN_LOGIN_ID", "ADMIN_USER_ID", "ADMIN_ID", "ADMIN_USERNAME"], "admin")
     return str(value or "admin").strip() or "admin"
 
 
@@ -284,7 +327,7 @@ def render_admin_login_sidebar(*, check_password: Callable[..., bool]) -> None:
                     st.success("ログイン成功")
                     st.rerun()
                 else:
-                    st.error("ログインIDまたはパスワードが違います")
+                    st.error("ログインIDまたはパスワードが違います。Streamlit Cloudの場合は、Settings → Secrets の保存後にアプリを再起動してください。")
         else:
             login_label = st.session_state.get("admin_login_id") or st.session_state.get("admin_display_name") or "管理者"
             st.success(f"ログイン中：{login_label}")

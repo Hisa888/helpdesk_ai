@@ -340,23 +340,70 @@ def create_runtime_services(*, st, requests, root_dir: str | Path = ".") -> Simp
             direct_candidates=direct_candidates,
         )
 
-    def _admin_secret_value(name: str, default: str = "") -> str:
+    def _admin_secret_raw(name: str, default=None):
+        """Streamlit Cloud / ローカル / 環境変数のどれでも管理者設定を読めるようにする。"""
         try:
-            return str(st.secrets.get(name, os.environ.get(name, default)) or default)
+            if name in st.secrets:
+                return st.secrets.get(name, default)
         except Exception:
-            return str(os.environ.get(name, default) or default)
+            pass
+        return os.environ.get(name, default)
+
+    def _admin_secret_value(name: str, default: str = "") -> str:
+        raw = _admin_secret_raw(name, default)
+        if raw is None:
+            return str(default or "")
+        if isinstance(raw, (list, tuple, set)):
+            return ",".join(str(x) for x in raw)
+        return str(raw or default)
+
+    def _first_admin_secret(names: list[str], default: str = "") -> str:
+        for name in names:
+            raw = _admin_secret_raw(name, None)
+            if raw is not None and str(raw).strip() != "":
+                return str(raw).strip()
+        return str(default or "").strip()
+
+    def _clean_admin_token(value) -> str:
+        return str(value or "").strip().strip("'\"").strip()
 
     def _admin_users_map() -> dict[str, str]:
-        """ADMIN_USERS=user1:pass1,user2:pass2 形式にも対応する。"""
-        raw = _admin_secret_value("ADMIN_USERS", "")
+        """
+        複数管理者の設定を柔軟に読む。
+
+        対応形式:
+        1) ADMIN_USERS = "sato:password1,tanaka:password2"
+        2) ADMIN_USERS = ["sato:password1", "tanaka:password2"]
+        3) ADMIN_USERS = {sato="password1", tanaka="password2"}
+        4) [ADMIN_USERS]\n   sato = "password1"
+        """
+        raw = _admin_secret_raw("ADMIN_USERS", "")
         users: dict[str, str] = {}
-        for part in raw.split(","):
-            if ":" not in part:
-                continue
-            uid, pw = part.split(":", 1)
-            uid = uid.strip()
-            if uid:
-                users[uid] = pw.strip()
+
+        def add_pair(uid, pw) -> None:
+            uid_s = _clean_admin_token(uid)
+            pw_s = _clean_admin_token(pw)
+            if uid_s:
+                users[uid_s] = pw_s
+
+        if isinstance(raw, dict) or hasattr(raw, "items"):
+            try:
+                for uid, pw in raw.items():
+                    add_pair(uid, pw)
+            except Exception:
+                pass
+            return users
+
+        items = raw if isinstance(raw, (list, tuple, set)) else [raw]
+        for item in items:
+            text = str(item or "")
+            # 改行・セミコロン区切りも許可する
+            for part in text.replace("\r", "\n").replace(";", ",").replace("\n", ",").split(","):
+                part = _clean_admin_token(part)
+                if not part or ":" not in part:
+                    continue
+                uid, pw = part.split(":", 1)
+                add_pair(uid, pw)
         return users
 
     def get_current_admin_name() -> str:
@@ -369,7 +416,7 @@ def create_runtime_services(*, st, requests, root_dir: str | Path = ".") -> Simp
             return str(login_id).strip()
 
         # 未ログイン時のフォールバック。通常のFAQ反映ではここには来ない。
-        fallback = _admin_secret_value("ADMIN_LOGIN_ID", _admin_secret_value("ADMIN_USER_ID", "admin"))
+        fallback = _first_admin_secret(["ADMIN_LOGIN_ID", "ADMIN_USER_ID", "ADMIN_ID", "ADMIN_USERNAME"], "admin")
         return str(fallback or "admin").strip() or "admin"
 
     def check_password(login_id: str, pwd: str | None = None) -> bool:
@@ -380,8 +427,8 @@ def create_runtime_services(*, st, requests, root_dir: str | Path = ".") -> Simp
         if users:
             ok = users.get(login_id_clean) == password
         else:
-            expected_id = _admin_secret_value("ADMIN_LOGIN_ID", _admin_secret_value("ADMIN_USER_ID", "admin"))
-            expected_pwd = _admin_secret_value("ADMIN_PASSWORD", "admin")
+            expected_id = _first_admin_secret(["ADMIN_LOGIN_ID", "ADMIN_USER_ID", "ADMIN_ID", "ADMIN_USERNAME"], "admin")
+            expected_pwd = _first_admin_secret(["ADMIN_PASSWORD", "ADMIN_PASS", "ADMIN_PWD", "ADMIN_ADMIN_PASSWORD", "ADMIN_PW"], "admin")
             ok = login_id_clean == str(expected_id or "admin").strip() and password == expected_pwd
 
         if ok:
@@ -464,6 +511,7 @@ def create_runtime_services(*, st, requests, root_dir: str | Path = ".") -> Simp
         warmup_faq_search_index=answer_flow_ctx.warmup_faq_search_index,
         nohit_template=answer_flow_ctx.nohit_template,
         _fastlane_direct_answer=answer_flow_ctx._fastlane_direct_answer,
+        _top_hit_is_ambiguous=getattr(answer_flow_ctx, "_top_hit_is_ambiguous", None),
         build_prompt=answer_flow_ctx.build_prompt,
         llm_answer_cached=answer_flow_ctx.llm_answer_cached,
         load_faq_index=answer_flow_ctx.load_faq_index,
@@ -473,6 +521,8 @@ def create_runtime_services(*, st, requests, root_dir: str | Path = ".") -> Simp
         build_document_rag_index=document_rag_runtime.build_document_rag_index,
         get_document_rag_manifest=document_rag_runtime.get_document_rag_manifest,
         clear_document_rag=document_rag_runtime.clear_document_rag,
+        list_document_rag_documents=document_rag_runtime.list_document_rag_documents,
+        delete_document_rag_document=document_rag_runtime.delete_document_rag_document,
         search_document_rag=document_rag_runtime.search_document_rag,
         answer_with_document_rag=document_rag_runtime.answer_with_document_rag,
         SUPPORTED_DOC_RAG_EXTENSIONS=document_rag_runtime.SUPPORTED_DOC_RAG_EXTENSIONS,

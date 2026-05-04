@@ -13,6 +13,8 @@ CANDIDATE_LEARNING_TABLE_NAME = "candidate_learning"
 FAQ_COLUMNS = [
     "faq_id", "question", "answer", "intent", "keywords", "category",
     "answer_format", "enabled", "updated_at", "updated_by", "note",
+    "required_keywords", "exclude_keywords", "ambiguity_keywords",
+    "prefer_candidate", "auto_answer_allowed",
 ]
 
 # DB読み込みキャッシュ。
@@ -89,10 +91,20 @@ def ensure_schema(db_path: Path) -> None:
                 enabled TEXT DEFAULT 'TRUE',
                 updated_at TEXT DEFAULT '',
                 updated_by TEXT DEFAULT '',
-                note TEXT DEFAULT ''
+                note TEXT DEFAULT '',
+                required_keywords TEXT DEFAULT '',
+                exclude_keywords TEXT DEFAULT '',
+                ambiguity_keywords TEXT DEFAULT '',
+                prefer_candidate TEXT DEFAULT '',
+                auto_answer_allowed TEXT DEFAULT ''
             )
             """
         )
+        # 既存DBを壊さずに新列を追加する。
+        existing_cols = {row[1] for row in conn.execute(f"PRAGMA table_info({FAQ_TABLE_NAME})").fetchall()}
+        for col in FAQ_COLUMNS:
+            if col not in existing_cols:
+                conn.execute(f"ALTER TABLE {FAQ_TABLE_NAME} ADD COLUMN {col} TEXT DEFAULT ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faq_question ON faq(question)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faq_enabled ON faq(enabled)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faq_category ON faq(category)")

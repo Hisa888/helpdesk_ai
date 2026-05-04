@@ -26,6 +26,9 @@ from helpdesk_app.faq_db import (
 FAQ_COLUMNS = [
     "faq_id", "question", "answer", "intent", "keywords", "category",
     "answer_format", "enabled", "updated_at", "updated_by", "note",
+    # 検索安全制御用（任意）。空欄なら自動推定ルールで補完します。
+    "required_keywords", "exclude_keywords", "ambiguity_keywords",
+    "prefer_candidate", "auto_answer_allowed",
 ]
 FAQ_SEARCH_COLUMNS = ["question", "answer", "intent", "keywords", "category"]
 FAQ_EXPORT_JA_COLUMNS = {
@@ -40,6 +43,11 @@ FAQ_EXPORT_JA_COLUMNS = {
     "updated_at": "更新日",
     "updated_by": "更新者",
     "note": "備考",
+    "required_keywords": "必須キーワード",
+    "exclude_keywords": "除外キーワード",
+    "ambiguity_keywords": "曖昧判定キーワード",
+    "prefer_candidate": "候補表示優先",
+    "auto_answer_allowed": "自動回答許可",
 }
 FAQ_IMPORT_OPERATION_COLUMN = "operation"
 FAQ_IMPORT_OPERATION_EXPORT_NAME = "操作"
@@ -218,6 +226,16 @@ def normalize_faq_columns(
             rename_map[c] = "updated_by"
         elif original in ["備考", "メモ", "コメント", "注記"] or key in ["note", "notes", "memo", "comment", "remarks"]:
             rename_map[c] = "note"
+        elif original in ["必須キーワード", "必須語", "必須検索語", "必要キーワード"] or key in ["required_keywords", "required", "must_keywords", "must_terms"]:
+            rename_map[c] = "required_keywords"
+        elif original in ["除外キーワード", "除外語", "除外検索語", "禁止キーワード"] or key in ["exclude_keywords", "excluded_keywords", "exclude", "negative_keywords", "ng_keywords"]:
+            rename_map[c] = "exclude_keywords"
+        elif original in ["曖昧判定キーワード", "曖昧キーワード", "候補表示キーワード", "確認キーワード"] or key in ["ambiguity_keywords", "ambiguous_keywords", "clarify_keywords", "candidate_keywords"]:
+            rename_map[c] = "ambiguity_keywords"
+        elif original in ["候補表示優先", "候補優先", "候補表示"] or key in ["prefer_candidate", "candidate_first", "suggest_first"]:
+            rename_map[c] = "prefer_candidate"
+        elif original in ["自動回答許可", "自動回答", "直答許可"] or key in ["auto_answer_allowed", "allow_auto_answer", "auto_answer"]:
+            rename_map[c] = "auto_answer_allowed"
     out = out.rename(columns=rename_map)
     out = out.loc[:, ~out.columns.duplicated()].copy()
     for col in base_cols:
@@ -230,7 +248,7 @@ def normalize_faq_columns(
                 out[col] = ""
     out = out[base_cols].copy()
 
-    for col in ["faq_id", "question", "intent", "keywords", "category"]:
+    for col in ["faq_id", "question", "intent", "keywords", "category", "required_keywords", "exclude_keywords", "ambiguity_keywords"]:
         out[col] = (
             out[col]
             .fillna("")
@@ -259,6 +277,9 @@ def normalize_faq_columns(
                 .str.replace("\r", "\n", regex=False)
                 .str.strip()
             )
+    for col in ["prefer_candidate", "auto_answer_allowed"]:
+        if col in out.columns:
+            out[col] = out[col].fillna("").astype(str).str.strip()
 
     if drop_empty_required:
         out = out[(out["question"] != "") & (out["answer"] != "")].reset_index(drop=True)

@@ -63,6 +63,9 @@ def render_admin_complete_sections(ctx: dict) -> None:
             get_document_rag_manifest=ctx["get_document_rag_manifest"],
             clear_document_rag=ctx["clear_document_rag"],
             supported_extensions=ctx.get("supported_doc_rag_extensions", ("pdf", "docx", "xlsx", "xlsm", "txt", "md")),
+            list_document_rag_documents=ctx.get("list_document_rag_documents"),
+            delete_document_rag_document=ctx.get("delete_document_rag_document"),
+            get_current_admin_name=ctx.get("get_current_admin_name"),
         )
 
     if ctx.get("generate_manual_faq_candidates"):

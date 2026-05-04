@@ -47,7 +47,12 @@ CANONICAL_PATTERNS = [
     (r"メール送れない", "メールが送信できない"),
     (r"メール受け取れない", "メールが受信できない"),
     (r"認証に失敗|認証エラー", "認証できない"),
-    (r"ロックされた|凍結された", "ロックされた"),
+    (r"ロックされました|ロックされた|凍結された|ロックしてしまった|ロックがかかった", "ロックされた"),
+    (r"pcがロック|pc ロック|パソコンがロック|パソコン ロック|端末がロック|端末 ロック", "pc ロックされた"),
+    # 申請書・書式系の自然文をFAQ検索しやすい語へ寄せる
+    (r"システムを?導入するための|システムを?導入したい|システム導入したい", "システム導入"),
+    (r"申請書はどれですか|申請書はどれ|申請書はどの書式|どの申請書|どれの申請書", "申請書 書式"),
+    (r"どの書式を使えばいい|どの書式を使用|どの書式ですか|書式はどれ", "書式"),
 ]
 
 CONCEPT_ALIASES = {
@@ -59,7 +64,7 @@ CONCEPT_ALIASES = {
     "display": ["ディスプレイ", "モニター", "モニタ", "画面", "映らない", "真っ暗", "ブラックアウト", "表示されない"],
     "mail": ["メール", "outlook", "受信", "送信"],
     "print": ["印刷", "プリンタ", "printer", "print"],
-    "lock": ["ロック", "凍結", "無効", "停止"],
+    "lock": ["ロック", "ロックされた", "アカウントロック", "凍結", "無効", "停止"],
     "error": ["エラー", "失敗", "不具合", "異常", "障害"],
     "cannot": ["できない", "できません", "使えない", "つながらない", "入らない", "起動しない"],
     "pc_device": ["pc", "パソコン", "ノートpc", "デスクトップpc", "端末", "windows"],
@@ -67,6 +72,9 @@ CONCEPT_ALIASES = {
     "browser_app": ["chrome", "edge", "firefox", "ブラウザ", "web", "sso"],
     "mail_app": ["outlook", "exchange", "共有メール", "メーリングリスト", "メールアプリ"],
     "software_install": ["アプリ", "アプリケーション", "ソフト", "ソフトウェア", "インストール", "導入", "追加", "利用したい", "使いたい"],
+    "application_form": ["申請書", "書式", "申請方法", "申請", "どの書式", "どれ"],
+    "system_introduction": ["システム導入", "外部システム", "新規アプリケーション", "導入申請", "新規アプリ"],
+    "trial": ["トライアル", "試用", "お試し", "検証", "検討", "poc"],
 }
 
 FASTLANE_INTENT_RULES = [
@@ -99,6 +107,12 @@ FASTLANE_INTENT_RULES = [
         "query_any": ["アプリ", "アプリケーション", "ソフト", "ソフトウェア", "ツール"],
         "query_any2": ["インストール", "導入", "追加", "利用したい", "使いたい", "申請"],
         "faq_any": ["アプリ", "アプリケーション", "ソフト", "ソフトウェア", "インストール", "導入", "追加", "申請"],
+    },
+    {
+        "name": "system_introduction_form",
+        "query_any": ["システム導入", "外部システム", "新規アプリケーション", "導入"],
+        "query_any2": ["申請書", "書式", "どれ", "どの", "申請"],
+        "faq_any": ["システム導入", "外部システム", "新規アプリケーション", "導入申請", "申請書", "書式"],
     },
 ]
 
@@ -178,6 +192,8 @@ def create_faq_answer_flow_runtime(
         _is_fastlane_query_text=search_ctx._is_fastlane_query_text,
         _score_fast_candidate=search_ctx._score_fast_candidate,
         _domain_penalty=search_ctx._domain_penalty,
+        extract_specific_search_terms=getattr(search_ctx, "extract_specific_search_terms", None),
+        _top_hit_is_ambiguous=getattr(search_ctx, "_top_hit_is_ambiguous", None),
         try_ultrafast_answer=search_ctx.try_ultrafast_answer,
         retrieve_faq_cached=search_ctx.retrieve_faq_cached,
         retrieve_faq=search_ctx.retrieve_faq,
