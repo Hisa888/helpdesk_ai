@@ -3,7 +3,7 @@ from __future__ import annotations
 from helpdesk_app.modules.contact_cta_panel import render_answer_contact_cta
 
 
-def render_nohit_extra_form(*, st, update_nohit_record, info: dict | None = None, expanded: bool = True):
+def render_nohit_extra_form(*, st, update_nohit_record, info: dict | None = None, expanded: bool = False):
     info = info or (st.session_state.get("pending_nohit", {}) or {})
 
     # 見出し崩れとフォーム警告を避けるため、通常コンテナ + ボタン構成にする
@@ -43,22 +43,35 @@ def render_nohit_extra_form(*, st, update_nohit_record, info: dict | None = None
             key="nohit_impact",
         )
         error_text = st.text_area(
-            "エラー内容（任意）",
-            placeholder="例：0x80190001 / '資格情報が無効です' など",
+            "依頼内容（任意）",
+            placeholder="例：ポケットWiFiが使えなくなった、申請書の作成を依頼したい など",
             key="nohit_error_text",
         )
 
         if st.button("この内容で記録", key="save_nohit_extra", width="stretch"):
+            # 候補表示から開いた場合は timestamp が空になることがあるため、
+            # 保存側で追記できるように最低限の値を補完します。
+            from datetime import datetime
+            day_value = str(info.get("day", "") or datetime.now().strftime("%Y%m%d"))
+            timestamp_value = str(info.get("timestamp", "") or datetime.now().isoformat(timespec="seconds"))
+            question_value = str(
+                info.get("question", "")
+                or st.session_state.get("last_user_q_for_learning", "")
+                or st.session_state.get("pending_q", "")
+                or "追加情報"
+            )
+
             ok = update_nohit_record(
-                day=str(info.get("day", "")),
-                timestamp=str(info.get("timestamp", "")),
-                question=str(info.get("question", "")),
+                day=day_value,
+                timestamp=timestamp_value,
+                question=question_value,
                 extra={
                     "device": device,
                     "location": location,
                     "network": network,
                     "impact": impact,
-                    "error_text": error_text,
+                    "request_text": error_text,
+                    "error_text": error_text,  # 既存ログ互換のため残す
                     "channel": "web",
                 },
             )

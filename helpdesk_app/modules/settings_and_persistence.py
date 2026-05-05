@@ -8,13 +8,20 @@ import os
 import re
 import threading
 
+from helpdesk_app.modules.tenant_auth import sanitize_tenant_id
+
 
 def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = ".") -> SimpleNamespace:
     root_dir = Path(root_dir)
 
     ROOT_DIR = root_dir
     ROOT_FAQ_PATH = ROOT_DIR / "faq.csv"
-    DATA_DIR = ROOT_DIR / "runtime_data"
+
+    # 会社別データ分離。ログイン画面で選択された tenant_id ごとに
+    # FAQ / RAG / ログ / UI設定 / LLM設定 / 検索設定を完全に分ける。
+    TENANT_ID = sanitize_tenant_id(st.session_state.get("tenant_id") or os.environ.get("DEFAULT_TENANT_ID") or "demo")
+    BASE_RUNTIME_DIR = ROOT_DIR / "runtime_data"
+    DATA_DIR = BASE_RUNTIME_DIR / "tenants" / TENANT_ID
     FAQ_PATH = DATA_DIR / "faq.csv"
     LOG_DIR = DATA_DIR / "logs"
     LOG_DIR.mkdir(parents=True, exist_ok=True)

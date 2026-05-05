@@ -43,8 +43,18 @@ def clear_faq_db_cache(db_path: Path | str | None = None) -> None:
 
 
 def is_managed_faq_path(path: Path | str) -> bool:
+    """SQLite管理対象のFAQパス判定。
+
+    旧構成: runtime_data/faq.csv
+    新構成: runtime_data/tenants/{company_id}/faq.csv
+
+    会社別分離後もDB化の高速化を使えるよう、runtime_data配下のfaq.csvを
+    管理対象にする。
+    """
     p = Path(path)
-    return p.name.lower() == "faq.csv" and p.parent.name == "runtime_data"
+    if p.name.lower() != "faq.csv":
+        return False
+    return any(parent.name == "runtime_data" for parent in p.parents)
 
 
 def db_path_for_faq_path(faq_path: Path | str) -> Path:

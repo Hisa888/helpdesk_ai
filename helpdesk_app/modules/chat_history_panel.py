@@ -4,6 +4,8 @@ from typing import Iterable, Mapping
 
 from helpdesk_app.modules.contact_cta_panel import render_answer_contact_cta
 from helpdesk_app.modules.faq_answer_renderer import render_answer_box
+from helpdesk_app.modules.answer_panel import render_maybe_candidate_buttons, render_used_hits_expander
+from helpdesk_app.modules.ui_helpers import render_match_bar
 
 
 def clean_legacy_bootstrap_messages(messages: Iterable[Mapping[str, object]]) -> list[dict]:
@@ -69,6 +71,33 @@ def render_chat_history(st, *, messages: Iterable[Mapping[str, object]]) -> None
                     answer_format=str(message.get("answer_format", "markdown")),
                     css_class="answerbox",
                 )
+                # 「もしかしてこれですか？」候補は、回答後に画面上へ戻っても消えないよう、
+                # 最後のassistantメッセージだけでなく、候補表示メッセージには常に再描画する。
+                # key_prefix に履歴番号を入れて、同じFAQ候補が複数回出てもキー重複しないようにする。
+                if bool(message.get("was_suggest", False)):
+                    render_maybe_candidate_buttons(
+                        st,
+                        suggestion_candidates=message.get("suggestion_candidates", []),
+                        user_q=str(message.get("user_q", "")),
+                        key_prefix=f"history_{idx}",
+                    )
+
+                # 回答が正しいとは限らないため、通常回答・候補回答・RAG回答・該当なしの
+                # どの問い合わせでも、必ず根拠確認用のアコーディオンを表示する。
+                # 以前は回答直後だけ表示され、rerun後の履歴再描画では消えていた。
+                if not bool(message.get("was_clarification", False)):
+                    render_used_hits_expander(
+                        st=st,
+                        render_match_bar=render_match_bar,
+                        used_hits=message.get("used_hits", []),
+                        best_score=float(message.get("best_score", 0.0) or 0.0),
+                        answer_threshold=float(message.get("answer_threshold", 0.0) or 0.0),
+                        was_nohit=bool(message.get("was_nohit", False)) or not bool(message.get("used_hits") or message.get("doc_hits")),
+                        doc_hits=message.get("doc_hits", []),
+                        used_doc_rag=bool(message.get("used_doc_rag", False)),
+                        doc_best_score=float(message.get("doc_best_score", 0.0) or 0.0),
+                    )
+
                 if idx == last_assistant_idx:
                     render_answer_contact_cta(
                         st=st,

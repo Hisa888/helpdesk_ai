@@ -5,7 +5,10 @@ from pathlib import Path
 
 
 def initialize_app_shell(*, st, components, current_ui_theme_settings, current_ui_layout_settings):
-    st.set_page_config(page_title="情シス問い合わせAI", layout="wide", initial_sidebar_state="expanded")
+    try:
+        st.set_page_config(page_title="情シス問い合わせAI", layout="wide", initial_sidebar_state="expanded")
+    except Exception:
+        pass
     startup_status = st.empty()
     startup_status.caption("🚀 情シス問い合わせAI を起動しています…")
 

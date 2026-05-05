@@ -8,6 +8,60 @@ from helpdesk_app.modules.clarification_state import clear_clarification, get_cl
 from helpdesk_app.modules.faq_answer_renderer import get_row_answer_format
 
 
+# FAQとかけ離れた雑談・体調・感情だけの入力で、
+# 低スコアFAQ候補を無理に出さないための最低限の業務ドメイン判定。
+# ここに入っている語があれば、低スコアでも「もしかしてこれですか？」候補表示の対象にする。
+HELPDESK_DOMAIN_TERMS = [
+    "wi-fi", "wifi", "ワイファイ", "無線", "lan", "ネット", "ネットワーク", "vpn",
+    "pc", "パソコン", "端末", "windows", "mac", "ディスプレイ", "モニター", "画面",
+    "ログイン", "サインイン", "パスワード", "アカウント", "認証", "ロック",
+    "メール", "outlook", "teams", "sharepoint", "onedrive", "box", "nas",
+    "プリンタ", "プリンター", "印刷", "スキャン", "複合機",
+    "excel", "word", "powerpoint", "office", "ブラウザ", "chrome", "edge",
+    "アプリ", "ソフト", "インストール", "システム", "申請", "申請書", "書式", "起案",
+    "エラー", "障害", "不具合", "使えない", "つながらない", "接続", "起動", "保存", "共有",
+]
+
+
+def _looks_helpdesk_domain_query(text: str) -> bool:
+    q = str(text or "").strip().lower()
+    if not q:
+        return False
+    return any(term.lower() in q for term in HELPDESK_DOMAIN_TERMS)
+
+
+def _use_nohit_for_out_of_domain(*, user_q: str, best_score: float, search_cfg: dict) -> bool:
+    """FAQからかけ離れた入力では、低スコア候補を出さず該当なしにする。
+
+    例: 「今日はしんどい」「眠い」「ありがとう」など。
+    ただし、Wi-Fi/PC/申請書など業務・情シス系の語が含まれる場合は候補表示を許可する。
+    """
+    try:
+        threshold = float(search_cfg.get("out_of_domain_candidate_threshold", 0.12))
+    except Exception:
+        threshold = 0.12
+    return (not _looks_helpdesk_domain_query(user_q)) and float(best_score or 0.0) < threshold
+
+
+def _activate_extra_info_form(*, st, log_nohit, user_q: str) -> None:
+    """候補表示時にも「追加情報を記録」を使えるように、ログ行を準備する。
+
+    既存の nohit ログ更新ロジックを流用するため、候補表示も
+    「要確認ログ」として1行作っておく。失敗しても画面表示は継続する。
+    """
+    try:
+        ts_nohit = log_nohit(user_q) if callable(log_nohit) else ""
+    except Exception:
+        ts_nohit = ""
+    st.session_state["last_nohit"] = {
+        "day": datetime.now().strftime("%Y%m%d"),
+        "timestamp": ts_nohit,
+        "question": str(user_q or "").strip(),
+    }
+    st.session_state["pending_nohit"] = dict(st.session_state["last_nohit"])
+    st.session_state["pending_nohit_active"] = True
+
+
 def process_user_query(
     *,
     st,
@@ -58,6 +112,17 @@ def process_user_query(
     except Exception:
         maybe_threshold_for_clarify = 0.03
     has_candidate_for_suggest = bool(hits) and float(best_score) >= maybe_threshold_for_clarify
+
+    out_of_domain_low_score = _use_nohit_for_out_of_domain(
+        user_q=user_q,
+        best_score=float(best_score),
+        search_cfg=search_cfg,
+    )
+
+    # FAQとかけ離れた低スコア入力は、追加質問や候補表示に進めず「該当なし」に寄せる。
+    # 低スコアの偶然一致で関係ないFAQ候補を3件出すことを防ぐ。
+    if out_of_domain_low_score:
+        has_candidate_for_suggest = False
 
     if (
         not skip_clarification
@@ -191,16 +256,18 @@ def process_user_query(
             answer_format = get_row_answer_format(used_hits[0][0]) if used_hits else "markdown"
             was_nohit = False
             was_suggest = True
+            _activate_extra_info_form(st=st, log_nohit=log_nohit, user_q=user_q)
         elif best_score < suggest_threshold:
             maybe_threshold = float(search_cfg.get("maybe_candidate_threshold", 0.03))
             maybe_count = max(1, int(search_cfg.get("maybe_candidate_count", 3)))
-            if hits and float(best_score) >= maybe_threshold:
+            if hits and float(best_score) >= maybe_threshold and not out_of_domain_low_score:
                 used_hits = hits[:maybe_count]
                 suggestion_candidates = used_hits
                 answer = build_suggest_answer(user_q, used_hits)
                 answer_format = get_row_answer_format(used_hits[0][0]) if used_hits else "markdown"
                 was_nohit = False
                 was_suggest = True
+                _activate_extra_info_form(st=st, log_nohit=log_nohit, user_q=user_q)
             else:
                 used_hits = []
                 answer = nohit_template()
@@ -210,13 +277,23 @@ def process_user_query(
                 was_nohit = True
                 was_suggest = False
         elif best_score < answer_threshold:
-            maybe_count = max(1, int(search_cfg.get("maybe_candidate_count", 3)))
-            used_hits = hits[:maybe_count]
-            suggestion_candidates = used_hits
-            answer = build_suggest_answer(user_q, used_hits)
-            answer_format = get_row_answer_format(used_hits[0][0]) if used_hits else "markdown"
-            was_nohit = False
-            was_suggest = True
+            if out_of_domain_low_score:
+                used_hits = []
+                answer = nohit_template()
+                answer_format = "markdown"
+                ts_nohit = log_nohit(user_q)
+                st.session_state["last_nohit"] = {"day": datetime.now().strftime("%Y%m%d"), "timestamp": ts_nohit, "question": user_q}
+                was_nohit = True
+                was_suggest = False
+            else:
+                maybe_count = max(1, int(search_cfg.get("maybe_candidate_count", 3)))
+                used_hits = hits[:maybe_count]
+                suggestion_candidates = used_hits
+                answer = build_suggest_answer(user_q, used_hits)
+                answer_format = get_row_answer_format(used_hits[0][0]) if used_hits else "markdown"
+                was_nohit = False
+                was_suggest = True
+                _activate_extra_info_form(st=st, log_nohit=log_nohit, user_q=user_q)
 
     top_cat = ""
     if used_hits:
@@ -282,6 +359,50 @@ def finalize_answer_cycle(
             used_doc_rag=bool(result.get("used_doc_rag", False)),
             doc_best_score=float(result.get("doc_best_score", 0.0)),
         )
+
+    # 回答が正しいとは限らないため、回答後は必ず画面下に
+    # 「追加情報を記録（任意）」を閉じた状態で表示できるようにする。
+    # nohit / 候補表示だけでなく、通常回答・RAG回答・候補選択後の回答も対象。
+    if not bool(result.get("was_clarification", False)):
+        from datetime import datetime
+        st.session_state["pending_nohit_active"] = True
+        st.session_state["pending_nohit"] = {
+            "day": datetime.now().strftime("%Y%m%d"),
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "question": str(user_q or "").strip() or "追加情報",
+        }
+    # 履歴再描画時にも「もしかしてこれですか？」ボタンを表示できるよう、
+    # pandas Seriesをそのまま保存せず、dict化してセッションに保持する。
+    serialized_suggestions = []
+    try:
+        for row, score in list(result.get("suggestion_candidates", []) or [])[:3]:
+            try:
+                row_dict = dict(row) if not isinstance(row, dict) else dict(row)
+            except Exception:
+                row_dict = {}
+            if str(row_dict.get("question", "")).strip():
+                serialized_suggestions.append((row_dict, float(score or 0.0)))
+    except Exception:
+        serialized_suggestions = []
+
+    serialized_used_hits = []
+    try:
+        for row, score in list(result.get("used_hits", []) or [])[:5]:
+            try:
+                row_dict = dict(row) if not isinstance(row, dict) else dict(row)
+            except Exception:
+                row_dict = {}
+            serialized_used_hits.append((row_dict, float(score or 0.0)))
+    except Exception:
+        serialized_used_hits = []
+
+    serialized_doc_hits = []
+    try:
+        for hit in list(result.get("doc_hits", []) or [])[:5]:
+            serialized_doc_hits.append(dict(hit) if isinstance(hit, dict) else hit)
+    except Exception:
+        serialized_doc_hits = []
+
     st.session_state.messages.append({
         "role": "assistant",
         "content": str(result.get("answer", "")),
@@ -290,4 +411,11 @@ def finalize_answer_cycle(
         "was_suggest": bool(result.get("was_suggest", False)),
         "used_doc_rag": bool(result.get("used_doc_rag", False)),
         "was_clarification": bool(result.get("was_clarification", False)),
+        "suggestion_candidates": serialized_suggestions,
+        "used_hits": serialized_used_hits,
+        "best_score": float(result.get("best_score", 0.0)),
+        "answer_threshold": float(result.get("answer_threshold", 0.0)),
+        "doc_hits": serialized_doc_hits,
+        "doc_best_score": float(result.get("doc_best_score", 0.0)),
+        "user_q": str(user_q or "").strip(),
     })

@@ -101,12 +101,12 @@ def _remember_candidate_learning_in_session(st, *, user_question: str, row, scor
         pass
 
 
-def render_maybe_candidate_buttons(st, *, suggestion_candidates=None, user_q: str = "") -> None:
+def render_maybe_candidate_buttons(st, *, suggestion_candidates=None, user_q: str = "", key_prefix: str = "current") -> None:
     candidates = list(suggestion_candidates or [])[:3]
     if not candidates:
         return
     st.markdown("**もしかしてこれですか？**")
-    st.caption("該当する候補を押すと、そのFAQ名で再検索します。")
+    st.caption("該当する候補を押すと、そのFAQの回答を直接表示します。")
     for i, item in enumerate(candidates, 1):
         try:
             row, score = item
@@ -120,17 +120,89 @@ def render_maybe_candidate_buttons(st, *, suggestion_candidates=None, user_q: st
         label = f"{i}. {question}（一致度 {pct}%）"
         if category:
             label += f" / {category}"
-        digest = hashlib.md5(f"{i}:{question}".encode("utf-8")).hexdigest()[:10]
+        digest = hashlib.md5(f"{key_prefix}:{i}:{question}:{user_q}".encode("utf-8")).hexdigest()[:10]
         if st.button(label, key=f"maybe_faq_candidate_{digest}", use_container_width=True):
             original_user_q = str(user_q or st.session_state.get("last_user_q_for_learning", "")).strip()
             _remember_candidate_learning_in_session(st, user_question=original_user_q, row=row, score=float(score))
             _append_candidate_learning_log(user_question=original_user_q, row=row, score=float(score))
-            st.session_state["pending_q"] = question
+
+            # 候補ボタン押下時は、Streamlit の chat_input/pending_q 経由にしない。
+            # 画面下の「追加情報フォーム」が先に再描画されて、回答が出ていないように見えるため、
+            # ここでチャット履歴へ「選択したFAQの回答」を直接追加して固定表示する。
+            try:
+                row_dict = dict(row) if not isinstance(row, dict) else dict(row)
+            except Exception:
+                row_dict = {
+                    "question": question,
+                    "answer": str(getattr(row, "get", lambda k, d='': d)("answer", "")).strip(),
+                    "category": category,
+                }
+
+            answer_text = str(row_dict.get("answer", "")).strip()
+            if not answer_text:
+                answer_text = "選択されたFAQに回答文が登録されていません。管理者画面でFAQの回答欄を確認してください。"
+
+            selected_question = question or str(row_dict.get("question", "")).strip() or "FAQ候補を選択"
+            answer_format = get_row_answer_format(row_dict)
+
+            messages = list(st.session_state.get("messages", []))
+            # 同じボタンを連続クリックした時に、同じ回答を何度も増やさない。
+            already_added = False
+            if len(messages) >= 2:
+                last_user = messages[-2] if isinstance(messages[-2], dict) else {}
+                last_assistant = messages[-1] if isinstance(messages[-1], dict) else {}
+                already_added = (
+                    str(last_user.get("role", "")) == "user"
+                    and str(last_user.get("content", "")) == selected_question
+                    and str(last_assistant.get("role", "")) == "assistant"
+                    and str(last_assistant.get("content", "")) == answer_text
+                )
+            if not already_added:
+                messages.append({"role": "user", "content": selected_question})
+                messages.append({
+                    "role": "assistant",
+                    "content": answer_text,
+                    "answer_format": answer_format,
+                    "was_nohit": False,
+                    "was_suggest": False,
+                    "used_doc_rag": False,
+                    "was_clarification": False,
+                    "suggestion_candidates": [],
+                    "used_hits": [(row_dict, float(score))],
+                    "best_score": float(score),
+                    "answer_threshold": float(st.session_state.get("search_threshold", 0.0)),
+                    "doc_hits": [],
+                    "doc_best_score": 0.0,
+                    "user_q": selected_question,
+                })
+                st.session_state["messages"] = messages
+
+            st.session_state["used_hits"] = [(row_dict, float(score))]
+            st.session_state["pending_selected_faq"] = None
+            st.session_state["pending_q"] = ""
+
+            # 候補を選択して回答が出た後も、ユーザーが「この候補では違う」と思った場合に
+            # すぐ状況補足できるよう、「追加情報を記録（任意）」は残す。
+            st.session_state["pending_nohit_active"] = True
+            st.session_state["pending_nohit"] = {
+                "day": datetime.now().strftime("%Y%m%d"),
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "question": original_user_q or selected_question,
+            }
             st.session_state["scroll_to_answer"] = True
+
+            # rerun が効かない環境/タイミングでも「押したのに回答が出ない」状態にしないため、
+            # その場でも回答欄を描画してから rerun を試す。
+            st.markdown("### 回答")
+            render_answer_box(st, answer=answer_text, answer_format=answer_format, css_class="answerbox")
+            st.info("選択したFAQの回答を表示しました。候補が違う場合は、下の『追加情報を記録（任意）』から状況を補足できます。")
             try:
                 st.rerun()
             except Exception:
-                pass
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
 
 
 def render_used_hits_expander(*, st, render_match_bar, used_hits, best_score: float, answer_threshold: float, was_nohit: bool = False, doc_hits=None, used_doc_rag: bool = False, doc_best_score: float = 0.0) -> None:
@@ -209,8 +281,17 @@ def render_answer_message(
             st.success(f"社内ドキュメントを根拠に回答しました（ドキュメント一致度: {int(max(0.0, min(1.0, float(doc_best_score))) * 100)}%）。")
             st.caption("回答の根拠は下の『回答の根拠を見る』で確認できます。")
         elif was_suggest:
+            # 候補が違う場合にも、画面下に「追加情報を記録」を必ず表示する。
+            st.session_state["pending_nohit_active"] = True
+            if not st.session_state.get("pending_nohit"):
+                st.session_state["pending_nohit"] = {
+                    "day": datetime.now().strftime("%Y%m%d"),
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                    "question": str(user_q or "").strip(),
+                }
             st.info(f"近いFAQ候補を表示しています（FAQ一致度: {int(max(0.0, min(1.0, float(best_score))) * 100)}% / 自動回答しきい値: {int(max(0.0, min(1.0, float(answer_threshold))) * 100)}%）。")
-            render_maybe_candidate_buttons(st, suggestion_candidates=suggestion_candidates, user_q=user_q)
+            render_maybe_candidate_buttons(st, suggestion_candidates=suggestion_candidates, user_q=user_q, key_prefix="current")
+            st.caption("候補が違う場合は、下の『追加情報を記録（任意）』から状況を補足できます。")
             st.caption("管理者はサイドバーの『検索精度設定』から判定基準を調整できます。")
 
         render_answer_contact_cta(

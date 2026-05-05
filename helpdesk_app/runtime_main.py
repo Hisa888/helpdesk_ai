@@ -17,6 +17,15 @@ def run_app():
         render_fixed_contact_button,
     )
     from helpdesk_app.modules.app_surface_runner import render_runtime_surfaces
+    from helpdesk_app.modules.tenant_auth import ensure_tenant_login, render_tenant_sidebar
+
+    try:
+        st.set_page_config(page_title="情シス問い合わせAI", layout="wide", initial_sidebar_state="expanded")
+    except Exception:
+        pass
+
+    if not ensure_tenant_login(st):
+        return
 
     services = create_runtime_services(
         st=st,
@@ -59,6 +68,7 @@ def run_app():
             company_name=services.COMPANY_NAME,
         )
     finalize_startup_status(startup_status)
+    render_tenant_sidebar(st)
 
     render_runtime_surfaces(
         st=st,

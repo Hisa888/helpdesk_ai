@@ -160,9 +160,18 @@ def log_nohit(*, log_dir: Path, question: str, persist_callback=None, extra: dic
 
 
 def update_nohit_record(*, log_dir: Path, day: str, timestamp: str, question: str, extra: dict, persist_callback=None) -> bool:
-    """同じday/timestamp/question の行があれば更新。無ければ追記。"""
-    if not day or not timestamp or not question:
-        return False
+    """同じday/timestamp/question の行があれば更新。無ければ追記。
+
+    候補表示から「追加情報を記録」した場合は、まだ nohit 行が存在せず
+    timestamp が空のことがあります。その場合でも保存失敗にせず、
+    現在時刻の行として追記します。
+    """
+    if not day:
+        day = datetime.now().strftime("%Y%m%d")
+    if not timestamp:
+        timestamp = datetime.now().isoformat(timespec="seconds")
+    if not question:
+        question = "追加情報"
     path = log_dir / f"nohit_{day}.csv"
     cols = ensure_nohit_schema(path)
 
