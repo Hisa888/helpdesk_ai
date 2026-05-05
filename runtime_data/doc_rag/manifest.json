@@ -1,0 +1,15 @@
+{
+  "enabled": false,
+  "doc_count": 0,
+  "chunk_count": 0,
+  "files": [],
+  "wiki_enabled": false,
+  "updated_at": "2026-05-03T13:20:47",
+  "last_deleted": {
+    "name": "helpdesk_request_catalog.xlsx",
+    "type": "xlsx",
+    "deleted_by": "admin",
+    "deleted_at": "2026-05-03T13:20:47",
+    "removed_chunks": 1
+  }
+}

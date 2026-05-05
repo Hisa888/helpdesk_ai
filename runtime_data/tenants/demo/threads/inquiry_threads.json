@@ -1,0 +1,24 @@
+[
+  {
+    "thread_id": "TCK-20260505-0002-6ebad7",
+    "company_id": "demo",
+    "user_id": "demo",
+    "title": "新規問い合わせ",
+    "status": "未対応",
+    "created_at": "2026-05-05 20:46:28",
+    "updated_at": "2026-05-05 20:46:28",
+    "messages": [],
+    "admin_memo": ""
+  },
+  {
+    "thread_id": "TCK-20260505-0001-bc5ffb",
+    "company_id": "demo",
+    "user_id": "demo",
+    "title": "新規問い合わせ",
+    "status": "未対応",
+    "created_at": "2026-05-05 20:46:17",
+    "updated_at": "2026-05-05 20:46:17",
+    "messages": [],
+    "admin_memo": ""
+  }
+]

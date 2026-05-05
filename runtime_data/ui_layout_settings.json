@@ -1,0 +1,9 @@
+{
+  "sidebar_width": 360,
+  "main_max_width": 1180,
+  "main_padding_top": 32,
+  "main_padding_bottom": 144,
+  "card_radius": 18,
+  "card_shadow_blur": 30,
+  "card_shadow_alpha": 0.0
+}
