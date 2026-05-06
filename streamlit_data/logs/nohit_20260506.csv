@@ -1,4 +1,5 @@
 ﻿timestamp,question,device,location,network,error_text,impact,channel
-2026-05-06T00:25:31,ポケットWIFIが使えなくなった,,,,,,
-2026-05-06T00:46:49,画面がブルースクリーンになった,,,,,,
-2026-05-06T12:22:15,Wi-Fi繋がらない。,,,,,,web
+2026-05-06T00:25:31,ポケットWIFIが使えなくなった,nan,nan,nan,nan,nan,nan
+2026-05-06T00:46:49,画面がブルースクリーンになった,nan,nan,nan,nan,nan,nan
+2026-05-06T12:22:15,Wi-Fi繋がらない。,nan,nan,nan,nan,nan,nan
+2026-05-06T12:22:39,Wi-Fi繋がらない。,Windows,社内,Wi-Fi,客先から貸与を受けているPCに社内のWi-Fiを利用してMDFにて繋げているが、WIFI接続が途切れる事象が頻繁に起こる。Wi-Fiが切れないようにしてほしい。,他の人も,web
