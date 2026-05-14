@@ -174,106 +174,228 @@ def ensure_tenant_login(st) -> bool:
     st.markdown(
         """
 <style>
-/* ログイン画面専用：上部カード・フォーム・案内メッセージを同じ幅で中央寄せ */
-.login-page-bg {
-    max-width: 720px;
-    margin: 4.2vh auto 1.8rem auto;
-}
-.login-shell {
-    width: 100%;
-    box-sizing: border-box;
+/* =========================================
+   Luxury Login UI - 情シス問い合わせAI
+   Streamlitネイティブ描画版
+   ※HTML文字列が画面に出ないよう、フォームはst.formで描画
+========================================= */
+[data-testid="stAppViewContainer"] {
     background:
-        radial-gradient(circle at 96% 88%, rgba(147,197,253,.20), transparent 30%),
-        linear-gradient(135deg, #f3f8ff 0%, #edf5ff 52%, #f7fbff 100%);
-    border: 1px solid #cfe1ff;
-    border-radius: 22px;
-    padding: 34px 44px;
-    box-shadow: 0 18px 44px rgba(30, 64, 175, .10);
-    display: flex;
-    align-items: center;
-    gap: 28px;
+        radial-gradient(circle at 12% 12%, rgba(124, 58, 237, .13), transparent 31%),
+        radial-gradient(circle at 92% 82%, rgba(14, 165, 233, .12), transparent 30%),
+        linear-gradient(135deg, #fbfaff 0%, #f4f1ff 48%, #f8fbff 100%) !important;
 }
-.login-icon {
-    width: 72px;
-    height: 72px;
+[data-testid="stHeader"] { background: transparent !important; }
+[data-testid="stToolbar"], #MainMenu, footer { display: none !important; }
+.block-container {
+    max-width: 1180px !important;
+    padding-top: 7vh !important;
+    padding-bottom: 2rem !important;
+}
+
+.login-brand-panel {
+    position: relative;
+    padding: 42px 28px 36px 8px;
+    color: #0f172a;
+}
+.login-logo-mark, .login-card-icon {
+    width: 88px;
+    height: 88px;
     border-radius: 999px;
-    background: linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%);
     display: flex;
     align-items: center;
     justify-content: center;
-    flex: 0 0 auto;
-    box-shadow: inset 0 0 0 1px rgba(96,165,250,.22);
+    background: linear-gradient(135deg, rgba(124,58,237,.10), rgba(14,165,233,.12));
+    box-shadow: 0 18px 44px rgba(99,102,241,.16), inset 0 0 0 1px rgba(99,102,241,.13);
 }
-.login-title {
-    font-size: 34px;
+.login-logo-mark { margin: 0 auto 24px 92px; }
+.login-card-icon { margin: 0 auto 18px; }
+.login-brand-title {
+    font-size: 40px;
+    font-weight: 950;
+    letter-spacing: -.045em;
+    line-height: 1.15;
+    margin: 0 0 14px 0;
+    color: #0f172a;
+}
+.login-brand-subtitle {
+    font-size: 17px;
+    line-height: 1.85;
+    color: #64748b;
+    margin-bottom: 28px;
+}
+.login-accent-line {
+    width: 54px;
+    height: 4px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #a855f7, #22d3ee);
+    margin: 0 0 34px 112px;
+    box-shadow: 0 8px 20px rgba(168,85,247,.28);
+}
+.login-feature {
+    display: grid;
+    grid-template-columns: 76px 1fr;
+    gap: 18px;
+    align-items: center;
+    margin: 25px 0;
+}
+.login-feature-icon {
+    width: 62px;
+    height: 62px;
+    border-radius: 999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 27px;
+    background: rgba(255,255,255,.74);
+    box-shadow: 0 16px 34px rgba(30,41,59,.08), inset 0 0 0 1px rgba(99,102,241,.10);
+}
+.login-feature-title {
+    font-size: 18px;
     font-weight: 900;
     color: #0f172a;
-    margin: 0 0 10px 0;
-    letter-spacing: -0.03em;
-    line-height: 1.15;
+    margin-bottom: 8px;
 }
-.login-caption {
-    color:#475569;
-    font-size: 16px;
-    line-height: 1.7;
-    margin: 0;
+.login-feature-text {
+    font-size: 15px;
+    line-height: 1.75;
+    color: #64748b;
 }
-/* Streamlitのフォーム本体を強制的にコンパクト化 */
+.login-card-shell {
+    background: rgba(255,255,255,.84);
+    border: 1px solid rgba(226,232,240,.96);
+    border-radius: 28px;
+    padding: 54px 56px 42px;
+    box-shadow: 0 32px 80px rgba(30,41,59,.13), 0 1px 0 rgba(255,255,255,.90) inset;
+    backdrop-filter: blur(18px);
+}
+.login-card-title {
+    text-align:center;
+    font-size: 36px;
+    font-weight: 950;
+    letter-spacing: -.04em;
+    color:#0f172a;
+    margin:0 0 8px;
+}
+.login-card-caption {
+    text-align:center;
+    color:#64748b;
+    font-size:16px;
+    line-height:1.7;
+    margin: 0 0 30px;
+}
+.login-secure-note {
+    text-align:center;
+    color:#94a3b8;
+    font-weight:700;
+    font-size:14px;
+    margin-top: 18px;
+}
+.login-footer {
+    text-align: center;
+    color: #64748b;
+    font-size: 13px;
+    margin-top: 26px;
+}
+
+/* ログインカード内のStreamlit入力をSaaS風に調整 */
+div[data-testid="stTextInput"] label p {
+    font-weight: 900 !important;
+    color: #0f172a !important;
+    font-size: 14px !important;
+}
+div[data-testid="stTextInput"] input {
+    min-height: 56px !important;
+    border-radius: 12px !important;
+    border: 1px solid #d7deea !important;
+    background: rgba(255,255,255,.94) !important;
+    box-shadow: 0 1px 0 rgba(255,255,255,.92) inset !important;
+    font-size: 16px !important;
+}
+div[data-testid="stTextInput"] input:focus {
+    border-color: #8b5cf6 !important;
+    box-shadow: 0 0 0 3px rgba(139,92,246,.15) !important;
+}
 div[data-testid="stForm"] {
-    max-width: 560px !important;
-    margin: 0 auto !important;
-    padding: 24px 26px 22px 26px !important;
-    border-radius: 18px !important;
-    background: rgba(255,255,255,.88) !important;
-    border: 1px solid #e2e8f0 !important;
-    box-shadow: 0 18px 44px rgba(15,23,42,.08) !important;
-}
-div[data-testid="stForm"] div[data-testid="stTextInput"] input {
-    border-radius: 10px !important;
-    min-height: 42px !important;
+    border: 1px solid rgba(226,232,240,.96) !important;
+    background: rgba(255,255,255,.86) !important;
+    padding: 50px 54px 38px !important;
+    border-radius: 28px !important;
+    box-shadow: 0 32px 80px rgba(30,41,59,.13), 0 1px 0 rgba(255,255,255,.90) inset !important;
+    backdrop-filter: blur(18px);
 }
 div[data-testid="stForm"] button[kind="primary"] {
-    border-radius: 10px !important;
-    min-height: 44px !important;
-    font-weight: 800 !important;
+    min-height: 58px !important;
+    border-radius: 12px !important;
+    border: 0 !important;
+    color: #fff !important;
+    font-size: 17px !important;
+    font-weight: 900 !important;
+    letter-spacing: .03em;
+    background: linear-gradient(90deg, #2563eb 0%, #7c3aed 100%) !important;
+    box-shadow: 0 16px 34px rgba(79,70,229,.24) !important;
 }
-.login-help-wrap {
-    max-width: 560px;
-    margin: 1.2rem auto 0 auto;
-}
-@media (max-width: 760px) {
-    .login-page-bg { max-width: calc(100vw - 32px); }
-    .login-shell { padding: 26px 24px; gap: 18px; }
-    .login-title { font-size: 26px; }
-    .login-icon { width: 58px; height: 58px; }
-    div[data-testid="stForm"], .login-help-wrap { max-width: calc(100vw - 32px) !important; }
+
+@media (max-width: 980px) {
+    .block-container { padding-top: 2rem !important; }
+    .login-brand-panel { text-align: center; padding: 20px 18px 0; }
+    .login-logo-mark { margin-left: auto; margin-right: auto; }
+    .login-accent-line { margin-left: auto; margin-right: auto; }
+    .login-feature { text-align: left; }
+    .login-card-shell { padding: 42px 28px 34px; }
 }
 </style>
-<div class="login-page-bg">
-  <div class="login-shell">
-    <div class="login-icon" aria-hidden="true">
-      <svg width="42" height="42" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M12 34.2C8.9 31.8 7 28.3 7 24.5C7 16.5 14.6 10 24 10C33.4 10 41 16.5 41 24.5C41 32.5 33.4 39 24 39C21.7 39 19.5 38.6 17.5 37.9L10 40L12 34.2Z" stroke="#2563eb" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="17.5" cy="24.5" r="2.1" fill="#2563eb"/>
-        <circle cx="24" cy="24.5" r="2.1" fill="#2563eb"/>
-        <circle cx="30.5" cy="24.5" r="2.1" fill="#2563eb"/>
-      </svg>
-    </div>
-    <div>
-      <div class="login-title">情シス問い合わせAI</div>
-      <div class="login-caption">会社ID・ログインID・パスワードを入力してください。</div>
-    </div>
-  </div>
-</div>
         """,
         unsafe_allow_html=True,
     )
 
-    with st.form("tenant_login_form"):
-        tenant_id = st.text_input("会社ID", value=str(st.session_state.get("tenant_id_input", "demo")), placeholder="例：demo / customer-a")
-        login_id = st.text_input("ログインID", value=str(st.session_state.get("tenant_user_input", "demo")))
-        password = st.text_input("パスワード", type="password")
-        submitted = st.form_submit_button("ログイン", type="primary", use_container_width=True)
+    left, right = st.columns([0.92, 1.08], gap="large")
+
+    with left:
+        st.markdown(
+            """
+<div class="login-brand-panel">
+  <div class="login-logo-mark">💬</div>
+  <h1 class="login-brand-title">情シス問い合わせAI</h1>
+  <div class="login-brand-subtitle">社内の「わからない」を、最短で解決。</div>
+  <div class="login-accent-line"></div>
+
+  <div class="login-feature">
+    <div class="login-feature-icon">💡</div>
+    <div><div class="login-feature-title">いつでも頼れる社内サポート</div><div class="login-feature-text">よくある社内問い合わせに、AIが自動で回答します。</div></div>
+  </div>
+  <div class="login-feature">
+    <div class="login-feature-icon">🛡️</div>
+    <div><div class="login-feature-title">安心・安全なセキュリティ</div><div class="login-feature-text">社内データを安全に管理し、安心してご利用いただけます。</div></div>
+  </div>
+  <div class="login-feature">
+    <div class="login-feature-icon">👥</div>
+    <div><div class="login-feature-title">業務効率を向上</div><div class="login-feature-text">問い合わせ対応を自動化し、情シス担当者の負担を軽減します。</div></div>
+  </div>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with right:
+        # Streamlitでは st.markdown の <div> で st.form を安全に包めないため、
+        # 空の白いカードが表示されないよう st.form 自体をカード化しています。
+        with st.form("tenant_login_form"):
+            st.markdown(
+                """
+<div class="login-card-icon">💬</div>
+<div class="login-card-title">ログイン</div>
+<div class="login-card-caption">会社ID・ログインID・パスワードを入力してください</div>
+                """,
+                unsafe_allow_html=True,
+            )
+            tenant_id = st.text_input("会社ID", value=str(st.session_state.get("tenant_id_input", "demo")), placeholder="例：demo / customer-a")
+            login_id = st.text_input("ログインID", value=str(st.session_state.get("tenant_user_input", "demo")))
+            password = st.text_input("パスワード", type="password")
+            submitted = st.form_submit_button("ログイン", type="primary", use_container_width=True)
+            st.markdown('<div class="login-secure-note">🔒 セキュアな接続で保護されています</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="login-footer">© 2025 情シス問い合わせAI All rights reserved.</div>', unsafe_allow_html=True)
 
     if submitted:
         user = authenticate_tenant_user(st, tenant_id, login_id, password)
