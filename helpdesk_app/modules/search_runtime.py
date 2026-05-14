@@ -213,6 +213,117 @@ def create_search_runtime(
                 found.add(canonical_norm)
         return found
 
+
+    # FAQ精度改善 2026-05:
+    # 「カテゴリ固定検索 → 親FAQ/子FAQの優先 → 軽量再ランキング」を検索本体に統合。
+    # LLMを毎回呼ぶと遅くなるため、ここではFAQ列（question/intent/keywords/category）を
+    # 使った deterministic rerank を行い、必要な場合だけ後段の既存LLM回答処理に渡す。
+    CATEGORY_HINTS = {
+        "vpn": ["vpn", "リモートアクセス", "社外接続", "ネットワーク", "接続"],
+        "login": ["ログイン", "サインイン", "認証", "アカウント", "パスワード", "ロック"],
+        "display": ["ディスプレイ", "モニター", "モニタ", "画面", "映らない"],
+        "print": ["印刷", "プリンタ", "複合機"],
+        "mail": ["メール", "outlook", "exchange", "メーリングリスト"],
+        "software": ["アプリ", "ソフト", "インストール", "アプリケーション", "ソフトウェア"],
+        "application_form": ["申請", "申請書", "書式", "起案書", "承諾書", "念書"],
+        "system_introduction": ["システム導入", "外部システム", "新規アプリケーション", "導入申請"],
+        "pc_device": ["pc", "パソコン", "端末", "windows"],
+    }
+
+    def _category_hints_for_query(query_norm: str) -> set[str]:
+        concepts = extract_concepts(query_norm)
+        hints: set[str] = set()
+        for concept in concepts:
+            for word in CATEGORY_HINTS.get(concept, []):
+                nw = normalize_search_text(word)
+                if nw:
+                    hints.add(nw)
+        # 業務語はカテゴリ判定の親キーとしても扱う
+        hints.update(_business_terms_in_text(query_norm))
+        return {h for h in hints if h}
+
+    def _row_category_score(query_norm: str, row) -> float:
+        """カテゴリ固定検索用の軽量スコア。
+
+        質問から推定した親カテゴリ語が FAQ の category/intent/keywords にある場合は加点し、
+        明らかに別カテゴリの場合は軽く減点する。回答本文だけの一致では親カテゴリ扱いしない。
+        """
+        hints = _category_hints_for_query(query_norm)
+        if not hints:
+            return 0.0
+        category_zone = " ".join([
+            str(row.get("category_norm", "")),
+            str(row.get("intent_norm", "")),
+            str(row.get("keywords_norm", "")),
+            str(row.get("question_norm", "")),
+        ])
+        if not category_zone:
+            return 0.0
+        matched = [h for h in hints if h and h in category_zone]
+        if matched:
+            return min(0.42, 0.16 * len(matched))
+        # 親カテゴリ語がある質問なのに候補側にまったく無い場合は、誤回答を抑制
+        return -0.12
+
+    def _parent_child_rerank_adjustment(query_norm: str, row) -> float:
+        """親FAQ→子FAQの順で選ばせるための補正。
+
+        category/intent を親FAQ、question/keywords を子FAQとして扱う。
+        例: VPN（親） + つながらない（子）、ログイン（親） + ロック（子）。
+        """
+        q_concepts = extract_concepts(query_norm)
+        if not q_concepts:
+            return 0.0
+        row_parent_text = " ".join([
+            str(row.get("category_norm", "")),
+            str(row.get("intent_norm", "")),
+        ])
+        row_child_text = " ".join([
+            str(row.get("question_norm", "")),
+            str(row.get("keywords_norm", "")),
+        ])
+        row_parent_concepts = extract_concepts(row_parent_text)
+        row_child_concepts = extract_concepts(row_child_text)
+        parent_hit = bool(q_concepts & row_parent_concepts)
+        child_hit = bool(q_concepts & row_child_concepts)
+        adjust = 0.0
+        if parent_hit:
+            adjust += 0.18
+        if child_hit:
+            adjust += 0.16
+        if parent_hit and child_hit:
+            adjust += 0.12
+        if not parent_hit and not child_hit:
+            adjust -= 0.10
+        return float(adjust)
+
+    def _llm_like_rerank_adjustment(query_norm: str, row) -> float:
+        """LLM再ランキング相当の軽量補正。
+
+        毎回LLMを呼ばず、LLMに見せるのと同じ判断材料
+        （質問・意図・言い換え・カテゴリ）で「意味が近い候補」を上に寄せる。
+        """
+        q_tokens = extract_search_tokens(query_norm)
+        if not q_tokens:
+            return 0.0
+        title_zone = " ".join([
+            str(row.get("question_norm", "")),
+            str(row.get("intent_norm", "")),
+            str(row.get("keywords_norm", "")),
+            str(row.get("category_norm", "")),
+        ])
+        title_tokens = extract_search_tokens(title_zone)
+        if not title_tokens:
+            return 0.0
+        overlap = len(q_tokens & title_tokens) / max(1, len(q_tokens))
+        if overlap >= 0.75:
+            return 0.22
+        if overlap >= 0.50:
+            return 0.14
+        if overlap >= 0.30:
+            return 0.07
+        return 0.0
+
     def extract_specific_search_terms(text: str) -> set[str]:
         """検索の決め手になる個別語を抽出する。
 
@@ -871,12 +982,29 @@ def create_search_runtime(
             sims = (sims_word * float(search_cfg.get("word_weight", 0.54))) + (sims_char * float(search_cfg.get("char_weight", 0.46)))
 
             # 精度補正は全件にapplyしない。TF-IDF上位＋完全一致候補だけに絞って補正する。
-            candidate_count = min(n_rows, max(top_k * 12, int(search_cfg.get("candidate_pool", 80))))
+            candidate_count = min(n_rows, max(top_k * 10, int(search_cfg.get("candidate_pool", 50))))
             candidate_idxs = set(int(i) for i in _top_indices(sims, candidate_count))
 
             try:
                 maps = faq_index_ctx._build_fast_lookup_maps(_faq_cache_token())
                 candidate_idxs.update(int(i) for i in maps.get("exact", {}).get(query_norm, []))
+            except Exception:
+                pass
+
+            # カテゴリ固定検索：質問から推定できる親カテゴリに属するFAQは、
+            # TF-IDF上位に入らなくても候補プールへ入れる。
+            try:
+                category_hints = _category_hints_for_query(query_norm)
+                if category_hints:
+                    for j, row in local_df.iterrows():
+                        category_zone = " ".join([
+                            str(row.get("category_norm", "")),
+                            str(row.get("intent_norm", "")),
+                            str(row.get("keywords_norm", "")),
+                            str(row.get("question_norm", "")),
+                        ])
+                        if any(h and h in category_zone for h in category_hints):
+                            candidate_idxs.add(int(j))
             except Exception:
                 pass
 
@@ -1003,6 +1131,14 @@ def create_search_runtime(
                 except Exception:
                     pass
                 try:
+                    # FAQ精度改善: カテゴリ固定検索 + 親FAQ→子FAQ + 軽量再ランキング
+                    row_i = local_df.iloc[i]
+                    sims[i] += _row_category_score(query_norm, row_i)
+                    sims[i] += _parent_child_rerank_adjustment(query_norm, row_i)
+                    sims[i] += _llm_like_rerank_adjustment(query_norm, row_i)
+                except Exception:
+                    pass
+                try:
                     sims[i] += _domain_penalty(query_norm, local_df.iloc[i])
                 except Exception:
                     pass
@@ -1011,7 +1147,7 @@ def create_search_runtime(
             preliminary_top = float(np.max(sims)) if len(sims) else 0.0
             query_len = len(query_norm)
             need_semantic = (
-                bool(search_cfg.get("semantic_enabled", True))
+                bool(search_cfg.get("semantic_enabled", False))
                 and (not is_fastlane or not bool(search_cfg.get("semantic_skip_fastlane", True)))
                 and SENTENCE_TRANSFORMERS_AVAILABLE
                 and query_len >= int(search_cfg.get("semantic_min_query_len", 8))
@@ -1130,6 +1266,10 @@ def create_search_runtime(
         _safety_adjustment=_safety_adjustment,
         _top_row_allows_auto=_top_row_allows_auto,
         extract_specific_search_terms=extract_specific_search_terms,
+        _category_hints_for_query=_category_hints_for_query,
+        _row_category_score=_row_category_score,
+        _parent_child_rerank_adjustment=_parent_child_rerank_adjustment,
+        _llm_like_rerank_adjustment=_llm_like_rerank_adjustment,
         _top_hit_is_ambiguous=_top_hit_is_ambiguous,
         try_ultrafast_answer=try_ultrafast_answer,
         retrieve_faq_cached=retrieve_faq_cached,

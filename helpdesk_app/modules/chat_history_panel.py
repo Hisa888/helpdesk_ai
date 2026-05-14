@@ -82,17 +82,25 @@ def render_chat_history(st, *, messages: Iterable[Mapping[str, object]]) -> None
                         key_prefix=f"history_{idx}",
                     )
 
-                # 回答が正しいとは限らないため、通常回答・候補回答・RAG回答・該当なしの
-                # どの問い合わせでも、必ず根拠確認用のアコーディオンを表示する。
-                # 以前は回答直後だけ表示され、rerun後の履歴再描画では消えていた。
-                if not bool(message.get("was_clarification", False)):
+                # 候補表示メッセージでは、候補ボタンだけを表示し、根拠アコーディオンは出さない。
+                # 根拠を3件すべて表示すると、候補一覧と採用回答が混ざって見えるため。
+                # 候補ボタンを押してFAQを1件選択した後は、選択FAQだけが used_hits に入り、
+                # その回答メッセージ側で根拠を表示する。
+                should_show_evidence = (
+                    not bool(message.get("was_clarification", False))
+                    and not bool(message.get("was_suggest", False))
+                )
+                if should_show_evidence:
                     render_used_hits_expander(
                         st=st,
                         render_match_bar=render_match_bar,
                         used_hits=message.get("used_hits", []),
                         best_score=float(message.get("best_score", 0.0) or 0.0),
                         answer_threshold=float(message.get("answer_threshold", 0.0) or 0.0),
-                        was_nohit=bool(message.get("was_nohit", False)) or not bool(message.get("used_hits") or message.get("doc_hits")),
+                        # was_nohit は回答生成時の判定をそのまま使う。
+                        # 履歴に根拠メタ情報が無い古いメッセージでも、回答済みなのに
+                        # 「該当なし」と誤表示しないよう、used_hits の有無だけでは判定しない。
+                        was_nohit=bool(message.get("was_nohit", False)),
                         doc_hits=message.get("doc_hits", []),
                         used_doc_rag=bool(message.get("used_doc_rag", False)),
                         doc_best_score=float(message.get("doc_best_score", 0.0) or 0.0),

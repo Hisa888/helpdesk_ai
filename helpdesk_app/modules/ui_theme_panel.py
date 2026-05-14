@@ -52,19 +52,18 @@ def render_ui_theme_panel(*, st, current_ui_theme_settings, sanitize_ui_theme_se
             "resizer_line": resizer_line,
             "resizer_knob": resizer_knob,
         })
-        st.session_state["ui_theme_settings"] = live_theme
+        st.caption("色は『UI配色を保存』を押した後に反映されます。保存前に画面全体の配色は変更しません。")
 
         col_ui1, col_ui2 = st.columns(2)
         with col_ui1:
             if st.button("💾 UI配色を保存", width="stretch", key="save_ui_theme"):
                 ok, _ = save_ui_theme_settings(live_theme)
-                st.success("UI配色を保存しました。" if ok else "UI配色は反映済みですが、保存に失敗した可能性があります。")
+                st.success("UI配色を保存しました。画面を再読み込みして反映します。" if ok else "保存に失敗した可能性があります。")
+                st.rerun()
         with col_ui2:
             if st.button("↩ UI配色を初期値に戻す", width="stretch", key="reset_ui_theme"):
                 default_theme = default_ui_theme_settings()
                 save_ui_theme_settings(default_theme)
-                for k, v in default_theme.items():
-                    st.session_state[f"ui_{k}"] = v
                 st.session_state["ui_theme_settings"] = default_theme
                 st.rerun()
 

@@ -57,8 +57,30 @@ from helpdesk_app.modules.ui_helpers import render_match_bar
 
 
 
-def render_runtime_surfaces(*, st, components, services, app_mode: str = "demo", demo_mode: bool = True) -> None:
-    if demo_mode:
+def _render_chat_input_locked_for_trial(st, *, placeholder: str = "情シス問い合わせを入力してください"):
+    """期限切れ時は問い合わせ入力欄を出さず、送信も受け付けない。
+
+    st.chat_input を描画しないことで、下部固定の入力欄・送信ボタンを完全に非表示にします。
+    クイックボタン等で残った pending_q も処理しないようクリアします。
+    """
+    try:
+        st.session_state["pending_q"] = ""
+        st.session_state["pending_selected_faq"] = None
+    except Exception:
+        pass
+    st.markdown(
+        """
+<div style="border:1px solid #fecaca;background:#fff1f2;color:#991b1b;border-radius:16px;padding:14px 16px;margin:18px 0;font-weight:800;">
+  無料トライアル期間が終了したため、問い合わせ入力は停止しています。継続利用をご希望の場合は導入相談へお進みください。
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+    return "", False
+
+
+def render_runtime_surfaces(*, st, components, services, app_mode: str = "demo", demo_mode: bool = True, trial_expired: bool = False) -> None:
+    if demo_mode and not trial_expired:
         render_sales_kpi_sections(read_interactions=services.read_interactions)
     render_public_sidebar(
         contact_link=services.contact_link if demo_mode else "",
@@ -72,9 +94,12 @@ def render_runtime_surfaces(*, st, components, services, app_mode: str = "demo",
     )
 
     ensure_admin_session_state()
-    render_admin_login_sidebar(check_password=services.check_password)
+    if trial_expired:
+        st.warning("無料トライアル期限後のため、管理者機能はロックしています。問い合わせ画面と導入相談のみ利用できます。")
+    else:
+        render_admin_login_sidebar(check_password=services.check_password)
 
-    admin_surface_ctx = build_admin_surface_context({
+        admin_surface_ctx = build_admin_surface_context({
         "st": st,
         "render_admin_complete_tools": render_admin_complete_tools,
         "read_interactions": services.read_interactions,
@@ -129,14 +154,15 @@ def render_runtime_surfaces(*, st, components, services, app_mode: str = "demo",
         "pd": services.pd,
         "datetime": services.datetime,
     })
-    render_admin_tools_if_logged_in(
-        **build_admin_surface_runtime_context({
-            "render_admin_surface": render_admin_surface,
-            "admin_ctx": admin_surface_ctx,
-            "render_admin_complete_tools": render_admin_complete_tools,
-            "render_admin_settings_bundle": render_admin_settings_bundle,
-        })
-    )
+    if not trial_expired:
+        render_admin_tools_if_logged_in(
+            **build_admin_surface_runtime_context({
+                "render_admin_surface": render_admin_surface,
+                "admin_ctx": admin_surface_ctx,
+                "render_admin_complete_tools": render_admin_complete_tools,
+                "render_admin_settings_bundle": render_admin_settings_bundle,
+            })
+        )
 
     ensure_main_screen_session_state(
         **build_main_screen_session_context({
@@ -167,7 +193,7 @@ def render_runtime_surfaces(*, st, components, services, app_mode: str = "demo",
             "render_input_support_sections": render_input_support_sections,
             "render_quick_start_compact": render_quick_start_compact,
             "handle_chat_interaction": handle_chat_interaction,
-            "render_chat_input_panel": render_chat_input_panel,
+            "render_chat_input_panel": (_render_chat_input_locked_for_trial if trial_expired else render_chat_input_panel),
             "request_scroll_to_answer": request_scroll_to_answer,
             "append_user_message": append_user_message,
             "process_user_query": process_user_query,

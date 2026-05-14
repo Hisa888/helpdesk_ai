@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-
 def ensure_main_screen_session_state(
     *,
     st,

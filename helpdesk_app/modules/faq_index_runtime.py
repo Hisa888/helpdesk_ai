@@ -289,11 +289,9 @@ def create_faq_index_runtime(
                         local_char_vectorizer = None
                         local_X_char = None
 
-                    try:
-                        qa_texts = local_df["qa_text_norm"].tolist() if "qa_text_norm" in local_df.columns else questions
-                        local_faq_embeddings = _get_sentence_embeddings_cached(tuple(qa_texts)) if qa_texts else None
-                    except Exception:
-                        local_faq_embeddings = None
+                    # 高速化: 起動/初回検索時にSentenceTransformerの全FAQ埋め込みを作らない。
+                    # semantic_enabled=true かつ低確信時にだけ search_runtime 側で遅延生成する。
+                    local_faq_embeddings = None
 
         state["df"] = local_df
         state["vectorizer"] = local_vectorizer

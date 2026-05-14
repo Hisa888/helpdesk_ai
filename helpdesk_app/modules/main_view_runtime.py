@@ -229,11 +229,11 @@ def render_public_sidebar(
 
         if demo_mode and contact_link:
             cta_html = f"""
-<div class=\"glass-card\" style=\"margin-top: 18px; padding: 20px;\">
-  <div class=\"eyebrow\">Consulting CTA</div>
-  <h3 style=\"margin:4px 0 8px 0;\">このまま導入相談につなげられます</h3>
-  <p style=\"margin:0 0 12px 0; color: var(--text-sub);\">デモ確認後、そのままヒアリング・導入相談へ進めるための導線です。</p>
-  <a href=\"{contact_link}\" target=\"_blank\" style=\"display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;padding:10px 16px;border-radius:10px;font-weight:700;\">🚀 導入のご相談</a>
+<div class=\"glass-card consulting-cta-card\" style=\"margin-top:18px; padding:20px; background:#eaf4ff !important; border:1px solid #bfdbfe !important; border-radius:18px; box-shadow:0 10px 24px rgba(37,99,235,0.10);\">
+  <div class=\"eyebrow cta-eyebrow\" style=\"color:#1d4ed8 !important; font-weight:800; letter-spacing:0.04em;\">Consulting CTA</div>
+  <h3 style=\"margin:4px 0 8px 0; color:#1e3a8a !important; font-weight:800;\">このまま導入相談につなげられます</h3>
+  <p class=\"cta-body\" style=\"margin:0 0 12px 0; color:#334155 !important; line-height:1.7;\">デモ確認後、そのままヒアリング・導入相談へ進めるための導線です。</p>
+  <a class=\"consulting-cta-button\" href=\"{contact_link}\" target=\"_blank\" style=\"display:inline-block !important;background:#0f172a !important;color:#ffffff !important;text-decoration:none !important;padding:10px 16px !important;border-radius:10px !important;font-weight:800 !important;line-height:1.2 !important;min-width:160px !important;text-align:center !important;\">🚀 導入のご相談</a>
 </div>
 """
             st.markdown(cta_html, unsafe_allow_html=True)

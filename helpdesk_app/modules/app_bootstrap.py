@@ -234,6 +234,29 @@ def apply_user_ui_settings(*, st, components, ui_theme: dict, ui_layout: dict) -
   border-color: var(--user-sidebar-panel-border) !important;
   border-radius: 16px !important;
 }}
+
+/* Sidebar fixed-color cards: keep readable regardless of user-selected sidebar text color */
+[data-testid="stSidebar"] .trial-license-card,
+[data-testid="stSidebar"] .trial-license-card * {{
+  color: #1e3a8a !important;
+}}
+[data-testid="stSidebar"] .trial-license-card div:nth-child(2),
+[data-testid="stSidebar"] .trial-license-card div:nth-child(3) {{
+  color: #334155 !important;
+}}
+[data-testid="stSidebar"] .consulting-cta-card,
+[data-testid="stSidebar"] .consulting-cta-card * {{
+  color: #0f172a !important;
+}}
+[data-testid="stSidebar"] .consulting-cta-card .cta-eyebrow {{ color: #2563eb !important; }}
+[data-testid="stSidebar"] .consulting-cta-card .cta-body {{ color: #475569 !important; }}
+[data-testid="stSidebar"] .consulting-cta-card a,
+[data-testid="stSidebar"] .consulting-cta-card a *,
+[data-testid="stSidebar"] .consulting-cta-card .consulting-cta-button {{
+  color: #ffffff !important;
+  background: #0f172a !important;
+  text-decoration: none !important;
+}}
 [data-testid="stSidebar"] .stButton > button,
 [data-testid="stSidebar"] .stDownloadButton > button,
 [data-testid="stSidebar"] .stLinkButton a {{

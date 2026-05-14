@@ -96,6 +96,7 @@ def setup_no_login_tenant(st) -> None:
     # 本番で管理画面を隠したい場合は DEFAULT_TENANT_ROLE = "user" にしてください。
     if str(role).strip().lower() in ("admin", "owner", "manager"):
         st.session_state["admin_ok"] = True
+        st.session_state["is_admin"] = True
         st.session_state["admin_login_id"] = f"{tenant_id}/{login_id}"
         st.session_state["admin_display_name"] = display_name
 
@@ -173,14 +174,96 @@ def ensure_tenant_login(st) -> bool:
     st.markdown(
         """
 <style>
-.login-shell {max-width: 560px; margin: 7vh auto 0 auto; background: rgba(255,255,255,.94); border: 1px solid #e2e8f0; border-radius: 24px; padding: 28px 30px; box-shadow: 0 18px 45px rgba(15,23,42,.10);} 
-.login-title {font-size: 28px; font-weight: 900; color: #0f172a; margin-bottom: 8px;}
-.login-caption {color:#475569; font-size: 14px; line-height: 1.7; margin-bottom: 8px;}
-.login-note {font-size: 12px; color:#64748b; background:#f8fafc; border:1px solid #e2e8f0; border-radius:14px; padding:10px 12px; margin-top:12px;}
+/* ログイン画面専用：上部カード・フォーム・案内メッセージを同じ幅で中央寄せ */
+.login-page-bg {
+    max-width: 720px;
+    margin: 4.2vh auto 1.8rem auto;
+}
+.login-shell {
+    width: 100%;
+    box-sizing: border-box;
+    background:
+        radial-gradient(circle at 96% 88%, rgba(147,197,253,.20), transparent 30%),
+        linear-gradient(135deg, #f3f8ff 0%, #edf5ff 52%, #f7fbff 100%);
+    border: 1px solid #cfe1ff;
+    border-radius: 22px;
+    padding: 34px 44px;
+    box-shadow: 0 18px 44px rgba(30, 64, 175, .10);
+    display: flex;
+    align-items: center;
+    gap: 28px;
+}
+.login-icon {
+    width: 72px;
+    height: 72px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    box-shadow: inset 0 0 0 1px rgba(96,165,250,.22);
+}
+.login-title {
+    font-size: 34px;
+    font-weight: 900;
+    color: #0f172a;
+    margin: 0 0 10px 0;
+    letter-spacing: -0.03em;
+    line-height: 1.15;
+}
+.login-caption {
+    color:#475569;
+    font-size: 16px;
+    line-height: 1.7;
+    margin: 0;
+}
+/* Streamlitのフォーム本体を強制的にコンパクト化 */
+div[data-testid="stForm"] {
+    max-width: 560px !important;
+    margin: 0 auto !important;
+    padding: 24px 26px 22px 26px !important;
+    border-radius: 18px !important;
+    background: rgba(255,255,255,.88) !important;
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: 0 18px 44px rgba(15,23,42,.08) !important;
+}
+div[data-testid="stForm"] div[data-testid="stTextInput"] input {
+    border-radius: 10px !important;
+    min-height: 42px !important;
+}
+div[data-testid="stForm"] button[kind="primary"] {
+    border-radius: 10px !important;
+    min-height: 44px !important;
+    font-weight: 800 !important;
+}
+.login-help-wrap {
+    max-width: 560px;
+    margin: 1.2rem auto 0 auto;
+}
+@media (max-width: 760px) {
+    .login-page-bg { max-width: calc(100vw - 32px); }
+    .login-shell { padding: 26px 24px; gap: 18px; }
+    .login-title { font-size: 26px; }
+    .login-icon { width: 58px; height: 58px; }
+    div[data-testid="stForm"], .login-help-wrap { max-width: calc(100vw - 32px) !important; }
+}
 </style>
-<div class="login-shell">
-  <div class="login-title">情シス問い合わせAI</div>
-  <div class="login-caption">会社ID・ログインID・パスワードを入力してください。会社ごとにFAQ、RAG、ログ、設定を分離して管理します。</div>
+<div class="login-page-bg">
+  <div class="login-shell">
+    <div class="login-icon" aria-hidden="true">
+      <svg width="42" height="42" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 34.2C8.9 31.8 7 28.3 7 24.5C7 16.5 14.6 10 24 10C33.4 10 41 16.5 41 24.5C41 32.5 33.4 39 24 39C21.7 39 19.5 38.6 17.5 37.9L10 40L12 34.2Z" stroke="#2563eb" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="17.5" cy="24.5" r="2.1" fill="#2563eb"/>
+        <circle cx="24" cy="24.5" r="2.1" fill="#2563eb"/>
+        <circle cx="30.5" cy="24.5" r="2.1" fill="#2563eb"/>
+      </svg>
+    </div>
+    <div>
+      <div class="login-title">情シス問い合わせAI</div>
+      <div class="login-caption">会社ID・ログインID・パスワードを入力してください。</div>
+    </div>
+  </div>
 </div>
         """,
         unsafe_allow_html=True,
@@ -204,14 +287,13 @@ def ensure_tenant_login(st) -> bool:
             # 既存の管理者ログイン機能は残したまま、会社別管理者を追加する。
             if str(user.role or "").strip().lower() in ("admin", "owner", "manager"):
                 st.session_state["admin_ok"] = True
+                st.session_state["is_admin"] = True
                 st.session_state["admin_login_id"] = f"{user.tenant_id}/{user.login_id}"
                 st.session_state["admin_display_name"] = user.display_name or user.login_id
             st.rerun()
         else:
             st.error("会社ID、ログインID、またはパスワードが違います。")
 
-    st.info("初期状態では demo / demo / demo でログインできます。本番では .streamlit/secrets.toml の TENANT_USERS を必ず変更してください。")
-    st.caption("管理者権限を付ける場合は TENANT_USERS に demo:admin:password:表示名:admin のように role=admin を指定します。")
     return False
 
 
@@ -230,7 +312,7 @@ def render_tenant_sidebar(st) -> None:
         if st.button("ログアウト", key="tenant_logout_button", use_container_width=True):
             for key in [
                 "tenant_login_ok", "tenant_login_disabled", "tenant_id", "tenant_login_id", "tenant_display_name", "tenant_role",
-                "admin_ok", "admin_login_id", "admin_display_name",
+                "admin_ok", "is_admin", "admin_login_id", "admin_display_name",
                 "faq_search_warmup_token", "faq_search_warmup_info",
             ]:
                 st.session_state.pop(key, None)

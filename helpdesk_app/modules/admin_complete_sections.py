@@ -5,6 +5,7 @@ from helpdesk_app.modules.admin_faq_generation_panel import render_admin_faq_gen
 from helpdesk_app.modules.admin_log_download_panel import render_admin_log_download_panel
 from helpdesk_app.modules.document_rag_panel import render_document_rag_panel
 from helpdesk_app.modules.manual_faq_generation_panel import render_manual_faq_generation_panel
+from helpdesk_app.modules.owner_license_panel import render_owner_license_panel
 
 
 def _render_admin_zone_intro() -> str:
@@ -40,6 +41,7 @@ def render_admin_complete_sections(ctx: dict) -> None:
     st = ctx.get("st")
     if st is not None:
         st.markdown(_render_admin_zone_intro(), unsafe_allow_html=True)
+        render_owner_license_panel(st)
 
     render_admin_dashboard_panel(
         read_interactions=ctx["read_interactions"],

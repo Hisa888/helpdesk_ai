@@ -406,6 +406,60 @@ def create_runtime_services(*, st, requests, root_dir: str | Path = ".") -> Simp
                 add_pair(uid, pw)
         return users
 
+
+    def _tenant_users_admin_map_for_current_tenant() -> dict[str, str]:
+        """
+        TENANT_USERS の role=admin/owner/manager を、左サイドバーの管理者ログインでも使えるようにする。
+        会社IDログインを有効にした場合、ADMIN_USERS を別途設定しなくても
+        demo:admin:password:管理者:admin で管理者ログインできる。
+        """
+        raw = _admin_secret_raw("TENANT_USERS", "")
+        current_tenant = str(st.session_state.get("tenant_id") or _admin_secret_raw("DEFAULT_TENANT_ID", "demo") or "demo").strip().lower()
+        users: dict[str, str] = {}
+
+        def clean(v) -> str:
+            return str(v or "").strip().strip("'\"").strip()
+
+        def add_if_admin(cols: list[str]) -> None:
+            if len(cols) < 3:
+                return
+            tenant = clean(cols[0]).lower()
+            login = clean(cols[1])
+            password = str(cols[2] or "")
+            role = clean(cols[4] if len(cols) >= 5 else "user").lower()
+            if tenant == current_tenant and role in ("admin", "owner", "manager") and login:
+                users[login] = password
+
+        if isinstance(raw, dict) or hasattr(raw, "items"):
+            try:
+                for key, value in raw.items():
+                    key_s = clean(key)
+                    value_s = str(value or "")
+                    if "/" in key_s:
+                        tenant, login = key_s.split("/", 1)
+                        # dict形式では権限が取れないため、現在会社のユーザーを管理者候補として扱う
+                        if clean(tenant).lower() == current_tenant and clean(login):
+                            users[clean(login)] = value_s
+                    else:
+                        tenant = key_s
+                        for part in value_s.replace(";", ",").replace("\n", ",").split(","):
+                            cols = [clean(x) for x in part.split(":")]
+                            if len(cols) >= 2:
+                                role = clean(cols[3] if len(cols) >= 4 else "user").lower()
+                                if clean(tenant).lower() == current_tenant and role in ("admin", "owner", "manager"):
+                                    users[cols[0]] = str(cols[1] or "")
+            except Exception:
+                pass
+            return users
+
+        items = raw if isinstance(raw, (list, tuple, set)) else [raw]
+        for item in items:
+            text = str(item or "")
+            for part in text.replace("\r", "\n").replace(";", ",").replace("\n", ",").split(","):
+                cols = [clean(x) for x in part.split(":")]
+                add_if_admin(cols)
+        return users
+
     def get_current_admin_name() -> str:
         # FAQの「更新者」は表示名ではなく、ログインIDを使用する。
         try:
@@ -427,9 +481,13 @@ def create_runtime_services(*, st, requests, root_dir: str | Path = ".") -> Simp
         if users:
             ok = users.get(login_id_clean) == password
         else:
-            expected_id = _first_admin_secret(["ADMIN_LOGIN_ID", "ADMIN_USER_ID", "ADMIN_ID", "ADMIN_USERNAME"], "admin")
-            expected_pwd = _first_admin_secret(["ADMIN_PASSWORD", "ADMIN_PASS", "ADMIN_PWD", "ADMIN_ADMIN_PASSWORD", "ADMIN_PW"], "admin")
-            ok = login_id_clean == str(expected_id or "admin").strip() and password == expected_pwd
+            tenant_admin_users = _tenant_users_admin_map_for_current_tenant()
+            if tenant_admin_users:
+                ok = tenant_admin_users.get(login_id_clean) == password
+            else:
+                expected_id = _first_admin_secret(["ADMIN_LOGIN_ID", "ADMIN_USER_ID", "ADMIN_ID", "ADMIN_USERNAME"], "admin")
+                expected_pwd = _first_admin_secret(["ADMIN_PASSWORD", "ADMIN_PASS", "ADMIN_PWD", "ADMIN_ADMIN_PASSWORD", "ADMIN_PW"], "admin")
+                ok = login_id_clean == str(expected_id or "admin").strip() and password == expected_pwd
 
         if ok:
             try:

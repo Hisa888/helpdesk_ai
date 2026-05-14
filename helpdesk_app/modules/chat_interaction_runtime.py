@@ -106,6 +106,8 @@ def handle_chat_interaction(
                 "suggestion_candidates": [],
             }
         else:
+            # 問い合わせスレッド機能は速度優先のため無効化。
+            # 入力された質問をそのままFAQ/RAG検索へ渡します。
             result = process_user_query(
                 st=st,
                 user_q=combined_user_q,
@@ -150,7 +152,7 @@ def handle_chat_interaction(
 
     finalize_answer_cycle(
         st=st,
-        user_q=combined_user_q,
+        user_q=display_user_q,
         result=result,
         render_answer_message=render_answer_message,
         render_used_hits_expander=render_used_hits_expander,

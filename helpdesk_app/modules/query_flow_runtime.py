@@ -8,60 +8,6 @@ from helpdesk_app.modules.clarification_state import clear_clarification, get_cl
 from helpdesk_app.modules.faq_answer_renderer import get_row_answer_format
 
 
-# FAQとかけ離れた雑談・体調・感情だけの入力で、
-# 低スコアFAQ候補を無理に出さないための最低限の業務ドメイン判定。
-# ここに入っている語があれば、低スコアでも「もしかしてこれですか？」候補表示の対象にする。
-HELPDESK_DOMAIN_TERMS = [
-    "wi-fi", "wifi", "ワイファイ", "無線", "lan", "ネット", "ネットワーク", "vpn",
-    "pc", "パソコン", "端末", "windows", "mac", "ディスプレイ", "モニター", "画面",
-    "ログイン", "サインイン", "パスワード", "アカウント", "認証", "ロック",
-    "メール", "outlook", "teams", "sharepoint", "onedrive", "box", "nas",
-    "プリンタ", "プリンター", "印刷", "スキャン", "複合機",
-    "excel", "word", "powerpoint", "office", "ブラウザ", "chrome", "edge",
-    "アプリ", "ソフト", "インストール", "システム", "申請", "申請書", "書式", "起案",
-    "エラー", "障害", "不具合", "使えない", "つながらない", "接続", "起動", "保存", "共有",
-]
-
-
-def _looks_helpdesk_domain_query(text: str) -> bool:
-    q = str(text or "").strip().lower()
-    if not q:
-        return False
-    return any(term.lower() in q for term in HELPDESK_DOMAIN_TERMS)
-
-
-def _use_nohit_for_out_of_domain(*, user_q: str, best_score: float, search_cfg: dict) -> bool:
-    """FAQからかけ離れた入力では、低スコア候補を出さず該当なしにする。
-
-    例: 「今日はしんどい」「眠い」「ありがとう」など。
-    ただし、Wi-Fi/PC/申請書など業務・情シス系の語が含まれる場合は候補表示を許可する。
-    """
-    try:
-        threshold = float(search_cfg.get("out_of_domain_candidate_threshold", 0.12))
-    except Exception:
-        threshold = 0.12
-    return (not _looks_helpdesk_domain_query(user_q)) and float(best_score or 0.0) < threshold
-
-
-def _activate_extra_info_form(*, st, log_nohit, user_q: str) -> None:
-    """候補表示時にも「追加情報を記録」を使えるように、ログ行を準備する。
-
-    既存の nohit ログ更新ロジックを流用するため、候補表示も
-    「要確認ログ」として1行作っておく。失敗しても画面表示は継続する。
-    """
-    try:
-        ts_nohit = log_nohit(user_q) if callable(log_nohit) else ""
-    except Exception:
-        ts_nohit = ""
-    st.session_state["last_nohit"] = {
-        "day": datetime.now().strftime("%Y%m%d"),
-        "timestamp": ts_nohit,
-        "question": str(user_q or "").strip(),
-    }
-    st.session_state["pending_nohit"] = dict(st.session_state["last_nohit"])
-    st.session_state["pending_nohit_active"] = True
-
-
 def process_user_query(
     *,
     st,
@@ -113,17 +59,6 @@ def process_user_query(
         maybe_threshold_for_clarify = 0.03
     has_candidate_for_suggest = bool(hits) and float(best_score) >= maybe_threshold_for_clarify
 
-    out_of_domain_low_score = _use_nohit_for_out_of_domain(
-        user_q=user_q,
-        best_score=float(best_score),
-        search_cfg=search_cfg,
-    )
-
-    # FAQとかけ離れた低スコア入力は、追加質問や候補表示に進めず「該当なし」に寄せる。
-    # 低スコアの偶然一致で関係ないFAQ候補を3件出すことを防ぐ。
-    if out_of_domain_low_score:
-        has_candidate_for_suggest = False
-
     if (
         not skip_clarification
         and not has_candidate_for_suggest
@@ -161,13 +96,18 @@ def process_user_query(
     used_doc_rag = False
     doc_best_score = 0.0
 
-    if not ultrafast and callable(search_document_rag):
+    # 高速化: RAG検索は重いため、最初から毎回走らせない。
+    # FAQで十分に回答できる場合はFAQだけで即時回答し、
+    # FAQが弱い/曖昧な場合だけ後段でRAGを呼ぶ。
+    def _lazy_search_document_rag() -> tuple[list, float]:
+        if not callable(search_document_rag):
+            return [], 0.0
         try:
-            doc_hits = search_document_rag(user_q, top_k=5) or []
-            doc_best_score = float(doc_hits[0].get("score", 0.0)) if doc_hits else 0.0
+            lazy_hits = search_document_rag(user_q, top_k=5) or []
+            lazy_score = float(lazy_hits[0].get("score", 0.0)) if lazy_hits else 0.0
+            return lazy_hits, lazy_score
         except Exception:
-            doc_hits = []
-            doc_best_score = 0.0
+            return [], 0.0
 
     suggestion_candidates = []
 
@@ -183,8 +123,8 @@ def process_user_query(
         doc_threshold = float(search_cfg.get("doc_rag_threshold", doc_rag_threshold))
         doc_compare_margin = float(search_cfg.get("doc_compare_margin", 0.05))
         faq_auto_ok = best_score >= answer_threshold
-        doc_auto_ok = bool(doc_hits) and doc_best_score >= doc_threshold
-        prefer_doc = doc_auto_ok and (not faq_auto_ok or doc_best_score >= (float(best_score) + doc_compare_margin))
+        doc_auto_ok = False
+        prefer_doc = False
         ambiguous_auto = False
         if faq_auto_ok and callable(top_hit_is_ambiguous):
             try:
@@ -195,6 +135,18 @@ def process_user_query(
                 ))
             except Exception:
                 ambiguous_auto = False
+
+        # FAQが弱い、またはFAQ側が曖昧な場合だけRAG検索する。
+        # 管理画面で doc_rag_always_compare=true にすると従来通り比較検索も可能。
+        should_search_doc = (
+            bool(search_cfg.get("doc_rag_always_compare", False))
+            or (not faq_auto_ok)
+            or ambiguous_auto
+        )
+        if should_search_doc:
+            doc_hits, doc_best_score = _lazy_search_document_rag()
+            doc_auto_ok = bool(doc_hits) and doc_best_score >= doc_threshold
+            prefer_doc = doc_auto_ok and (not faq_auto_ok or ambiguous_auto or doc_best_score >= (float(best_score) + doc_compare_margin))
 
         if hits:
             faq_label = "FAQ一致度（採用）" if (faq_auto_ok and not prefer_doc and not ambiguous_auto) else "FAQ一致度（参考候補）"
@@ -235,10 +187,14 @@ def process_user_query(
             if fastlane_answer:
                 answer = fastlane_answer
             else:
-                prompt = build_prompt(user_q, hits)
-                cached_answer = llm_answer_cached(user_q, prompt, faq_cache_token_getter(), top_question)
-                if cached_answer:
-                    answer = cached_answer
+                # 高速化: FAQに十分一致している場合は、LLMで言い換えずFAQ回答をそのまま返す。
+                # LLM呼び出しは外部API/ローカルLLMで数秒以上かかるため、必要な場合だけ有効化する。
+                use_llm_for_faq = bool(search_cfg.get("faq_llm_answer_enabled", False))
+                llm_trigger_max_score = float(search_cfg.get("faq_llm_trigger_max_score", 0.55))
+                if use_llm_for_faq and float(best_score) <= llm_trigger_max_score:
+                    prompt = build_prompt(user_q, hits)
+                    cached_answer = llm_answer_cached(user_q, prompt, faq_cache_token_getter(), top_question)
+                    answer = cached_answer or faq_answer or "現在AIの回答機能でエラーが発生しています。しばらくしてから再度お試しください。"
                 else:
                     answer = faq_answer if faq_answer else "現在AIの回答機能でエラーが発生しています。しばらくしてから再度お試しください。"
         elif doc_auto_ok:
@@ -256,18 +212,16 @@ def process_user_query(
             answer_format = get_row_answer_format(used_hits[0][0]) if used_hits else "markdown"
             was_nohit = False
             was_suggest = True
-            _activate_extra_info_form(st=st, log_nohit=log_nohit, user_q=user_q)
         elif best_score < suggest_threshold:
             maybe_threshold = float(search_cfg.get("maybe_candidate_threshold", 0.03))
             maybe_count = max(1, int(search_cfg.get("maybe_candidate_count", 3)))
-            if hits and float(best_score) >= maybe_threshold and not out_of_domain_low_score:
+            if hits and float(best_score) >= maybe_threshold:
                 used_hits = hits[:maybe_count]
                 suggestion_candidates = used_hits
                 answer = build_suggest_answer(user_q, used_hits)
                 answer_format = get_row_answer_format(used_hits[0][0]) if used_hits else "markdown"
                 was_nohit = False
                 was_suggest = True
-                _activate_extra_info_form(st=st, log_nohit=log_nohit, user_q=user_q)
             else:
                 used_hits = []
                 answer = nohit_template()
@@ -277,23 +231,13 @@ def process_user_query(
                 was_nohit = True
                 was_suggest = False
         elif best_score < answer_threshold:
-            if out_of_domain_low_score:
-                used_hits = []
-                answer = nohit_template()
-                answer_format = "markdown"
-                ts_nohit = log_nohit(user_q)
-                st.session_state["last_nohit"] = {"day": datetime.now().strftime("%Y%m%d"), "timestamp": ts_nohit, "question": user_q}
-                was_nohit = True
-                was_suggest = False
-            else:
-                maybe_count = max(1, int(search_cfg.get("maybe_candidate_count", 3)))
-                used_hits = hits[:maybe_count]
-                suggestion_candidates = used_hits
-                answer = build_suggest_answer(user_q, used_hits)
-                answer_format = get_row_answer_format(used_hits[0][0]) if used_hits else "markdown"
-                was_nohit = False
-                was_suggest = True
-                _activate_extra_info_form(st=st, log_nohit=log_nohit, user_q=user_q)
+            maybe_count = max(1, int(search_cfg.get("maybe_candidate_count", 3)))
+            used_hits = hits[:maybe_count]
+            suggestion_candidates = used_hits
+            answer = build_suggest_answer(user_q, used_hits)
+            answer_format = get_row_answer_format(used_hits[0][0]) if used_hits else "markdown"
+            was_nohit = False
+            was_suggest = True
 
     top_cat = ""
     if used_hits:
@@ -349,7 +293,16 @@ def finalize_answer_cycle(
         suggestion_candidates=result.get("suggestion_candidates", []),
         user_q=str(user_q or "").strip(),
     )
-    if callable(render_used_hits_expander) and not bool(result.get("was_clarification", False)):
+    # 候補表示中は、候補ボタンを3件出すだけにする。
+    # ここで used_hits をそのまま根拠表示すると、候補3件すべてのFAQ本文が展開され、
+    # ユーザーには「どれが採用された回答なのか」が分かりにくくなる。
+    # 根拠は、候補ボタンを押してFAQを1件選択した後に、その選択FAQだけ表示する。
+    should_show_evidence = (
+        callable(render_used_hits_expander)
+        and not bool(result.get("was_clarification", False))
+        and not bool(result.get("was_suggest", False))
+    )
+    if should_show_evidence:
         render_used_hits_expander(
             used_hits=result.get("used_hits", []),
             best_score=float(result.get("best_score", 0.0)),
@@ -359,50 +312,10 @@ def finalize_answer_cycle(
             used_doc_rag=bool(result.get("used_doc_rag", False)),
             doc_best_score=float(result.get("doc_best_score", 0.0)),
         )
-
-    # 回答が正しいとは限らないため、回答後は必ず画面下に
-    # 「追加情報を記録（任意）」を閉じた状態で表示できるようにする。
-    # nohit / 候補表示だけでなく、通常回答・RAG回答・候補選択後の回答も対象。
-    if not bool(result.get("was_clarification", False)):
-        from datetime import datetime
-        st.session_state["pending_nohit_active"] = True
-        st.session_state["pending_nohit"] = {
-            "day": datetime.now().strftime("%Y%m%d"),
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "question": str(user_q or "").strip() or "追加情報",
-        }
-    # 履歴再描画時にも「もしかしてこれですか？」ボタンを表示できるよう、
-    # pandas Seriesをそのまま保存せず、dict化してセッションに保持する。
-    serialized_suggestions = []
-    try:
-        for row, score in list(result.get("suggestion_candidates", []) or [])[:3]:
-            try:
-                row_dict = dict(row) if not isinstance(row, dict) else dict(row)
-            except Exception:
-                row_dict = {}
-            if str(row_dict.get("question", "")).strip():
-                serialized_suggestions.append((row_dict, float(score or 0.0)))
-    except Exception:
-        serialized_suggestions = []
-
-    serialized_used_hits = []
-    try:
-        for row, score in list(result.get("used_hits", []) or [])[:5]:
-            try:
-                row_dict = dict(row) if not isinstance(row, dict) else dict(row)
-            except Exception:
-                row_dict = {}
-            serialized_used_hits.append((row_dict, float(score or 0.0)))
-    except Exception:
-        serialized_used_hits = []
-
-    serialized_doc_hits = []
-    try:
-        for hit in list(result.get("doc_hits", []) or [])[:5]:
-            serialized_doc_hits.append(dict(hit) if isinstance(hit, dict) else hit)
-    except Exception:
-        serialized_doc_hits = []
-
+    # 履歴再描画後も「回答の根拠」を正しく表示するため、
+    # 回答本文だけでなく検索結果メタ情報も messages に保存する。
+    # ここが無いと、rerun 後に used_hits/doc_hits が空扱いになり、
+    # 回答は表示されているのに根拠だけ「該当なし」と表示される。
     st.session_state.messages.append({
         "role": "assistant",
         "content": str(result.get("answer", "")),
@@ -411,11 +324,12 @@ def finalize_answer_cycle(
         "was_suggest": bool(result.get("was_suggest", False)),
         "used_doc_rag": bool(result.get("used_doc_rag", False)),
         "was_clarification": bool(result.get("was_clarification", False)),
-        "suggestion_candidates": serialized_suggestions,
-        "used_hits": serialized_used_hits,
-        "best_score": float(result.get("best_score", 0.0)),
-        "answer_threshold": float(result.get("answer_threshold", 0.0)),
-        "doc_hits": serialized_doc_hits,
-        "doc_best_score": float(result.get("doc_best_score", 0.0)),
+        "suggestion_candidates": result.get("suggestion_candidates", []),
+        "used_hits": result.get("used_hits", []),
+        "best_score": float(result.get("best_score", 0.0) or 0.0),
+        "answer_threshold": float(result.get("answer_threshold", 0.0) or 0.0),
+        "suggest_threshold": float(result.get("suggest_threshold", 0.0) or 0.0),
+        "doc_hits": result.get("doc_hits", []),
+        "doc_best_score": float(result.get("doc_best_score", 0.0) or 0.0),
         "user_q": str(user_q or "").strip(),
     })

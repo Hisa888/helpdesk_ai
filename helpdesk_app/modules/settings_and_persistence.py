@@ -172,15 +172,27 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
             return f"GitHub永続化: ON（{GITHUB_REPO}@{GITHUB_BRANCH} / {GITHUB_BASE_PATH}）"
         return "ローカル保存のみ（Streamlit Cloud の Reboot で消える可能性があります）"
 
+    def _tenant_remote_relpath(rel_path: str | Path) -> str:
+        """GitHub永続化用の会社別相対パスを返す。
+
+        重要:
+        以前は GitHub 上の保存先が `faq.csv` / `logs/...` で全社共通になり、
+        demo / c1 / aaa など複数会社を使うと同じデータを上書きする恐れがありました。
+        現在は必ず `tenants/{tenant_id}/...` 配下へ保存し、会社ごとに
+        FAQ DB / CSV / RAG / ログ / 設定を分離します。
+        """
+        rel = Path(str(rel_path).strip("/"))
+        return (Path("tenants") / TENANT_ID / rel).as_posix()
+
     def _remote_relpath(local_path: Path) -> str:
         try:
             rel = local_path.resolve().relative_to(DATA_DIR.resolve())
         except Exception:
             rel = Path(local_path.name)
-        return rel.as_posix()
+        return _tenant_remote_relpath(rel)
 
     def _github_api_url(rel_path: str) -> str:
-        rel_path = rel_path.strip("/")
+        rel_path = str(rel_path).strip("/")
         full_path = f"{GITHUB_BASE_PATH}/{rel_path}" if GITHUB_BASE_PATH else rel_path
         return f"https://api.github.com/repos/{GITHUB_REPO}/contents/{full_path}"
 
@@ -268,11 +280,18 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
             except Exception:
                 pass
         if _github_persistence_enabled():
-            github_download_file("faq.csv", FAQ_PATH)
-            for remote_path in github_list_dir("logs"):
+            github_download_file(_tenant_remote_relpath("faq.csv"), FAQ_PATH)
+            for remote_path in github_list_dir(_tenant_remote_relpath("logs")):
                 if not remote_path.endswith('.csv'):
                     continue
-                github_download_file(f"logs/{Path(remote_path).name}", LOG_DIR / Path(remote_path).name)
+                github_download_file(_tenant_remote_relpath(f"logs/{Path(remote_path).name}"), LOG_DIR / Path(remote_path).name)
+
+        # 会社IDごとの実体を明示的に作る。
+        # 例: runtime_data/tenants/demo/faq.csv, runtime_data/tenants/c1/faq.csv,
+        #     runtime_data/tenants/aaa/helpdesk.db
+        # DB本体は create_runtime_services() 側の initialize_faq_database(FAQ_PATH) で
+        # FAQ_PATH.parent/helpdesk.db として会社別に作成されます。
+        (DATA_DIR / "doc_rag" / "source_files").mkdir(parents=True, exist_ok=True)
 
     def _github_upload_file_quiet(local_path: Path, rel_path: str | None = None, commit_message: str | None = None) -> bool:
         if not _github_persistence_enabled() or not local_path.exists():
@@ -411,7 +430,11 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
             "token_bonus_max": 0.24,
             "concept_bonus_max": 0.24,
             "prefix_bonus": 0.07,
-            "semantic_enabled": True,
+            # 初期値は速度優先。意味検索/LLM/RAG常時比較は必要時だけON。
+            "semantic_enabled": False,
+            "llm_answer_enabled": False,
+            "always_compare_doc_rag": False,
+            "llm_rerank_enabled": False,
             "semantic_boost": 0.28,
             "semantic_candidate_count": 8,
             "semantic_min_query_len": 8,
@@ -469,6 +492,9 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
         if semantic_trigger_max < semantic_trigger_min:
             semantic_trigger_max = semantic_trigger_min
         semantic_skip_fastlane = _safe_bool(src.get("semantic_skip_fastlane", base["semantic_skip_fastlane"]), base["semantic_skip_fastlane"])
+        llm_answer_enabled = _safe_bool(src.get("llm_answer_enabled", base.get("llm_answer_enabled", False)), base.get("llm_answer_enabled", False))
+        always_compare_doc_rag = _safe_bool(src.get("always_compare_doc_rag", base.get("always_compare_doc_rag", False)), base.get("always_compare_doc_rag", False))
+        llm_rerank_enabled = _safe_bool(src.get("llm_rerank_enabled", base.get("llm_rerank_enabled", False)), base.get("llm_rerank_enabled", False))
         top_k = int(round(_safe_float_range(src.get("top_k", base["top_k"]), base["top_k"], 1, 5)))
         doc_rag_threshold = _safe_float_range(src.get("doc_rag_threshold", base["doc_rag_threshold"]), base["doc_rag_threshold"], 0.10, 1.20)
         doc_compare_margin = _safe_float_range(src.get("doc_compare_margin", base["doc_compare_margin"]), base["doc_compare_margin"], 0.00, 0.50)
@@ -503,6 +529,9 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
             "semantic_trigger_min": round(semantic_trigger_min, 2),
             "semantic_trigger_max": round(semantic_trigger_max, 2),
             "semantic_skip_fastlane": semantic_skip_fastlane,
+            "llm_answer_enabled": llm_answer_enabled,
+            "always_compare_doc_rag": always_compare_doc_rag,
+            "llm_rerank_enabled": llm_rerank_enabled,
             "top_k": top_k,
             "doc_rag_threshold": round(doc_rag_threshold, 2),
             "doc_compare_margin": round(doc_compare_margin, 2),
@@ -533,11 +562,11 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
 
     bootstrap_persistent_storage()
     if _github_persistence_enabled():
-        github_download_file("search_settings.json", SEARCH_SETTINGS_PATH)
+        github_download_file(_tenant_remote_relpath("search_settings.json"), SEARCH_SETTINGS_PATH)
     SEARCH_SETTINGS = load_search_settings()
     if _github_persistence_enabled():
-        github_download_file("ui_theme_settings.json", UI_THEME_SETTINGS_PATH)
-        github_download_file("ui_layout_settings.json", UI_LAYOUT_SETTINGS_PATH)
+        github_download_file(_tenant_remote_relpath("ui_theme_settings.json"), UI_THEME_SETTINGS_PATH)
+        github_download_file(_tenant_remote_relpath("ui_layout_settings.json"), UI_LAYOUT_SETTINGS_PATH)
     UI_THEME_SETTINGS = sanitize_ui_theme_settings(load_json_settings(UI_THEME_SETTINGS_PATH, default_ui_theme_settings, sanitize_ui_theme_settings))
     UI_LAYOUT_SETTINGS = sanitize_ui_layout_settings(load_json_settings(UI_LAYOUT_SETTINGS_PATH, default_ui_layout_settings, sanitize_ui_layout_settings))
 
