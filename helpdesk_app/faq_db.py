@@ -118,6 +118,8 @@ def ensure_schema(db_path: Path) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faq_question ON faq(question)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faq_enabled ON faq(enabled)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faq_category ON faq(category)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_faq_updated_at ON faq(updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_faq_enabled_category ON faq(enabled, category)")
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {CANDIDATE_LEARNING_TABLE_NAME} (

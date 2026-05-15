@@ -1,5 +1,8 @@
 
 from types import SimpleNamespace
+import json
+import pickle
+
 
 
 def create_faq_index_runtime(
@@ -182,21 +185,81 @@ def create_faq_index_runtime(
         faq_embeddings = None
         return df, word_vectorizer, X_word, char_vectorizer, X_char, faq_embeddings
 
+    def _faq_index_cache_path(faq_path) -> Path:
+        """FAQ検索indexの永続キャッシュ保存先。
+
+        質問のたびにCSV/DB相当データからTF-IDFを作り直さないため、
+        FAQファイルの横にpickleとして保存する。Streamlit再起動後も再利用できる。
+        """
+        try:
+            return Path(str(faq_path) + ".search_index.pkl")
+        except Exception:
+            return Path("faq.search_index.pkl")
+
+    def _faq_index_cache_key(faq_path) -> dict:
+        try:
+            stat = Path(faq_path).stat()
+            mtime_ns = int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))
+            size = int(stat.st_size)
+        except Exception:
+            mtime_ns = 0
+            size = 0
+        try:
+            settings = _field_weight_settings()
+        except Exception:
+            settings = DEFAULT_FIELD_WEIGHTS.copy()
+        return {"path": str(faq_path), "mtime_ns": mtime_ns, "size": size, "weights": settings}
+
+    def _load_faq_index_disk_cache(faq_path, cache_key: dict):
+        cache_path = _faq_index_cache_path(faq_path)
+        try:
+            if not cache_path.exists():
+                return None
+            with cache_path.open("rb") as fh:
+                payload = pickle.load(fh)
+            if not isinstance(payload, dict) or payload.get("cache_key") != cache_key:
+                return None
+            built = payload.get("index")
+            if isinstance(built, tuple) and len(built) >= 5:
+                return built
+        except Exception:
+            return None
+        return None
+
+    def _save_faq_index_disk_cache(faq_path, cache_key: dict, built) -> None:
+        cache_path = _faq_index_cache_path(faq_path)
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with cache_path.open("wb") as fh:
+                pickle.dump({"cache_key": cache_key, "index": built}, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        except Exception:
+            pass
+
     @st.cache_resource
-    def load_faq_index(faq_path_str: str):
+    def load_faq_index(faq_path_str: str, mtime_ns: int = 0, size: int = 0, settings_json: str = ""):
         faq_path = Path(faq_path_str)
         if not faq_path.exists():
             return _empty_index()
 
         try:
+            cache_key = _faq_index_cache_key(faq_path)
+            disk_cached = _load_faq_index_disk_cache(faq_path, cache_key)
+            if disk_cached is not None:
+                return disk_cached
+        except Exception:
+            cache_key = {"path": str(faq_path), "mtime_ns": int(mtime_ns or 0), "size": int(size or 0), "weights": {}}
+
+        try:
             df = read_csv_flexible(faq_path)
         except Exception:
             return _empty_index()
-        return _build_faq_index_from_df(df)
+        built = _build_faq_index_from_df(df)
+        _save_faq_index_disk_cache(faq_path, cache_key, built)
+        return built
 
     @st.cache_resource
-    def get_faq_index_state(faq_path_str: str):
-        return load_faq_index(faq_path_str)
+    def get_faq_index_state(faq_path_str: str, mtime_ns: int = 0, size: int = 0, settings_json: str = ""):
+        return load_faq_index(faq_path_str, mtime_ns, size, settings_json)
 
     def reset_faq_index_runtime():
         state["df"] = None
@@ -205,6 +268,11 @@ def create_faq_index_runtime(
         state["char_vectorizer"] = None
         state["X_char"] = None
         state["faq_embeddings"] = None
+        try:
+            load_faq_index.clear()
+            get_faq_index_state.clear()
+        except Exception:
+            pass
 
     def prime_faq_index_from_df(src_df):
         """保存直後のFAQ DataFrameをそのまま検索メモリへ反映する。"""
@@ -215,6 +283,16 @@ def create_faq_index_runtime(
         state["char_vectorizer"] = built[3]
         state["X_char"] = built[4]
         state["faq_embeddings"] = built[5] if len(built) >= 6 else None
+        try:
+            cache_key = _faq_index_cache_key(FAQ_PATH)
+            _save_faq_index_disk_cache(FAQ_PATH, cache_key, built)
+        except Exception:
+            pass
+        try:
+            load_faq_index.clear()
+            get_faq_index_state.clear()
+        except Exception:
+            pass
         try:
             _build_fast_lookup_maps.clear()
         except Exception:

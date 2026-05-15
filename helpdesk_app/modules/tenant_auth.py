@@ -305,12 +305,39 @@ div[data-testid="stTextInput"] label p {
     font-size: 14px !important;
 }
 div[data-testid="stTextInput"] input {
+    height: 56px !important;
     min-height: 56px !important;
+    line-height: 56px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    padding-left: 14px !important;
+    box-sizing: border-box !important;
+    display: flex !important;
+    align-items: center !important;
     border-radius: 12px !important;
     border: 1px solid #d7deea !important;
     background: rgba(255,255,255,.94) !important;
     box-shadow: 0 1px 0 rgba(255,255,255,.92) inset !important;
     font-size: 16px !important;
+    vertical-align: middle !important;
+}
+/* Chrome / Edgeで入力文字が下寄りに見える問題を補正 */
+div[data-testid="stTextInput"] input[type="text"],
+div[data-testid="stTextInput"] input[type="password"] {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    line-height: normal !important;
+}
+/* パスワード表示切替ボタン付きフィールドの高さも入力欄と揃える */
+div[data-testid="stTextInput"] div[data-baseweb="input"] {
+    min-height: 56px !important;
+    height: 56px !important;
+    align-items: center !important;
+}
+div[data-testid="stTextInput"] div[data-baseweb="input"] > div {
+    height: 56px !important;
+    display: flex !important;
+    align-items: center !important;
 }
 div[data-testid="stTextInput"] input:focus {
     border-color: #8b5cf6 !important;

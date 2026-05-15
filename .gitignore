@@ -30,4 +30,5 @@ logs/**/*.csv
 
 # OS
 .DS_Store
-Thumbs.db
+Thumbs.dbruntime_data/*.db 
+runtime_data/tenants/*/*.db 

@@ -36,13 +36,27 @@ def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def load_threads(st) -> List[Dict[str, Any]]:
+THREAD_LIST_LIMIT = 20
+
+
+def load_threads(st, limit: int | None = THREAD_LIST_LIMIT) -> List[Dict[str, Any]]:
     path = _thread_store_path(st)
     if not path.exists():
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(data, list):
+            try:
+                data = sorted(
+                    data,
+                    key=lambda x: str(x.get("updated_at") or ""),
+                    reverse=True,
+                )
+            except Exception:
+                pass
+
+            if limit and limit > 0:
+                return data[:limit]
             return data
     except Exception:
         return []

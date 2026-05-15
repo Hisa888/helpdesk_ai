@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pickle
 import shutil
 from datetime import datetime
 from functools import lru_cache
@@ -85,6 +86,7 @@ def create_document_rag_runtime(
     DOC_RAG_MANIFEST_PATH = DOC_RAG_DIR / "manifest.json"
     DOC_RAG_CHUNKS_PATH = DOC_RAG_DIR / "chunks.json"
     DOC_RAG_EMBEDDINGS_PATH = DOC_RAG_DIR / "embeddings.npy"
+    DOC_RAG_TFIDF_INDEX_PATH = DOC_RAG_DIR / "tfidf_index.pkl"
 
     def _empty_manifest() -> dict[str, Any]:
         return {
@@ -233,11 +235,12 @@ def create_document_rag_runtime(
         _safe_write_json(DOC_RAG_CHUNKS_PATH, chunks)
         # ファイル単位削除後はembeddingsとchunksの件数がズレるため、いったん削除してTF-IDF検索に戻す。
         # 次回「この内容でRAGへ反映」時にsentence-transformersが使える環境なら再生成される。
-        if DOC_RAG_EMBEDDINGS_PATH.exists():
-            try:
-                DOC_RAG_EMBEDDINGS_PATH.unlink()
-            except Exception:
-                pass
+        for index_path in [DOC_RAG_EMBEDDINGS_PATH, DOC_RAG_TFIDF_INDEX_PATH]:
+            if index_path.exists():
+                try:
+                    index_path.unlink()
+                except Exception:
+                    pass
         _persist_doc_paths(DOC_RAG_MANIFEST_PATH, DOC_RAG_CHUNKS_PATH)
 
     def delete_document_rag_document(document_name: str, source_type: str = "", deleted_by: str = "") -> dict[str, Any]:
@@ -295,7 +298,7 @@ def create_document_rag_runtime(
             if DOC_RAG_FILES_DIR.exists():
                 shutil.rmtree(DOC_RAG_FILES_DIR, ignore_errors=True)
             DOC_RAG_FILES_DIR.mkdir(parents=True, exist_ok=True)
-            for path_obj in [DOC_RAG_MANIFEST_PATH, DOC_RAG_CHUNKS_PATH, DOC_RAG_EMBEDDINGS_PATH]:
+            for path_obj in [DOC_RAG_MANIFEST_PATH, DOC_RAG_CHUNKS_PATH, DOC_RAG_EMBEDDINGS_PATH, DOC_RAG_TFIDF_INDEX_PATH]:
                 if path_obj.exists():
                     path_obj.unlink()
             _safe_write_json(DOC_RAG_MANIFEST_PATH, _empty_manifest())
@@ -303,6 +306,53 @@ def create_document_rag_runtime(
             return True
         except Exception:
             return False
+
+    def _build_tfidf_index(chunks: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """RAG用TF-IDF indexを作成する。
+
+        以前は検索のたびに fit_transform していたため、資料数が増えると毎回遅くなっていた。
+        取込時に一度だけ作り、質問時は保存済みindexを読み込む。
+        """
+        try:
+            texts = [str(x.get("text", "")) for x in chunks]
+            if not texts:
+                return None
+            vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
+            matrix = vectorizer.fit_transform(texts)
+            chunk_ids = [str(x.get("chunk_id", "")) for x in chunks]
+            return {"vectorizer": vectorizer, "matrix": matrix, "chunk_count": len(chunks), "chunk_ids": chunk_ids}
+        except Exception:
+            return None
+
+    def _save_tfidf_index(chunks: list[dict[str, Any]]) -> None:
+        try:
+            payload = _build_tfidf_index(chunks)
+            if payload is None:
+                return
+            DOC_RAG_TFIDF_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with DOC_RAG_TFIDF_INDEX_PATH.open("wb") as fh:
+                pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        except Exception:
+            pass
+
+    def _load_tfidf_index(chunks: list[dict[str, Any]]):
+        try:
+            if not DOC_RAG_TFIDF_INDEX_PATH.exists():
+                return None
+            with DOC_RAG_TFIDF_INDEX_PATH.open("rb") as fh:
+                payload = pickle.load(fh)
+            if not isinstance(payload, dict):
+                return None
+            if int(payload.get("chunk_count", -1)) != len(chunks):
+                return None
+            expected_ids = [str(x.get("chunk_id", "")) for x in chunks]
+            if payload.get("chunk_ids") != expected_ids:
+                return None
+            if payload.get("vectorizer") is None or payload.get("matrix") is None:
+                return None
+            return payload
+        except Exception:
+            return None
 
     def build_document_rag_index(uploaded_files: list[Any] | None, wiki_text: str = "", uploaded_by: str = "") -> dict:
         uploaded_files = list(uploaded_files or [])
@@ -375,6 +425,7 @@ def create_document_rag_runtime(
                 embeddings = None
 
         _safe_write_json(DOC_RAG_CHUNKS_PATH, chunks)
+        _save_tfidf_index(chunks)
         if embeddings is not None:
             np.save(DOC_RAG_EMBEDDINGS_PATH, embeddings)
         elif DOC_RAG_EMBEDDINGS_PATH.exists():
@@ -392,6 +443,8 @@ def create_document_rag_runtime(
         }
         _safe_write_json(DOC_RAG_MANIFEST_PATH, manifest)
         _persist_doc_paths(DOC_RAG_CHUNKS_PATH, DOC_RAG_MANIFEST_PATH)
+        if DOC_RAG_TFIDF_INDEX_PATH.exists():
+            _persist_doc_paths(DOC_RAG_TFIDF_INDEX_PATH)
         if DOC_RAG_EMBEDDINGS_PATH.exists():
             _persist_doc_paths(DOC_RAG_EMBEDDINGS_PATH)
         for item in saved_files:
@@ -422,20 +475,29 @@ def create_document_rag_runtime(
             return []
 
     def _search_with_tfidf(query: str, chunks: list[dict[str, Any]], top_k: int = 5) -> list[dict[str, Any]]:
-        texts = [str(x.get("text", "")) for x in chunks]
-        if not texts:
+        if not chunks:
             return []
-        vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
-        matrix = vectorizer.fit_transform(texts)
-        qv = vectorizer.transform([query])
-        scores = cosine_similarity(qv, matrix).flatten()
-        order = np.argsort(scores)[::-1][:top_k]
-        hits: list[dict[str, Any]] = []
-        for idx in order:
-            item = dict(chunks[int(idx)])
-            item["score"] = float(scores[int(idx)])
-            hits.append(item)
-        return hits
+        payload = _load_tfidf_index(chunks)
+        if payload is None:
+            # 旧データ互換: まだ保存indexが無い場合は一度だけ作成して保存する。
+            _save_tfidf_index(chunks)
+            payload = _load_tfidf_index(chunks)
+        if payload is None:
+            return []
+        try:
+            vectorizer = payload["vectorizer"]
+            matrix = payload["matrix"]
+            qv = vectorizer.transform([query])
+            scores = cosine_similarity(qv, matrix).flatten()
+            order = np.argsort(scores)[::-1][:top_k]
+            hits: list[dict[str, Any]] = []
+            for idx in order:
+                item = dict(chunks[int(idx)])
+                item["score"] = float(scores[int(idx)])
+                hits.append(item)
+            return hits
+        except Exception:
+            return []
 
     def search_document_rag(query: str, top_k: int = 5) -> list[dict[str, Any]]:
         query = normalize_doc_text(query)
@@ -497,6 +559,7 @@ def create_document_rag_runtime(
         DOC_RAG_FILES_DIR=DOC_RAG_FILES_DIR,
         DOC_RAG_MANIFEST_PATH=DOC_RAG_MANIFEST_PATH,
         DOC_RAG_CHUNKS_PATH=DOC_RAG_CHUNKS_PATH,
+        DOC_RAG_TFIDF_INDEX_PATH=DOC_RAG_TFIDF_INDEX_PATH,
         DEFAULT_DOC_RAG_THRESHOLD=DEFAULT_DOC_RAG_THRESHOLD,
         SUPPORTED_DOC_RAG_EXTENSIONS=SUPPORTED_DOC_RAG_EXTENSIONS,
         get_document_rag_manifest=get_document_rag_manifest,
