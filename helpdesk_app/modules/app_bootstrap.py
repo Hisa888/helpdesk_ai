@@ -282,12 +282,34 @@ def render_mobile_responsive_css(st) -> None:
   #oai-sidebar-resizer {display: none !important;}
   [data-testid="collapsedControl"] {left: 10px !important; top: 10px !important;}
 
-  .fixed-contact-button {
-    right: 10px !important;
-    bottom: 74px !important;
-    padding: 10px 12px !important;
+  /* 固定の「導入相談」ボタンだけは、通常ボタンの幅100%化から除外する。
+     top と bottom が同時指定されると iPhone で縦長に伸びるため、top を必ず解除する。 */
+  .fixed-contact-button,
+  a.fixed-contact-button,
+  span.fixed-contact-button {
+    position: fixed !important;
+    top: auto !important;
+    right: 12px !important;
+    bottom: 76px !important;
+    left: auto !important;
+    width: auto !important;
+    min-width: 112px !important;
+    max-width: 148px !important;
+    height: auto !important;
+    min-height: 42px !important;
+    max-height: 46px !important;
+    padding: 9px 13px !important;
     border-radius: 999px !important;
-    font-size: 0.88rem !important;
+    font-size: 0.86rem !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+    writing-mode: horizontal-tb !important;
+    box-sizing: border-box !important;
+  }
+  .fixed-contact-button-icon,
+  .fixed-contact-button-text {
+    line-height: 1 !important;
+    white-space: nowrap !important;
   }
 }
 

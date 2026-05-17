@@ -360,12 +360,31 @@ def render_contact_cta_css(*, st) -> None:
 }
 
 @media (max-width: 760px) {
-  .fixed-contact-button {
-    top: 72px;
-    right: 12px;
-    min-height: 38px;
-    padding: 9px 13px;
-    font-size: 13px;
+  .fixed-contact-button,
+  a.fixed-contact-button,
+  span.fixed-contact-button {
+    top: auto !important;
+    right: 12px !important;
+    bottom: 76px !important;
+    left: auto !important;
+    width: auto !important;
+    min-width: 112px !important;
+    max-width: 148px !important;
+    height: auto !important;
+    min-height: 42px !important;
+    max-height: 46px !important;
+    padding: 9px 13px !important;
+    border-radius: 999px !important;
+    font-size: 13px !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+    writing-mode: horizontal-tb !important;
+    box-sizing: border-box !important;
+  }
+  .fixed-contact-button-icon,
+  .fixed-contact-button-text {
+    line-height: 1 !important;
+    white-space: nowrap !important;
   }
   .answer-contact-cta {grid-template-columns: 1fr;}
   .answer-contact-cta-button {width: 100%;}
