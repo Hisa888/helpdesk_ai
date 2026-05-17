@@ -25,6 +25,7 @@ def initialize_app_shell(*, st, components, current_ui_theme_settings, current_u
         ui_theme=ui_theme,
         ui_layout=ui_layout,
     )
+    render_mobile_responsive_css(st)
     return startup_status, ui_theme, ui_layout
 
 
@@ -169,6 +170,138 @@ div[data-testid="column"] .stButton > button {width: 100%; min-height: 54px;}
         unsafe_allow_html=True,
     )
 
+
+
+def render_mobile_responsive_css(st) -> None:
+    """スマホ・タブレットで問い合わせしやすくする共通レスポンシブCSS。
+
+    既存のPC向けUI/管理画面の機能は変更せず、画面幅が狭い場合だけ
+    余白・文字・ボタン・入力欄・表の表示を調整します。
+    """
+    st.markdown(
+        """
+<style>
+/* === Mobile responsive support: employee can submit inquiries from smartphone === */
+@media (max-width: 768px) {
+  html, body, [data-testid="stAppViewContainer"] {
+    overflow-x: hidden !important;
+  }
+
+  .block-container {
+    max-width: 100% !important;
+    padding: 0.75rem 0.75rem 7.5rem 0.75rem !important;
+  }
+
+  h1 {font-size: 1.55rem !important; line-height: 1.35 !important;}
+  h2 {font-size: 1.30rem !important; line-height: 1.35 !important;}
+  h3 {font-size: 1.10rem !important; line-height: 1.35 !important;}
+  p, div, span, label, small {line-height: 1.55 !important;}
+
+  .hero-shell {
+    padding: 18px 16px !important;
+    border-radius: 18px !important;
+    margin-bottom: 12px !important;
+  }
+  .hero h1 {font-size: 1.65rem !important;}
+  .hero p, .query-panel p, .section-caption {font-size: 0.92rem !important;}
+  .badges, .cta-row, .hero-consult {gap: 7px !important;}
+  .badge, .cta {font-size: 0.78rem !important; padding: 6px 9px !important;}
+  .hero-consult a {
+    width: 100% !important;
+    min-height: 46px !important;
+    font-size: 1rem !important;
+    padding: 12px 14px !important;
+  }
+
+  .topbar-card, .glass-card, .card, .kpi, .answerbox, .refbox {
+    border-radius: 16px !important;
+    padding: 13px 14px !important;
+  }
+
+  .kpi-grid {grid-template-columns: 1fr !important; gap: 10px !important;}
+  .kpi .value {font-size: 1.65rem !important;}
+
+  /* Streamlit columns are stacked to avoid tiny cards/buttons on smartphone. */
+  [data-testid="column"] {
+    width: 100% !important;
+    flex: 1 1 100% !important;
+    min-width: 100% !important;
+  }
+
+  .stButton > button,
+  .stDownloadButton > button,
+  .stLinkButton a {
+    width: 100% !important;
+    min-height: 46px !important;
+    font-size: 0.98rem !important;
+    border-radius: 12px !important;
+    white-space: normal !important;
+  }
+
+  input, textarea, [contenteditable="true"] {
+    font-size: 16px !important; /* iPhoneの自動ズーム防止 */
+  }
+
+  [data-testid="stTextInput"] input,
+  [data-testid="stTextArea"] textarea {
+    min-height: 44px !important;
+  }
+
+  [data-testid="stChatInput"] {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    bottom: 8px !important;
+    z-index: 1000000 !important;
+    border-radius: 16px !important;
+    box-shadow: 0 10px 28px rgba(15,23,42,0.18) !important;
+  }
+  [data-testid="stChatInput"] textarea,
+  [data-testid="stChatInput"] input {
+    min-height: 44px !important;
+    font-size: 16px !important;
+    line-height: 1.45 !important;
+    padding-top: 10px !important;
+    padding-bottom: 10px !important;
+  }
+
+  /* Tables/logs remain usable by horizontal scrolling instead of shrinking text. */
+  [data-testid="stDataFrame"],
+  [data-testid="stTable"],
+  .stDataFrame, .stTable {
+    overflow-x: auto !important;
+    max-width: 100% !important;
+  }
+
+  /* Sidebar can still be opened on smartphone, but does not cover more than necessary. */
+  [data-testid="stSidebar"]:not([aria-expanded="false"]) {
+    min-width: 86vw !important;
+    max-width: 86vw !important;
+    width: 86vw !important;
+  }
+  #oai-sidebar-resizer {display: none !important;}
+  [data-testid="collapsedControl"] {left: 10px !important; top: 10px !important;}
+
+  .fixed-contact-button {
+    right: 10px !important;
+    bottom: 74px !important;
+    padding: 10px 12px !important;
+    border-radius: 999px !important;
+    font-size: 0.88rem !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .block-container {padding-left: 0.55rem !important; padding-right: 0.55rem !important;}
+  .hero h1 {font-size: 1.42rem !important;}
+  .brand-title {font-size: 1rem !important;}
+  .brand-sub {font-size: 0.78rem !important;}
+  .fixed-contact-button-text {display: inline !important;}
+}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 def apply_user_ui_settings(*, st, components, ui_theme: dict, ui_layout: dict) -> None:
     st.markdown(

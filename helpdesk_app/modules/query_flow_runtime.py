@@ -51,13 +51,29 @@ def process_user_query(
         best_score = hits[0][1] if hits else 0.0
 
     search_cfg = current_search_settings() if callable(current_search_settings) else {}
-    # 候補が少しでも取れている場合は、追加質問より「もしかしてこれ？」を優先する。
-    # これにより「モニター死んだ」「画面黒い」のような短いユーザー語でも取りこぼしにくくする。
+
+    # 低一致度の候補表示ガード。
+    # 0.30以下の候補は「腹減った」のような業務外/雑談にも無理やりFAQ候補を出してしまい、
+    # 品質が低く見えるため、候補表示・候補回答には進めない。
     try:
-        maybe_threshold_for_clarify = float(search_cfg.get("maybe_candidate_threshold", 0.03))
+        candidate_min_display_score = float(search_cfg.get("candidate_min_display_score", 0.30))
     except Exception:
-        maybe_threshold_for_clarify = 0.03
-    has_candidate_for_suggest = bool(hits) and float(best_score) >= maybe_threshold_for_clarify
+        candidate_min_display_score = 0.30
+
+    def _candidate_display_allowed(score: float) -> bool:
+        try:
+            # 要件: 候補表示 0.3以下は回答/候補を表示しない
+            return float(score) > float(candidate_min_display_score)
+        except Exception:
+            return False
+
+    # 候補が表示可能な一致度の場合だけ、追加質問より「もしかしてこれ？」を優先する。
+    # 低一致度では無関係なFAQ候補を出さず、該当なしに回す。
+    try:
+        maybe_threshold_for_clarify = max(float(search_cfg.get("maybe_candidate_threshold", 0.03)), candidate_min_display_score)
+    except Exception:
+        maybe_threshold_for_clarify = candidate_min_display_score
+    has_candidate_for_suggest = bool(hits) and _candidate_display_allowed(float(best_score)) and float(best_score) >= maybe_threshold_for_clarify
 
     if (
         not skip_clarification
@@ -204,7 +220,7 @@ def process_user_query(
             was_nohit = False
             was_suggest = False
             used_doc_rag = True
-        elif ambiguous_auto:
+        elif ambiguous_auto and _candidate_display_allowed(float(best_score)):
             maybe_count = max(1, int(search_cfg.get("maybe_candidate_count", 3)))
             used_hits = hits[:maybe_count]
             suggestion_candidates = used_hits
@@ -213,9 +229,9 @@ def process_user_query(
             was_nohit = False
             was_suggest = True
         elif best_score < suggest_threshold:
-            maybe_threshold = float(search_cfg.get("maybe_candidate_threshold", 0.03))
+            maybe_threshold = max(float(search_cfg.get("maybe_candidate_threshold", 0.03)), candidate_min_display_score)
             maybe_count = max(1, int(search_cfg.get("maybe_candidate_count", 3)))
-            if hits and float(best_score) >= maybe_threshold:
+            if hits and _candidate_display_allowed(float(best_score)) and float(best_score) >= maybe_threshold:
                 used_hits = hits[:maybe_count]
                 suggestion_candidates = used_hits
                 answer = build_suggest_answer(user_q, used_hits)
@@ -231,13 +247,22 @@ def process_user_query(
                 was_nohit = True
                 was_suggest = False
         elif best_score < answer_threshold:
-            maybe_count = max(1, int(search_cfg.get("maybe_candidate_count", 3)))
-            used_hits = hits[:maybe_count]
-            suggestion_candidates = used_hits
-            answer = build_suggest_answer(user_q, used_hits)
-            answer_format = get_row_answer_format(used_hits[0][0]) if used_hits else "markdown"
-            was_nohit = False
-            was_suggest = True
+            if hits and _candidate_display_allowed(float(best_score)):
+                maybe_count = max(1, int(search_cfg.get("maybe_candidate_count", 3)))
+                used_hits = hits[:maybe_count]
+                suggestion_candidates = used_hits
+                answer = build_suggest_answer(user_q, used_hits)
+                answer_format = get_row_answer_format(used_hits[0][0]) if used_hits else "markdown"
+                was_nohit = False
+                was_suggest = True
+            else:
+                used_hits = []
+                answer = nohit_template()
+                answer_format = "markdown"
+                ts_nohit = log_nohit(user_q)
+                st.session_state["last_nohit"] = {"day": datetime.now().strftime("%Y%m%d"), "timestamp": ts_nohit, "question": user_q}
+                was_nohit = True
+                was_suggest = False
 
     top_cat = ""
     if used_hits:
