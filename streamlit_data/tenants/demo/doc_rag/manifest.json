@@ -1,19 +1,19 @@
 {
   "enabled": true,
   "doc_count": 1,
-  "chunk_count": 35,
+  "chunk_count": 271,
   "files": [
     {
       "name": "TEST.xlsx",
       "type": "xlsx",
-      "path": "runtime_data/tenants/demo/doc_rag/source_files/TEST.xlsx",
-      "uploaded_at": "2026-05-20T03:55:18",
-      "uploaded_by": "demo/admin",
-      "chunk_count": 35
+      "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\TEST.xlsx",
+      "uploaded_at": "2026-05-21T23:05:10",
+      "uploaded_by": "demo/demo",
+      "chunk_count": 271
     }
   ],
   "wiki_enabled": false,
   "wiki_uploaded_at": "",
   "wiki_uploaded_by": "",
-  "updated_at": "2026-05-20T03:55:18"
+  "updated_at": "2026-05-21T23:05:10"
 }
