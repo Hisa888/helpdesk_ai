@@ -301,7 +301,20 @@ def finalize_answer_cycle(
     render_used_hits_expander=None,
 ) -> None:
     st.session_state.used_hits = result.get("used_hits", [])
-    st.session_state["last_user_q_for_learning"] = str(user_q or "").strip()
+    clean_user_q = str(user_q or "").strip()
+    st.session_state["last_user_q_for_learning"] = clean_user_q
+
+    # 回答あり／候補表示／該当なし／社内ドキュメント回答のすべてで、
+    # 画面下に「追加情報を記録（任意）」を必ず表示する。
+    # 通常回答でも、利用者が「回答は出たが状況を補足したい」「回答が少し違う」と感じた時に、
+    # その場でログへ追記できるようにする。
+    st.session_state["pending_nohit_active"] = True
+    st.session_state["pending_nohit"] = {
+        "day": datetime.now().strftime("%Y%m%d"),
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "question": clean_user_q,
+    }
+
     if not bool(result.get("was_clarification", False)):
         clear_clarification(st=st, reset_count=True)
     render_answer_message(

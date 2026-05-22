@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import pickle
+import re
 import shutil
-from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,21 +32,13 @@ def _load_sentence_model(SentenceTransformer):
     return SentenceTransformer(EMBED_MODEL_NAME)
 
 
-def _now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
-
-
-def _safe_source_filename(filename: str) -> str:
-    """アップロード名からパス要素を除き、安全なファイル名だけを残す。"""
-    name = Path(str(filename or "document")).name.strip()
-    return name or "document"
-
-
 def _hash_chunk(chunk: dict[str, Any]) -> str:
     key = "|".join([
         str(chunk.get("source_name", "")),
         str(chunk.get("source_type", "")),
         str(chunk.get("location", "")),
+        str(chunk.get("sheet_name", "")),
+        str(chunk.get("heading", "")),
         str(chunk.get("chunk_label", "")),
         str(chunk.get("text", ""))[:200],
     ])
@@ -68,6 +59,157 @@ def _load_json(path_obj: Path, fallback: Any):
     return fallback
 
 
+_DOC_STOP_TOKENS = {
+    "あります", "できます", "ください", "する", "した", "して", "です", "ます", "よう", "方法", "場合", "について",
+    "確認", "事項", "対象", "内容", "当社", "サービス", "契約", "変更", "解除", "会員", "保護",
+}
+
+
+def _doc_tokens(text: str) -> set[str]:
+    """日本語向けの軽量重要語抽出。
+
+    以前の実装は日本語文を長い1語として扱いやすく、質問語との重なり判定が弱かったため、
+    カタカナ語・漢字語・英数字を中心に切り出します。
+    """
+    s = normalize_doc_text(text).lower()
+    if not s:
+        return set()
+    tokens: set[str] = set()
+    tokens.update(re.findall(r"[a-z0-9]{2,}", s))
+    tokens.update(re.findall(r"[ァ-ヴー]{2,}", s))
+    tokens.update(re.findall(r"[一-龥]{2,}", s))
+    # ひらがな混じりでも業務上重要な語は追加
+    for word in [
+        "キャッシュ", "ブラウザ", "chrome", "edge", "ie", "cookie", "クッキー", "履歴", "一時ファイル",
+        "入室", "入館", "立入", "入場", "制限", "復旧", "対策", "不正アクセス", "監査", "承認", "申請",
+        "有無", "権限", "退室", "ログイン", "パスワード", "ロック", "vpn", "wifi", "wi-fi",
+    ]:
+        if word.lower() in s:
+            tokens.add(word.lower())
+    return {t for t in tokens if len(t) >= 2 and t not in _DOC_STOP_TOKENS}
+
+
+def _meaningful_overlap(query: str, chunk: dict[str, Any]) -> int:
+    q_tokens = _doc_tokens(query)
+    if not q_tokens:
+        return 0
+    target = normalize_doc_text("\n".join([
+        str(chunk.get("sheet_name", "")),
+        str(chunk.get("heading", "")),
+        str(chunk.get("keywords", "")),
+        str(chunk.get("search_text", "")),
+        str(chunk.get("text", "")),
+    ]))
+    return len(q_tokens & _doc_tokens(target))
+
+
+def _is_probably_bad_excel_hit(query: str, chunk: dict[str, Any], score: float) -> bool:
+    """Excelの別行・管理列ノイズによる誤回答を抑止する。"""
+    if chunk.get("source_type") not in {"xlsx", "xlsm"}:
+        return False
+    q_tokens = _doc_tokens(query)
+    if not q_tokens:
+        return False
+    overlap = _meaningful_overlap(query, chunk)
+    if overlap == 0:
+        return True
+    # 質問語が1個しか合わず、スコアも低い場合は危険候補扱い
+    if overlap == 1 and score < 0.18 and len(q_tokens) >= 2:
+        return True
+    return False
+
+
+def _doc_weighted_text(chunk: dict[str, Any]) -> str:
+    """本文だけでなく、Excelのシート名・見出し・場所を強めに検索対象へ入れる。"""
+    source_type = str(chunk.get("source_type", ""))
+    source_name = normalize_doc_text(chunk.get("source_name", ""))
+    location = normalize_doc_text(chunk.get("location", ""))
+    sheet_name = normalize_doc_text(chunk.get("sheet_name", ""))
+    heading = normalize_doc_text(chunk.get("heading", ""))
+    keywords = normalize_doc_text(chunk.get("keywords", ""))
+    text = normalize_doc_text(chunk.get("text", ""))
+    search_text = normalize_doc_text(chunk.get("search_text", "")) or text
+
+    parts: list[str] = []
+    parts.append(source_name)
+    # Excelの行番号/場所は検索ノイズになりやすいので、重みを上げすぎない
+    parts.append(location)
+    if source_type in {"xlsx", "xlsm"}:
+        # Excelは表の列名・見出し・シート名が質問と一致することが多いので強める
+        parts.extend([sheet_name] * 4)
+        parts.extend([heading] * 5)
+        parts.extend([keywords] * 3)
+        parts.extend([search_text] * 3)
+        parts.extend([text] * 2)
+    else:
+        parts.extend([heading] * 3)
+        parts.extend([keywords] * 2)
+        parts.extend([search_text] * 2)
+        parts.append(text)
+    return "\n".join([p for p in parts if p])
+
+
+def _apply_doc_rerank(query: str, chunks: list[dict[str, Any]], scores: np.ndarray, candidate_idxs: list[int]) -> None:
+    q = normalize_doc_text(query)
+    if not q or scores is None:
+        return
+    q_tokens = _doc_tokens(q)
+    q_lower = q.lower()
+    for idx in candidate_idxs:
+        if idx < 0 or idx >= len(chunks):
+            continue
+        ch = chunks[idx]
+        text = normalize_doc_text(ch.get("text", ""))
+        stxt = normalize_doc_text(ch.get("search_text", "")) or text
+        meta = normalize_doc_text(" ".join([
+            str(ch.get("source_name", "")),
+            str(ch.get("location", "")),
+            str(ch.get("sheet_name", "")),
+            str(ch.get("heading", "")),
+            str(ch.get("keywords", "")),
+        ]))
+        all_text = f"{meta}\n{stxt}"
+        all_lower = all_text.lower()
+        tokens = _doc_tokens(all_text)
+
+        # 完全/部分一致は強く加点
+        if q and q in all_text:
+            scores[idx] += 0.35
+        if q and q in meta:
+            scores[idx] += 0.22
+
+        if q_tokens:
+            overlap = len(q_tokens & tokens) / max(1, len(q_tokens))
+            scores[idx] += min(0.30, overlap * 0.30)
+
+        # Excel表・見出し・行番号があるチャンクは質問と項目名が合えば優先
+        if ch.get("source_type") in {"xlsx", "xlsm"}:
+            scores[idx] += 0.04
+            if any(w in q for w in ["入室", "入館", "立入", "入場"]):
+                if any(w in all_text for w in ["入室", "入館", "立入", "入場"]):
+                    scores[idx] += 0.22
+                else:
+                    scores[idx] -= 0.12
+            if "制限" in q and "制限" in all_text:
+                scores[idx] += 0.16
+            if any(w in q for w in ["復旧", "対策", "不正アクセス"]):
+                if any(w in all_text for w in ["復旧", "対策", "不正アクセス", "インシデント"]):
+                    scores[idx] += 0.20
+                else:
+                    scores[idx] -= 0.10
+
+        # 「○」「有」だけの回答が本文中にある場合、項目名一致がないと誤ヒットしやすいので抑制
+        compact = re.sub(r"\s+", "", text)
+        if len(compact) <= 20 and not (q_tokens & _doc_tokens(meta)):
+            scores[idx] -= 0.10
+
+        # 質問語がほぼ入っていないチャンクは、埋め込み検索の暴走を強く抑える
+        if q_tokens and len(q_tokens & tokens) == 0:
+            scores[idx] -= 0.22
+        elif q_tokens and len(q_tokens & tokens) == 1 and ch.get("source_type") in {"xlsx", "xlsm"} and len(q_tokens) >= 2:
+            scores[idx] -= 0.06
+
+
 def create_document_rag_runtime(
     *,
     st,
@@ -86,10 +228,9 @@ def create_document_rag_runtime(
     DOC_RAG_MANIFEST_PATH = DOC_RAG_DIR / "manifest.json"
     DOC_RAG_CHUNKS_PATH = DOC_RAG_DIR / "chunks.json"
     DOC_RAG_EMBEDDINGS_PATH = DOC_RAG_DIR / "embeddings.npy"
-    DOC_RAG_TFIDF_INDEX_PATH = DOC_RAG_DIR / "tfidf_index.pkl"
 
-    def _empty_manifest() -> dict[str, Any]:
-        return {
+    def get_document_rag_manifest() -> dict:
+        base = {
             "enabled": False,
             "doc_count": 0,
             "chunk_count": 0,
@@ -97,21 +238,37 @@ def create_document_rag_runtime(
             "wiki_enabled": False,
             "updated_at": "",
         }
-
-    def get_document_rag_manifest() -> dict:
-        base = _empty_manifest()
         data = _load_json(DOC_RAG_MANIFEST_PATH, base)
         if not isinstance(data, dict):
             return base
         clean = base.copy()
         clean.update(data)
-        if not isinstance(clean.get("files"), list):
-            clean["files"] = []
         return clean
 
     def load_document_chunks() -> list[dict[str, Any]]:
         rows = _load_json(DOC_RAG_CHUNKS_PATH, [])
         return rows if isinstance(rows, list) else []
+
+    def clear_document_rag() -> bool:
+        try:
+            if DOC_RAG_FILES_DIR.exists():
+                shutil.rmtree(DOC_RAG_FILES_DIR, ignore_errors=True)
+            DOC_RAG_FILES_DIR.mkdir(parents=True, exist_ok=True)
+            for path_obj in [DOC_RAG_MANIFEST_PATH, DOC_RAG_CHUNKS_PATH, DOC_RAG_EMBEDDINGS_PATH]:
+                if path_obj.exists():
+                    path_obj.unlink()
+            _safe_write_json(DOC_RAG_MANIFEST_PATH, {
+                "enabled": False,
+                "doc_count": 0,
+                "chunk_count": 0,
+                "files": [],
+                "wiki_enabled": False,
+                "updated_at": "",
+            })
+            persist_runtime_file(DOC_RAG_MANIFEST_PATH, label="doc_rag_manifest")
+            return True
+        except Exception:
+            return False
 
     def _persist_doc_paths(*paths: Path) -> None:
         for path_obj in paths:
@@ -120,276 +277,25 @@ def create_document_rag_runtime(
             except Exception:
                 continue
 
-    def _chunk_matches_document(chunk: dict[str, Any], document_name: str, source_type: str = "") -> bool:
-        chunk_name = str(chunk.get("source_name", "")).strip()
-        chunk_type = str(chunk.get("source_type", "")).strip().lower()
-        target_name = str(document_name or "").strip()
-        target_type = str(source_type or "").strip().lower()
-        if chunk_name != target_name:
-            return False
-        return not target_type or chunk_type == target_type
-
-    def _chunk_count_for(chunks: list[dict[str, Any]], document_name: str, source_type: str = "") -> int:
-        return sum(1 for row in chunks if _chunk_matches_document(row, document_name, source_type))
-
-    def list_document_rag_documents() -> list[dict[str, Any]]:
-        """管理画面用: 取り込み済みRAG資料を一覧化する。
-
-        旧manifestには取込日・登録者・チャンク数が無い場合があるため、
-        chunks.jsonから補完して表示できる形に整える。
-        """
-        manifest = get_document_rag_manifest()
-        chunks = load_document_chunks()
-        updated_at = str(manifest.get("updated_at", "") or "")
-        rows: list[dict[str, Any]] = []
-        seen: set[tuple[str, str]] = set()
-
-        for item in manifest.get("files", []) or []:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("name", "") or "").strip()
-            if not name:
-                continue
-            source_type = str(item.get("type", "") or Path(name).suffix.lower().lstrip(".")).strip().lower()
-            key = (name, source_type)
-            if key in seen:
-                continue
-            seen.add(key)
-            rows.append({
-                "name": name,
-                "type": source_type or "file",
-                "uploaded_at": str(item.get("uploaded_at", "") or updated_at),
-                "uploaded_by": str(item.get("uploaded_by", "") or "不明"),
-                "chunk_count": int(item.get("chunk_count", 0) or _chunk_count_for(chunks, name, source_type)),
-                "path": str(item.get("path", "") or str(DOC_RAG_FILES_DIR / name)),
-                "is_wiki": False,
-            })
-
-        # 旧データやmanifestに無いチャンクも拾って一覧に出す。
-        for chunk in chunks:
-            if not isinstance(chunk, dict):
-                continue
-            name = str(chunk.get("source_name", "") or "").strip()
-            if not name:
-                continue
-            source_type = str(chunk.get("source_type", "") or Path(name).suffix.lower().lstrip(".") or "file").strip().lower()
-            key = (name, source_type)
-            if key in seen:
-                continue
-            seen.add(key)
-            rows.append({
-                "name": name,
-                "type": source_type,
-                "uploaded_at": updated_at,
-                "uploaded_by": "不明",
-                "chunk_count": _chunk_count_for(chunks, name, source_type),
-                "path": str(DOC_RAG_FILES_DIR / name) if source_type != "wiki" else "",
-                "is_wiki": source_type == "wiki" or name == "wiki_input.txt",
-            })
-
-        if manifest.get("wiki_enabled") and ("wiki_input.txt", "wiki") not in seen:
-            rows.append({
-                "name": "wiki_input.txt",
-                "type": "wiki",
-                "uploaded_at": updated_at,
-                "uploaded_by": "不明",
-                "chunk_count": _chunk_count_for(chunks, "wiki_input.txt", "wiki"),
-                "path": "",
-                "is_wiki": True,
-            })
-
-        return rows
-
-    def _safe_unlink_source_file(path_text: str, document_name: str) -> None:
-        """source_files配下の元ファイルだけを安全に削除する。"""
-        candidates = []
-        if path_text:
-            candidates.append(Path(path_text))
-        if document_name:
-            candidates.append(DOC_RAG_FILES_DIR / _safe_source_filename(document_name))
-
-        try:
-            base = DOC_RAG_FILES_DIR.resolve()
-        except Exception:
-            base = DOC_RAG_FILES_DIR
-
-        for candidate in candidates:
-            try:
-                path_obj = Path(candidate)
-                resolved = path_obj.resolve()
-                if str(resolved).startswith(str(base)) and resolved.exists() and resolved.is_file():
-                    resolved.unlink()
-            except Exception:
-                continue
-
-    def _write_manifest_after_change(manifest: dict[str, Any], chunks: list[dict[str, Any]]) -> None:
-        files = manifest.get("files", []) if isinstance(manifest.get("files"), list) else []
-        wiki_enabled = bool(manifest.get("wiki_enabled"))
-        manifest.update({
-            "enabled": bool(files or wiki_enabled or chunks),
-            "doc_count": len(files) + (1 if wiki_enabled else 0),
-            "chunk_count": len(chunks),
-            "updated_at": _now_iso(),
-        })
-        _safe_write_json(DOC_RAG_MANIFEST_PATH, manifest)
-        _safe_write_json(DOC_RAG_CHUNKS_PATH, chunks)
-        # ファイル単位削除後はembeddingsとchunksの件数がズレるため、いったん削除してTF-IDF検索に戻す。
-        # 次回「この内容でRAGへ反映」時にsentence-transformersが使える環境なら再生成される。
-        for index_path in [DOC_RAG_EMBEDDINGS_PATH, DOC_RAG_TFIDF_INDEX_PATH]:
-            if index_path.exists():
-                try:
-                    index_path.unlink()
-                except Exception:
-                    pass
-        _persist_doc_paths(DOC_RAG_MANIFEST_PATH, DOC_RAG_CHUNKS_PATH)
-
-    def delete_document_rag_document(document_name: str, source_type: str = "", deleted_by: str = "") -> dict[str, Any]:
-        """管理画面用: 指定資料をRAG検索対象から外し、元ファイルも削除する。"""
-        target_name = str(document_name or "").strip()
-        target_type = str(source_type or "").strip().lower()
-        if not target_name:
-            return {"ok": False, "message": "削除対象のファイル名が不明です。"}
-
-        manifest = get_document_rag_manifest()
-        chunks = load_document_chunks()
-        before_chunk_count = len(chunks)
-        removed_file_count = 0
-        source_path = ""
-
-        new_files = []
-        for item in manifest.get("files", []) or []:
-            if not isinstance(item, dict):
-                continue
-            item_name = str(item.get("name", "") or "").strip()
-            item_type = str(item.get("type", "") or Path(item_name).suffix.lower().lstrip(".")).strip().lower()
-            if item_name == target_name and (not target_type or item_type == target_type):
-                removed_file_count += 1
-                source_path = str(item.get("path", "") or "")
-                continue
-            new_files.append(item)
-        manifest["files"] = new_files
-
-        if target_type == "wiki" or target_name == "wiki_input.txt":
-            manifest["wiki_enabled"] = False
-
-        new_chunks = [row for row in chunks if not _chunk_matches_document(row, target_name, target_type)]
-        removed_chunk_count = before_chunk_count - len(new_chunks)
-
-        _safe_unlink_source_file(source_path, target_name)
-        manifest["last_deleted"] = {
-            "name": target_name,
-            "type": target_type,
-            "deleted_by": str(deleted_by or "不明"),
-            "deleted_at": _now_iso(),
-            "removed_chunks": removed_chunk_count,
-        }
-        _write_manifest_after_change(manifest, new_chunks)
-
-        if removed_file_count == 0 and removed_chunk_count == 0 and target_name != "wiki_input.txt":
-            return {"ok": False, "message": "対象資料が見つかりませんでした。"}
-        return {
-            "ok": True,
-            "message": f"{target_name} を削除しました。削除チャンク数: {removed_chunk_count}",
-            "removed_chunks": removed_chunk_count,
-        }
-
-    def clear_document_rag() -> bool:
-        try:
-            if DOC_RAG_FILES_DIR.exists():
-                shutil.rmtree(DOC_RAG_FILES_DIR, ignore_errors=True)
-            DOC_RAG_FILES_DIR.mkdir(parents=True, exist_ok=True)
-            for path_obj in [DOC_RAG_MANIFEST_PATH, DOC_RAG_CHUNKS_PATH, DOC_RAG_EMBEDDINGS_PATH, DOC_RAG_TFIDF_INDEX_PATH]:
-                if path_obj.exists():
-                    path_obj.unlink()
-            _safe_write_json(DOC_RAG_MANIFEST_PATH, _empty_manifest())
-            persist_runtime_file(DOC_RAG_MANIFEST_PATH, label="doc_rag_manifest")
-            return True
-        except Exception:
-            return False
-
-    def _build_tfidf_index(chunks: list[dict[str, Any]]) -> dict[str, Any] | None:
-        """RAG用TF-IDF indexを作成する。
-
-        以前は検索のたびに fit_transform していたため、資料数が増えると毎回遅くなっていた。
-        取込時に一度だけ作り、質問時は保存済みindexを読み込む。
-        """
-        try:
-            texts = [str(x.get("text", "")) for x in chunks]
-            if not texts:
-                return None
-            vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
-            matrix = vectorizer.fit_transform(texts)
-            chunk_ids = [str(x.get("chunk_id", "")) for x in chunks]
-            return {"vectorizer": vectorizer, "matrix": matrix, "chunk_count": len(chunks), "chunk_ids": chunk_ids}
-        except Exception:
-            return None
-
-    def _save_tfidf_index(chunks: list[dict[str, Any]]) -> None:
-        try:
-            payload = _build_tfidf_index(chunks)
-            if payload is None:
-                return
-            DOC_RAG_TFIDF_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-            with DOC_RAG_TFIDF_INDEX_PATH.open("wb") as fh:
-                pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
-        except Exception:
-            pass
-
-    def _load_tfidf_index(chunks: list[dict[str, Any]]):
-        try:
-            if not DOC_RAG_TFIDF_INDEX_PATH.exists():
-                return None
-            with DOC_RAG_TFIDF_INDEX_PATH.open("rb") as fh:
-                payload = pickle.load(fh)
-            if not isinstance(payload, dict):
-                return None
-            if int(payload.get("chunk_count", -1)) != len(chunks):
-                return None
-            expected_ids = [str(x.get("chunk_id", "")) for x in chunks]
-            if payload.get("chunk_ids") != expected_ids:
-                return None
-            if payload.get("vectorizer") is None or payload.get("matrix") is None:
-                return None
-            return payload
-        except Exception:
-            return None
-
-    def build_document_rag_index(uploaded_files: list[Any] | None, wiki_text: str = "", uploaded_by: str = "") -> dict:
+    def build_document_rag_index(uploaded_files: list[Any] | None, wiki_text: str = "") -> dict:
         uploaded_files = list(uploaded_files or [])
         wiki_text = normalize_doc_text(wiki_text)
         all_sections: list[dict[str, str]] = []
         saved_files: list[dict[str, str]] = []
-        now = _now_iso()
-        uploaded_by = str(uploaded_by or "不明").strip() or "不明"
 
         DOC_RAG_FILES_DIR.mkdir(parents=True, exist_ok=True)
 
         for uploaded in uploaded_files:
             try:
-                original_name = str(getattr(uploaded, "name", "document")).strip() or "document"
-                filename = _safe_source_filename(original_name)
-                source_type = Path(filename).suffix.lower().lstrip(".") or "file"
-
                 sections = extract_sections_from_uploaded_file(uploaded)
                 if not sections:
                     continue
-                # 一覧削除のキーと検索時の根拠名を揃える。
-                for section in sections:
-                    section["source_name"] = filename
-                    section["source_type"] = str(section.get("source_type") or source_type).lower()
                 all_sections.extend(sections)
-
                 raw_bytes = uploaded.getvalue() if hasattr(uploaded, "getvalue") else uploaded.read()
+                filename = str(getattr(uploaded, "name", "document")).strip() or "document"
                 save_path = DOC_RAG_FILES_DIR / filename
                 save_path.write_bytes(raw_bytes)
-                saved_files.append({
-                    "name": filename,
-                    "type": source_type,
-                    "path": str(save_path),
-                    "uploaded_at": now,
-                    "uploaded_by": uploaded_by,
-                    "chunk_count": 0,
-                })
+                saved_files.append({"name": filename, "type": Path(filename).suffix.lower().lstrip("."), "path": str(save_path)})
             except Exception as exc:
                 st.warning(f"ドキュメント取込に失敗しました: {getattr(uploaded, 'name', 'document')} / {exc}")
 
@@ -398,6 +304,7 @@ def create_document_rag_runtime(
                 "source_name": "wiki_input.txt",
                 "source_type": "wiki",
                 "location": "wiki",
+                "heading": "wiki",
                 "text": wiki_text,
             })
 
@@ -408,16 +315,13 @@ def create_document_rag_runtime(
         if not chunks:
             return {"ok": False, "message": "取り込める本文がありませんでした。", "chunk_count": 0}
 
-        # ファイル別チャンク数をmanifestへ保存する。
-        for item in saved_files:
-            item["chunk_count"] = _chunk_count_for(chunks, item["name"], item["type"])
-
         embeddings = None
         if SENTENCE_TRANSFORMERS_AVAILABLE:
             try:
                 model = _load_sentence_model(SentenceTransformer)
                 if model is not None:
-                    texts = [f"passage: {str(x.get('text', ''))}" for x in chunks]
+                    # 埋め込みにもメタデータを入れることで「シート名/見出し/項目名」で拾えるようにする
+                    texts = [f"passage: {_doc_weighted_text(x)}" for x in chunks]
                     emb = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
                     embeddings = np.asarray(emb, dtype=np.float32)
             except Exception as exc:
@@ -425,7 +329,6 @@ def create_document_rag_runtime(
                 embeddings = None
 
         _safe_write_json(DOC_RAG_CHUNKS_PATH, chunks)
-        _save_tfidf_index(chunks)
         if embeddings is not None:
             np.save(DOC_RAG_EMBEDDINGS_PATH, embeddings)
         elif DOC_RAG_EMBEDDINGS_PATH.exists():
@@ -435,22 +338,29 @@ def create_document_rag_runtime(
             "enabled": True,
             "doc_count": len(saved_files) + (1 if wiki_text else 0),
             "chunk_count": len(chunks),
-            "files": saved_files,
+            "files": [{"name": x["name"], "type": x["type"]} for x in saved_files],
             "wiki_enabled": bool(wiki_text),
-            "wiki_uploaded_at": now if wiki_text else "",
-            "wiki_uploaded_by": uploaded_by if wiki_text else "",
-            "updated_at": now,
+            "updated_at": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
         }
         _safe_write_json(DOC_RAG_MANIFEST_PATH, manifest)
         _persist_doc_paths(DOC_RAG_CHUNKS_PATH, DOC_RAG_MANIFEST_PATH)
-        if DOC_RAG_TFIDF_INDEX_PATH.exists():
-            _persist_doc_paths(DOC_RAG_TFIDF_INDEX_PATH)
         if DOC_RAG_EMBEDDINGS_PATH.exists():
             _persist_doc_paths(DOC_RAG_EMBEDDINGS_PATH)
         for item in saved_files:
             _persist_doc_paths(Path(item["path"]))
 
         return {"ok": True, "message": f"{manifest['doc_count']}件の資料を取り込みました。", "chunk_count": len(chunks), "manifest": manifest}
+
+    def _merge_hits(primary: list[dict[str, Any]], secondary: list[dict[str, Any]], top_k: int) -> list[dict[str, Any]]:
+        by_id: dict[str, dict[str, Any]] = {}
+        for source_weight, hits in [(1.0, primary), (0.96, secondary)]:
+            for h in hits:
+                key = str(h.get("chunk_id") or f"{h.get('source_name')}|{h.get('location')}|{h.get('chunk_label')}|{h.get('text', '')[:40]}")
+                item = dict(h)
+                item["score"] = float(item.get("score", 0.0)) * source_weight
+                if key not in by_id or item["score"] > float(by_id[key].get("score", 0.0)):
+                    by_id[key] = item
+        return sorted(by_id.values(), key=lambda x: float(x.get("score", 0.0)), reverse=True)[:top_k]
 
     def _search_with_embeddings(query: str, chunks: list[dict[str, Any]], top_k: int = 5) -> list[dict[str, Any]]:
         if not DOC_RAG_EMBEDDINGS_PATH.exists():
@@ -464,6 +374,9 @@ def create_document_rag_runtime(
                 return []
             q_emb = model.encode([f"query: {query}"], normalize_embeddings=True, show_progress_bar=False)[0]
             scores = np.dot(embeddings, q_emb)
+            count = min(len(scores), max(top_k * 4, 20))
+            order = np.argsort(scores)[::-1][:count]
+            _apply_doc_rerank(query, chunks, scores, [int(i) for i in order])
             order = np.argsort(scores)[::-1][:top_k]
             hits: list[dict[str, Any]] = []
             for idx in order:
@@ -475,29 +388,23 @@ def create_document_rag_runtime(
             return []
 
     def _search_with_tfidf(query: str, chunks: list[dict[str, Any]], top_k: int = 5) -> list[dict[str, Any]]:
-        if not chunks:
+        texts = [_doc_weighted_text(x) for x in chunks]
+        if not texts:
             return []
-        payload = _load_tfidf_index(chunks)
-        if payload is None:
-            # 旧データ互換: まだ保存indexが無い場合は一度だけ作成して保存する。
-            _save_tfidf_index(chunks)
-            payload = _load_tfidf_index(chunks)
-        if payload is None:
-            return []
-        try:
-            vectorizer = payload["vectorizer"]
-            matrix = payload["matrix"]
-            qv = vectorizer.transform([query])
-            scores = cosine_similarity(qv, matrix).flatten()
-            order = np.argsort(scores)[::-1][:top_k]
-            hits: list[dict[str, Any]] = []
-            for idx in order:
-                item = dict(chunks[int(idx)])
-                item["score"] = float(scores[int(idx)])
-                hits.append(item)
-            return hits
-        except Exception:
-            return []
+        vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 5), min_df=1)
+        matrix = vectorizer.fit_transform(texts)
+        qv = vectorizer.transform([query])
+        scores = cosine_similarity(qv, matrix).flatten()
+        count = min(len(scores), max(top_k * 5, 25))
+        order = np.argsort(scores)[::-1][:count]
+        _apply_doc_rerank(query, chunks, scores, [int(i) for i in order])
+        order = np.argsort(scores)[::-1][:top_k]
+        hits: list[dict[str, Any]] = []
+        for idx in order:
+            item = dict(chunks[int(idx)])
+            item["score"] = float(scores[int(idx)])
+            hits.append(item)
+        return hits
 
     def search_document_rag(query: str, top_k: int = 5) -> list[dict[str, Any]]:
         query = normalize_doc_text(query)
@@ -509,10 +416,19 @@ def create_document_rag_runtime(
         chunks = load_document_chunks()
         if not chunks:
             return []
-        hits = _search_with_embeddings(query, chunks, top_k=top_k)
-        if not hits:
-            hits = _search_with_tfidf(query, chunks, top_k=top_k)
-        return hits
+        emb_hits = _search_with_embeddings(query, chunks, top_k=top_k)
+        tfidf_hits = _search_with_tfidf(query, chunks, top_k=top_k)
+        hits = _merge_hits(emb_hits, tfidf_hits, top_k=max(top_k, 8))
+        # Excelは「別行を拾う」誤回答が起きやすいため、質問との重要語重なりが無い候補は除外する。
+        safe_hits: list[dict[str, Any]] = []
+        for h in hits:
+            score = float(h.get("score", 0.0))
+            if score < 0.10:
+                continue
+            if _is_probably_bad_excel_hit(query, h, score):
+                continue
+            safe_hits.append(h)
+        return safe_hits[:top_k]
 
     def build_document_rag_prompt(user_q: str, hits: list[dict[str, Any]]) -> str:
         contexts: list[str] = []
@@ -521,7 +437,10 @@ def create_document_rag_runtime(
                 "\n".join([
                     f"[根拠{i}]",
                     f"資料名: {hit.get('source_name', '')}",
+                    f"種類: {hit.get('source_type', '')}",
                     f"場所: {hit.get('location', '')} / {hit.get('chunk_label', '')}",
+                    f"シート名: {hit.get('sheet_name', '')}",
+                    f"見出し: {hit.get('heading', '')}",
                     f"本文: {hit.get('text', '')}",
                 ])
             )
@@ -530,7 +449,9 @@ def create_document_rag_runtime(
             "あなたは社内ヘルプデスクAIです。"
             "以下の社内資料だけを根拠に、日本語で簡潔かつ正確に回答してください。"
             "根拠に書かれていないことは断定しないでください。"
-            "回答の最後に '参照資料:' を付けて、資料名を箇条書きで並べてください。\n\n"
+            "Excel資料の場合は、シート名・行番号・見出し・項目名を優先して判断してください。"
+            "複数の根拠が矛盾する場合は、最も質問語と一致する根拠を採用してください。質問と根拠の意味が合わない場合は、回答せず該当資料なしと述べてください。"
+            "回答の最後に '参照資料:' を付けて、資料名と場所を箇条書きで並べてください。\n\n"
             f"[質問]\n{user_q}\n\n"
             f"[社内資料]\n{context_text}"
         )
@@ -539,7 +460,7 @@ def create_document_rag_runtime(
         prompt = build_document_rag_prompt(user_q, hits)
         try:
             messages = [
-                {"role": "system", "content": "あなたは情シス担当です。資料に基づいて日本語で回答してください。"},
+                {"role": "system", "content": "あなたは情シス担当です。資料に基づいて日本語で回答してください。資料外の内容は断定しないでください。"},
                 {"role": "user", "content": prompt},
             ]
             answer = str(llm_chat(messages) or "").strip()
@@ -551,15 +472,59 @@ def create_document_rag_runtime(
         excerpt = str(top.get("text", "")).strip()
         if len(excerpt) > 260:
             excerpt = excerpt[:260].rstrip() + "…"
-        refs = "\n".join(f"- {x.get('source_name', '')}" for x in hits[:3])
+        refs = "\n".join(
+            f"- {x.get('source_name', '')} / {x.get('location', '')} / {x.get('heading', '')}"
+            for x in hits[:3]
+        )
         return f"社内資料から該当箇所が見つかりました。\n\n{excerpt}\n\n参照資料:\n{refs}"
+
+    def list_document_rag_documents() -> list[dict[str, Any]]:
+        manifest = get_document_rag_manifest()
+        chunks = load_document_chunks()
+        files = manifest.get("files", []) if isinstance(manifest.get("files", []), list) else []
+        out: list[dict[str, Any]] = []
+        for f in files:
+            name = str(f.get("name", ""))
+            chunk_count = sum(1 for c in chunks if str(c.get("source_name", "")) == name)
+            out.append({
+                "ファイル名": name,
+                "種類": f.get("type", ""),
+                "取込日": manifest.get("updated_at", ""),
+                "登録者": f.get("uploaded_by", ""),
+                "チャンク数": chunk_count,
+            })
+        return out
+
+    def delete_document_rag_document(source_name: str) -> bool:
+        source_name = str(source_name or "").strip()
+        if not source_name:
+            return False
+        try:
+            chunks = [c for c in load_document_chunks() if str(c.get("source_name", "")) != source_name]
+            manifest = get_document_rag_manifest()
+            files = [f for f in manifest.get("files", []) if str(f.get("name", "")) != source_name]
+            manifest["files"] = files
+            manifest["doc_count"] = len(files) + (1 if manifest.get("wiki_enabled") else 0)
+            manifest["chunk_count"] = len(chunks)
+            manifest["enabled"] = bool(chunks)
+            _safe_write_json(DOC_RAG_CHUNKS_PATH, chunks)
+            _safe_write_json(DOC_RAG_MANIFEST_PATH, manifest)
+            # 削除後は埋め込み件数が合わなくなるため再取込を促すために削除
+            if DOC_RAG_EMBEDDINGS_PATH.exists():
+                DOC_RAG_EMBEDDINGS_PATH.unlink()
+            src_path = DOC_RAG_FILES_DIR / source_name
+            if src_path.exists():
+                src_path.unlink()
+            _persist_doc_paths(DOC_RAG_CHUNKS_PATH, DOC_RAG_MANIFEST_PATH)
+            return True
+        except Exception:
+            return False
 
     return SimpleNamespace(
         DOC_RAG_DIR=DOC_RAG_DIR,
         DOC_RAG_FILES_DIR=DOC_RAG_FILES_DIR,
         DOC_RAG_MANIFEST_PATH=DOC_RAG_MANIFEST_PATH,
         DOC_RAG_CHUNKS_PATH=DOC_RAG_CHUNKS_PATH,
-        DOC_RAG_TFIDF_INDEX_PATH=DOC_RAG_TFIDF_INDEX_PATH,
         DEFAULT_DOC_RAG_THRESHOLD=DEFAULT_DOC_RAG_THRESHOLD,
         SUPPORTED_DOC_RAG_EXTENSIONS=SUPPORTED_DOC_RAG_EXTENSIONS,
         get_document_rag_manifest=get_document_rag_manifest,

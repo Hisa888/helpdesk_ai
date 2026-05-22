@@ -81,9 +81,13 @@ def run_app():
         )
     finalize_startup_status(startup_status)
     render_tenant_sidebar(st)
-    # 期限表示は左サイドバーに固定表示する。
-    # st.sidebar を渡すことで、本文側の表示崩れや色設定の影響を抑えます。
-    render_trial_status_banner(st.sidebar, license_info, contact_link=effective_contact_link)
+
+    # 本番モードではトライアル表示を出さない。
+    # demoモード時のみ表示する。
+    if str(getattr(services, "APP_MODE", "")).lower() == "demo":
+        # 期限表示は左サイドバーに固定表示する。
+        # st.sidebar を渡すことで、本文側の表示崩れや色設定の影響を抑えます。
+        render_trial_status_banner(st.sidebar, license_info, contact_link=effective_contact_link)
 
     trial_expired = should_lock_trial(license_info)
     if trial_expired:
