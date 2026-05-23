@@ -1,8 +1,27 @@
 {
-  "enabled": false,
-  "doc_count": 0,
-  "chunk_count": 0,
-  "files": [],
+  "enabled": true,
+  "doc_count": 2,
+  "chunk_count": 550,
+  "files": [
+    {
+      "name": "TEST.xlsx",
+      "type": "xlsx",
+      "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\TEST.xlsx",
+      "uploaded_at": "2026-05-24T08:17:22",
+      "uploaded_by": "demo/demo",
+      "chunk_count": 271
+    },
+    {
+      "name": "書式別システム作業申請書の説明.xlsx",
+      "type": "xlsx",
+      "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\書式別システム作業申請書の説明.xlsx",
+      "uploaded_at": "2026-05-24T08:17:22",
+      "uploaded_by": "demo/demo",
+      "chunk_count": 279
+    }
+  ],
   "wiki_enabled": false,
-  "updated_at": ""
+  "wiki_uploaded_at": "",
+  "wiki_uploaded_by": "",
+  "updated_at": "2026-05-24T08:17:22"
 }
