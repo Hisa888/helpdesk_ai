@@ -4,14 +4,5 @@
   "chunk_count": 0,
   "files": [],
   "wiki_enabled": false,
-  "updated_at": "2026-05-24T18:30:40",
-  "wiki_uploaded_at": "",
-  "wiki_uploaded_by": "",
-  "last_deleted": {
-    "name": "書式別システム作業申請書の説明.xlsx",
-    "type": "xlsx",
-    "deleted_by": "demo/demo",
-    "deleted_at": "2026-05-24T18:30:40",
-    "removed_chunks": 279
-  }
+  "updated_at": ""
 }
