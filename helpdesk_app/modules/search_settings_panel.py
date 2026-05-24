@@ -29,11 +29,18 @@ def render_search_settings_panel(
             key="admin_answer_threshold_slider",
             help="この値以上ならそのまま回答します。高いほど慎重、低いほど積極的です。",
         )
-        max_suggest_value = max(0.05, round(admin_answer_threshold - 0.05, 2))
-        suggest_default = min(float(current_cfg["suggest_threshold"]), max_suggest_value)
+        # 自動回答しきい値を 0.10 まで下げた場合でも、
+        # 候補表示しきい値 slider の min_value と max_value が同値にならないよう安全化する。
+        # Streamlit は min_value == max_value の slider を許可しないため、
+        # 候補表示の最小値は 0.00 とし、最大値は自動回答しきい値より少し低くする。
+        min_suggest_value = 0.00
+        max_suggest_value = max(0.01, round(float(admin_answer_threshold) - 0.01, 2))
+        raw_suggest_default = float(current_cfg.get("suggest_threshold", 0.10))
+        suggest_default = min(max(raw_suggest_default, min_suggest_value), max_suggest_value)
+
         admin_suggest_threshold = st.slider(
             "候補表示しきい値",
-            min_value=0.05,
+            min_value=min_suggest_value,
             max_value=max_suggest_value,
             value=suggest_default,
             step=0.01,
