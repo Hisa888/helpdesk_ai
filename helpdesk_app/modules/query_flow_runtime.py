@@ -8,6 +8,55 @@ from helpdesk_app.modules.clarification_state import clear_clarification, get_cl
 from helpdesk_app.modules.faq_answer_renderer import get_row_answer_format
 
 
+def _normalize_context_text(value: str) -> str:
+    return str(value or "").replace(" ", "").replace("　", "").lower()
+
+
+def _is_document_lookup_intent(question: str) -> bool:
+    """FAQ暗記回答ではなく、資料・申請書・手続き一覧から該当項目を探す質問かを判定する。
+
+    固定語だけでRAG優先にすると別用途で誤爆するため、
+    「探している聞き方」＋「業務対象語」の組み合わせで判定する。
+    """
+    q = _normalize_context_text(question)
+    if not q:
+        return False
+
+    lookup_phrases = (
+        "どれ", "どの", "どちら", "どこ", "何を", "何の", "なにを", "なにの",
+        "どれですか", "どのような", "何になります", "教えて", "使う", "使用",
+    )
+    business_targets = (
+        "書式", "様式", "申請書", "申請", "依頼", "手続", "届出", "帳票",
+        "資料", "マニュアル", "ファイル", "台帳", "一覧", "項目",
+    )
+    system_work = ("改修", "開発", "導入", "作成", "変更", "更新", "権限", "登録")
+
+    has_lookup = any(x in q for x in lookup_phrases)
+    has_target = any(x in q for x in business_targets)
+    has_system_work = "システム" in q and any(x in q for x in system_work)
+
+    return bool((has_lookup and (has_target or has_system_work)) or ("申請書" in q and has_system_work))
+
+
+def _doc_hit_has_structured_business_context(hit: dict) -> bool:
+    text = _normalize_context_text(" ".join([
+        str(hit.get("text", "")),
+        str(hit.get("search_text", "")),
+        str(hit.get("business_sheet", "")),
+        str(hit.get("business_application_item", "")),
+        str(hit.get("business_overview", "")),
+        str(hit.get("location", "")),
+    ]))
+    source_type = str(hit.get("source_type", "") or "").lower()
+    if source_type not in {"xlsx", "xlsm", "xls"}:
+        return False
+    has_form = any(x in text for x in ("書式", "様式", "申請項目", "使用書式", "申請書"))
+    has_item = any(x in text for x in ("既存システム改修", "システム開発", "システム導入", "エクセル", "excel", "改修", "開発", "導入"))
+    return bool(has_form and has_item)
+
+
+
 def process_user_query(
     *,
     st,
@@ -34,7 +83,12 @@ def process_user_query(
     llm_chat,
     skip_clarification: bool = False,
 ):
-    ultrafast = try_ultrafast_answer(user_q)
+    document_lookup_intent = _is_document_lookup_intent(user_q)
+
+    # 「どの申請書/どの書式/どの資料か」を探す質問は、FAQの高スコア誤爆が起きやすい。
+    # 例: 「システムの改修依頼は書式のどれですか？」に対し、FAQの「第1条 改廃」が90%で採用される事故。
+    # このタイプでは ultrafast FAQ を使わず、FAQとRAGを必ず比較する。
+    ultrafast = None if document_lookup_intent else try_ultrafast_answer(user_q)
     if ultrafast:
         hits = ultrafast.get("hits", [])
         best_score = float(ultrafast.get("best_score", 0.0))
@@ -137,7 +191,24 @@ def process_user_query(
         was_suggest = False
     else:
         doc_threshold = float(search_cfg.get("doc_rag_threshold", doc_rag_threshold))
+        # Excelチェックシートは「1行＝1回答」で検索するため、
+        # 通常のPDF/Word向けDocしきい値(初期0.55)だと正しい行が見つかっても不採用になりやすい。
+        # 例: 「入室制限」→ TEST.xlsx / 管理体制CS row 38 はTF-IDFで約0.33になるため、
+        # Excelだけは専用しきい値を適用する。
+        excel_doc_threshold = float(search_cfg.get("excel_doc_rag_threshold", 0.18))
         doc_compare_margin = float(search_cfg.get("doc_compare_margin", 0.05))
+
+        def _effective_doc_threshold(doc_hits_for_threshold: list) -> float:
+            if not doc_hits_for_threshold:
+                return doc_threshold
+            try:
+                top_source_type = str(doc_hits_for_threshold[0].get("source_type", "") or "").lower()
+            except Exception:
+                top_source_type = ""
+            if top_source_type in {"xlsx", "xlsm"}:
+                return min(doc_threshold, excel_doc_threshold)
+            return doc_threshold
+
         faq_auto_ok = best_score >= answer_threshold
         doc_auto_ok = False
         prefer_doc = False
@@ -155,14 +226,26 @@ def process_user_query(
         # FAQが弱い、またはFAQ側が曖昧な場合だけRAG検索する。
         # 管理画面で doc_rag_always_compare=true にすると従来通り比較検索も可能。
         should_search_doc = (
-            bool(search_cfg.get("doc_rag_always_compare", False))
+            document_lookup_intent
+            or bool(search_cfg.get("always_compare_doc_rag", search_cfg.get("doc_rag_always_compare", False)))
             or (not faq_auto_ok)
             or ambiguous_auto
         )
         if should_search_doc:
             doc_hits, doc_best_score = _lazy_search_document_rag()
-            doc_auto_ok = bool(doc_hits) and doc_best_score >= doc_threshold
-            prefer_doc = doc_auto_ok and (not faq_auto_ok or ambiguous_auto or doc_best_score >= (float(best_score) + doc_compare_margin))
+            effective_doc_threshold = _effective_doc_threshold(doc_hits)
+            doc_auto_ok = bool(doc_hits) and doc_best_score >= effective_doc_threshold
+            structured_doc_context = bool(doc_hits) and _doc_hit_has_structured_business_context(doc_hits[0])
+
+            if document_lookup_intent and doc_auto_ok and structured_doc_context:
+                # 人が見て自然な方を優先する。
+                # 「どの書式/申請書？」系は、FAQの条文説明より、Excel/RAGの構造化された
+                # 書式・申請項目行の方が回答意図に合うため、FAQスコアが高くてもRAGを採用する。
+                prefer_doc = True
+                ambiguous_auto = False
+                faq_auto_ok = False
+            else:
+                prefer_doc = doc_auto_ok and (not faq_auto_ok or ambiguous_auto or doc_best_score >= (float(best_score) + doc_compare_margin))
 
         if hits:
             faq_label = "FAQ一致度（採用）" if (faq_auto_ok and not prefer_doc and not ambiguous_auto) else "FAQ一致度（参考候補）"
@@ -301,20 +384,7 @@ def finalize_answer_cycle(
     render_used_hits_expander=None,
 ) -> None:
     st.session_state.used_hits = result.get("used_hits", [])
-    clean_user_q = str(user_q or "").strip()
-    st.session_state["last_user_q_for_learning"] = clean_user_q
-
-    # 回答あり／候補表示／該当なし／社内ドキュメント回答のすべてで、
-    # 画面下に「追加情報を記録（任意）」を必ず表示する。
-    # 通常回答でも、利用者が「回答は出たが状況を補足したい」「回答が少し違う」と感じた時に、
-    # その場でログへ追記できるようにする。
-    st.session_state["pending_nohit_active"] = True
-    st.session_state["pending_nohit"] = {
-        "day": datetime.now().strftime("%Y%m%d"),
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "question": clean_user_q,
-    }
-
+    st.session_state["last_user_q_for_learning"] = str(user_q or "").strip()
     if not bool(result.get("was_clarification", False)):
         clear_clarification(st=st, reset_count=True)
     render_answer_message(

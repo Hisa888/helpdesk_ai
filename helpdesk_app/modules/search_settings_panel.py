@@ -14,6 +14,7 @@ def render_search_settings_panel(
         st.info(
             f"現在値：FAQ自動回答 {current_cfg['answer_threshold']:.2f} / 候補表示 {current_cfg['suggest_threshold']:.2f} / "
             f"Doc採用しきい値 {float(current_cfg.get('doc_rag_threshold', 0.55)):.2f} / "
+            f"Excel行採用 {float(current_cfg.get('excel_doc_rag_threshold', 0.18)):.2f} / "
             f"DocがFAQを上回る差分 {float(current_cfg.get('doc_compare_margin', 0.05)):.2f} / "
             f"単語重視 {int(current_cfg['word_weight'] * 100)}% / 文字重視 {int(current_cfg['char_weight'] * 100)}%"
         )
@@ -77,6 +78,15 @@ def render_search_settings_panel(
             key="admin_doc_rag_threshold_slider",
             help="社内ドキュメントの一致度がこの値以上なら、Doc回答候補として使います。高いほど慎重です。",
         )
+        excel_doc_rag_threshold = st.slider(
+            "Excel行採用しきい値",
+            min_value=0.05,
+            max_value=0.80,
+            value=float(current_cfg.get("excel_doc_rag_threshold", 0.18)),
+            step=0.01,
+            key="admin_excel_doc_rag_threshold_slider",
+            help="Excelチェックシートは1行単位の短い本文として検索するため、通常Docより低めのしきい値で採用します。",
+        )
         doc_compare_margin = st.slider(
             "DocがFAQを上回る差分",
             min_value=0.00,
@@ -87,7 +97,7 @@ def render_search_settings_panel(
             help="FAQとDocの両方がしきい値を超えたとき、DocスコアがFAQスコアをこの値以上上回ったらDocを採用します。",
         )
         st.caption(
-            "判定ルール: FAQが自動回答しきい値以上ならFAQ候補になります。DocがDoc採用しきい値以上で、さらにFAQより差分以上強い場合はDocを採用します。"
+            "判定ルール: FAQが自動回答しきい値以上ならFAQ候補になります。DocがDoc採用しきい値以上で、さらにFAQより差分以上強い場合はDocを採用します。Excelは短い行単位検索のため、Excel行採用しきい値を使います。"
         )
 
         st.markdown("#### ③ FAQ項目別の重み")
@@ -161,6 +171,7 @@ def render_search_settings_panel(
                         "semantic_trigger_max": semantic_trigger_max,
                         "top_k": top_k,
                         "doc_rag_threshold": doc_rag_threshold,
+                        "excel_doc_rag_threshold": excel_doc_rag_threshold,
                         "doc_compare_margin": doc_compare_margin,
                         "question_weight": question_weight,
                         "answer_weight": answer_weight,

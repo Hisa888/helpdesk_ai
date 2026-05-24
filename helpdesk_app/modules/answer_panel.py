@@ -213,13 +213,16 @@ def render_used_hits_expander(*, st, render_match_bar, used_hits, best_score: fl
             for i, hit in enumerate(doc_hits[:4], 1):
                 render_match_bar(float(hit.get("score", 0.0)), label=f"資料{i} ドキュメント一致度")
                 score_pct = int(max(0.0, min(1.0, float(hit.get("score", 0.0)))) * 100)
+                short_text = str(hit.get('text', '')).replace('\n', ' ').strip()
+                short_text = short_text[:160] + ('...' if len(short_text) > 160 else '')
+
                 st.markdown(
                     f"""
 <div class="refbox">
-<b>資料{i}</b>（ドキュメント一致度：{score_pct}% / 種別={hit.get('source_type', '')}）<br>
+<b>資料{i}</b>（一致度：{score_pct}%）<br>
 <b>資料名:</b> {hit.get('source_name', '')}<br>
-<b>場所:</b> {hit.get('location', '')} / {hit.get('chunk_label', '')}<br>
-<b>本文:</b> {hit.get('text', '')}
+<b>場所:</b> {hit.get('location', '')}<br>
+<b>抜粋:</b> {short_text}
 </div>
 """,
                     unsafe_allow_html=True,
