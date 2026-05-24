@@ -4,24 +4,24 @@
   "chunk_count": 546,
   "files": [
     {
-      "name": "TEST.xlsx",
-      "type": "xlsx",
-      "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\TEST.xlsx",
-      "uploaded_at": "2026-05-24T18:33:22",
-      "uploaded_by": "demo/demo",
-      "chunk_count": 271
-    },
-    {
       "name": "書式別システム作業申請書の説明.xlsx",
       "type": "xlsx",
-      "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\書式別システム作業申請書の説明.xlsx",
-      "uploaded_at": "2026-05-24T18:33:22",
-      "uploaded_by": "demo/demo",
+      "path": "runtime_data/tenants/demo/doc_rag/source_files/書式別システム作業申請書の説明.xlsx",
+      "uploaded_at": "2026-05-24T10:30:41",
+      "uploaded_by": "demo/admin",
       "chunk_count": 275
+    },
+    {
+      "name": "TEST.xlsx",
+      "type": "xlsx",
+      "path": "runtime_data/tenants/demo/doc_rag/source_files/TEST.xlsx",
+      "uploaded_at": "2026-05-24T10:30:41",
+      "uploaded_by": "demo/admin",
+      "chunk_count": 271
     }
   ],
   "wiki_enabled": false,
   "wiki_uploaded_at": "",
   "wiki_uploaded_by": "",
-  "updated_at": "2026-05-24T18:33:22"
+  "updated_at": "2026-05-24T10:30:41"
 }
