@@ -1,19 +1,8 @@
 {
-  "enabled": true,
-  "doc_count": 1,
-  "chunk_count": 13,
-  "files": [
-    {
-      "name": "【02-01-00】 組織規程(2025.04.01).pdf",
-      "type": "pdf",
-      "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\【02-01-00】 組織規程(2025.04.01).pdf",
-      "uploaded_at": "2026-05-24T23:26:25",
-      "uploaded_by": "demo/demo",
-      "chunk_count": 13
-    }
-  ],
+  "enabled": false,
+  "doc_count": 0,
+  "chunk_count": 0,
+  "files": [],
   "wiki_enabled": false,
-  "wiki_uploaded_at": "",
-  "wiki_uploaded_by": "",
-  "updated_at": "2026-05-24T23:26:25"
+  "updated_at": ""
 }
