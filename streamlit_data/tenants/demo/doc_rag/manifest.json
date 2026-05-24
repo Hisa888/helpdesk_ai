@@ -1,27 +1,19 @@
 {
   "enabled": true,
-  "doc_count": 2,
-  "chunk_count": 546,
+  "doc_count": 1,
+  "chunk_count": 13,
   "files": [
     {
-      "name": "書式別システム作業申請書の説明.xlsx",
-      "type": "xlsx",
-      "path": "runtime_data/tenants/demo/doc_rag/source_files/書式別システム作業申請書の説明.xlsx",
-      "uploaded_at": "2026-05-24T10:30:41",
+      "name": "【02-01-00】 組織規程(2025.04.01).pdf",
+      "type": "pdf",
+      "path": "runtime_data/tenants/demo/doc_rag/source_files/【02-01-00】 組織規程(2025.04.01).pdf",
+      "uploaded_at": "2026-05-24T14:06:56",
       "uploaded_by": "demo/admin",
-      "chunk_count": 275
-    },
-    {
-      "name": "TEST.xlsx",
-      "type": "xlsx",
-      "path": "runtime_data/tenants/demo/doc_rag/source_files/TEST.xlsx",
-      "uploaded_at": "2026-05-24T10:30:41",
-      "uploaded_by": "demo/admin",
-      "chunk_count": 271
+      "chunk_count": 13
     }
   ],
   "wiki_enabled": false,
   "wiki_uploaded_at": "",
   "wiki_uploaded_by": "",
-  "updated_at": "2026-05-24T10:30:41"
+  "updated_at": "2026-05-24T14:06:56"
 }
