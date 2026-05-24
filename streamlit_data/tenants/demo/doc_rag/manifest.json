@@ -1,16 +1,8 @@
 {
   "enabled": true,
-  "doc_count": 2,
-  "chunk_count": 550,
+  "doc_count": 1,
+  "chunk_count": 279,
   "files": [
-    {
-      "name": "TEST.xlsx",
-      "type": "xlsx",
-      "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\TEST.xlsx",
-      "uploaded_at": "2026-05-24T08:17:22",
-      "uploaded_by": "demo/demo",
-      "chunk_count": 271
-    },
     {
       "name": "書式別システム作業申請書の説明.xlsx",
       "type": "xlsx",
@@ -21,7 +13,14 @@
     }
   ],
   "wiki_enabled": false,
+  "updated_at": "2026-05-24T18:30:10",
   "wiki_uploaded_at": "",
   "wiki_uploaded_by": "",
-  "updated_at": "2026-05-24T08:17:22"
+  "last_deleted": {
+    "name": "TEST.xlsx",
+    "type": "xlsx",
+    "deleted_by": "demo/demo",
+    "deleted_at": "2026-05-24T18:30:10",
+    "removed_chunks": 271
+  }
 }
