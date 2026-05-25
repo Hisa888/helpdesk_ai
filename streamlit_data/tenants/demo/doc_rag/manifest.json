@@ -1,7 +1,7 @@
 {
   "enabled": true,
-  "doc_count": 2,
-  "chunk_count": 316,
+  "doc_count": 3,
+  "chunk_count": 360,
   "files": [
     {
       "name": "TEST.xlsx",
@@ -18,10 +18,18 @@
       "uploaded_at": "2026-05-25T13:35:25",
       "uploaded_by": "demo/demo",
       "chunk_count": 45
+    },
+    {
+      "name": "情報システム管理規程案.docx",
+      "type": "docx",
+      "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\情報システム管理規程案.docx",
+      "uploaded_at": "2026-05-25T14:55:48",
+      "uploaded_by": "demo/demo",
+      "chunk_count": 44
     }
   ],
   "wiki_enabled": false,
+  "updated_at": "2026-05-25T14:55:48",
   "wiki_uploaded_at": "",
-  "wiki_uploaded_by": "",
-  "updated_at": "2026-05-25T13:35:25"
+  "wiki_uploaded_by": ""
 }
