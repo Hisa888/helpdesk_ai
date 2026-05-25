@@ -1,35 +1,35 @@
 {
   "enabled": true,
   "doc_count": 3,
-  "chunk_count": 360,
+  "chunk_count": 572,
   "files": [
     {
       "name": "TEST.xlsx",
       "type": "xlsx",
       "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\TEST.xlsx",
-      "uploaded_at": "2026-05-25T13:35:25",
+      "uploaded_at": "2026-05-25T23:27:33",
       "uploaded_by": "demo/demo",
       "chunk_count": 271
     },
     {
-      "name": "【02-01-00】 組織規程(2025.04.01).pdf",
-      "type": "pdf",
-      "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\【02-01-00】 組織規程(2025.04.01).pdf",
-      "uploaded_at": "2026-05-25T13:35:25",
+      "name": "書式別システム作業申請書の説明.xlsx",
+      "type": "xlsx",
+      "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\書式別システム作業申請書の説明.xlsx",
+      "uploaded_at": "2026-05-25T23:27:33",
       "uploaded_by": "demo/demo",
-      "chunk_count": 45
+      "chunk_count": 279
     },
     {
       "name": "情報システム管理規程案.docx",
       "type": "docx",
       "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\情報システム管理規程案.docx",
-      "uploaded_at": "2026-05-25T14:55:48",
+      "uploaded_at": "2026-05-25T23:27:33",
       "uploaded_by": "demo/demo",
-      "chunk_count": 44
+      "chunk_count": 22
     }
   ],
   "wiki_enabled": false,
-  "updated_at": "2026-05-25T14:55:48",
   "wiki_uploaded_at": "",
-  "wiki_uploaded_by": ""
+  "wiki_uploaded_by": "",
+  "updated_at": "2026-05-25T23:27:33"
 }
