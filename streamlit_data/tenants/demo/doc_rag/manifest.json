@@ -1,19 +1,27 @@
 {
   "enabled": true,
-  "doc_count": 1,
-  "chunk_count": 271,
+  "doc_count": 2,
+  "chunk_count": 316,
   "files": [
     {
       "name": "TEST.xlsx",
       "type": "xlsx",
       "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\TEST.xlsx",
-      "uploaded_at": "2026-05-25T13:33:40",
+      "uploaded_at": "2026-05-25T13:35:25",
       "uploaded_by": "demo/demo",
       "chunk_count": 271
+    },
+    {
+      "name": "【02-01-00】 組織規程(2025.04.01).pdf",
+      "type": "pdf",
+      "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\【02-01-00】 組織規程(2025.04.01).pdf",
+      "uploaded_at": "2026-05-25T13:35:25",
+      "uploaded_by": "demo/demo",
+      "chunk_count": 45
     }
   ],
   "wiki_enabled": false,
   "wiki_uploaded_at": "",
   "wiki_uploaded_by": "",
-  "updated_at": "2026-05-25T13:33:40"
+  "updated_at": "2026-05-25T13:35:25"
 }
