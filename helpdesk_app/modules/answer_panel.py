@@ -213,16 +213,13 @@ def render_used_hits_expander(*, st, render_match_bar, used_hits, best_score: fl
             for i, hit in enumerate(doc_hits[:4], 1):
                 render_match_bar(float(hit.get("score", 0.0)), label=f"資料{i} ドキュメント一致度")
                 score_pct = int(max(0.0, min(1.0, float(hit.get("score", 0.0)))) * 100)
-                short_text = str(hit.get('text', '')).replace('\n', ' ').strip()
-                short_text = short_text[:160] + ('...' if len(short_text) > 160 else '')
-
                 st.markdown(
                     f"""
 <div class="refbox">
-<b>資料{i}</b>（一致度：{score_pct}%）<br>
+<b>資料{i}</b>（ドキュメント一致度：{score_pct}% / 種別={hit.get('source_type', '')}）<br>
 <b>資料名:</b> {hit.get('source_name', '')}<br>
-<b>場所:</b> {hit.get('location', '')}<br>
-<b>抜粋:</b> {short_text}
+<b>場所:</b> {hit.get('location', '')} / {hit.get('chunk_label', '')}<br>
+<b>本文:</b> {hit.get('text', '')}
 </div>
 """,
                     unsafe_allow_html=True,
@@ -269,7 +266,23 @@ def render_answer_message(
     was_clarification: bool = False,
     suggestion_candidates=None,
     user_q: str = "",
+    suppress_extra_info: bool = False,
+    suppress_contact_cta: bool = False,
 ) -> None:
+    # 該当ありの回答でも、回答が違う場合や補足が必要な場合に備え、
+    # 下部の「追加情報を記録（任意）」フォームを表示対象にする。
+    try:
+        if str(answer or "").strip() and not bool(suppress_extra_info):
+            st.session_state["pending_nohit_active"] = True
+            if not st.session_state.get("pending_nohit"):
+                st.session_state["pending_nohit"] = {
+                    "day": datetime.now().strftime("%Y%m%d"),
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                    "question": str(user_q or st.session_state.get("last_user_q_for_learning", "") or "").strip(),
+                }
+    except Exception:
+        pass
+
     st.markdown('<div id="answer-anchor"></div>', unsafe_allow_html=True)
     with st.chat_message("assistant"):
         render_answer_box(st, answer=answer, answer_format=answer_format, css_class="answerbox")
@@ -297,10 +310,11 @@ def render_answer_message(
             st.caption("候補が違う場合は、下の『追加情報を記録（任意）』から状況を補足できます。")
             st.caption("管理者はサイドバーの『検索精度設定』から判定基準を調整できます。")
 
-        render_answer_contact_cta(
-            st=st,
-            was_nohit=was_nohit,
-            was_suggest=was_suggest,
-            used_doc_rag=used_doc_rag,
-            was_clarification=was_clarification,
-        )
+        if not bool(suppress_contact_cta):
+            render_answer_contact_cta(
+                st=st,
+                was_nohit=was_nohit,
+                was_suggest=was_suggest,
+                used_doc_rag=used_doc_rag,
+                was_clarification=was_clarification,
+            )

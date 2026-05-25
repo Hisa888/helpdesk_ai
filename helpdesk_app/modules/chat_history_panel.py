@@ -89,6 +89,7 @@ def render_chat_history(st, *, messages: Iterable[Mapping[str, object]]) -> None
                 should_show_evidence = (
                     not bool(message.get("was_clarification", False))
                     and not bool(message.get("was_suggest", False))
+                    and not bool(message.get("suppress_evidence", False))
                 )
                 if should_show_evidence:
                     render_used_hits_expander(
@@ -106,7 +107,7 @@ def render_chat_history(st, *, messages: Iterable[Mapping[str, object]]) -> None
                         doc_best_score=float(message.get("doc_best_score", 0.0) or 0.0),
                     )
 
-                if idx == last_assistant_idx:
+                if idx == last_assistant_idx and not bool(message.get("suppress_contact_cta", False)):
                     render_answer_contact_cta(
                         st=st,
                         was_nohit=bool(message.get("was_nohit", False)),

@@ -389,93 +389,11 @@ def _format_excel_row_text(sheet_title: str, row_idx: int, cells: list[tuple[int
     return normalize_doc_text("\n".join(lines))
 
 
-
-_BUSINESS_HEADER_ALIASES = {
-    "overview": {"概要", "内容", "説明", "確認事項"},
-    "sheet": {"シート名", "書式", "使用書式", "申請書"},
-    "application_item": {"申請項目", "項目", "申請内容"},
-    "path": {"パス", "申請書", "フォルダ", "結合パス"},
-}
-
-
-def _normalize_header_name(value: str) -> str:
-    return normalize_doc_text(value).replace(" ", "").replace("　", "")
-
-
-def _detect_business_header_map(cells: list[tuple[int, str]]) -> dict[int, str]:
-    """Excelの業務一覧表で、概要/シート名/申請項目などの列を検出する。"""
-    header_map: dict[int, str] = {}
-    for col_idx, value in cells:
-        h = _normalize_header_name(value)
-        if not h:
-            continue
-        if h in {"概要", "内容", "説明"}:
-            header_map[col_idx] = "overview"
-        elif h in {"シート名", "書式", "使用書式"}:
-            header_map[col_idx] = "sheet"
-        elif h in {"申請項目", "項目", "申請内容"}:
-            header_map[col_idx] = "application_item"
-        elif h in {"申請書", "パス", "フォルダ", "結合パス"}:
-            header_map[col_idx] = "path"
-    # 少なくとも2種類以上の業務ヘッダーがある場合のみ採用する。
-    if len(set(header_map.values())) >= 2:
-        return header_map
-    return {}
-
-
-def _business_value_map(cells: list[tuple[int, str]], header_map: dict[int, str]) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for col_idx, value in cells:
-        key = header_map.get(col_idx)
-        if not key:
-            continue
-        v = normalize_doc_text(value)
-        if not v:
-            continue
-        values[key] = v
-    return values
-
-
-def _format_business_excel_row_text(sheet_title: str, row_idx: int, cells: list[tuple[int, str]], business: dict[str, str]) -> str:
-    """申請書一覧・MEMO系のExcel行を、回答しやすい業務形式に整形する。"""
-    raw_parts = [f"{get_column_letter(col_idx)}: {value}" for col_idx, value in cells]
-    overview = business.get("overview", "")
-    form_sheet = business.get("sheet", "")
-    application_item = business.get("application_item", "")
-    path_text = business.get("path", "")
-
-    lines = [f"シート: {sheet_title}", f"Excel行: {row_idx}"]
-    if form_sheet:
-        lines.append(f"使用書式: {form_sheet}")
-    if application_item:
-        lines.append(f"申請項目: {application_item}")
-        lines.append(f"該当項目: {application_item}")
-    if overview:
-        lines.append(f"概要: {overview}")
-        lines.append(f"確認事項: {overview}")
-    if path_text:
-        lines.append(f"申請書パス: {path_text}")
-    # 検索時に「どの申請書」「書式」「申請項目」が強く効くように重複重み付けする。
-    weighted = []
-    if application_item:
-        weighted.extend([application_item] * 6)
-    if form_sheet:
-        weighted.extend([form_sheet] * 5)
-    if overview:
-        weighted.extend([overview] * 3)
-    if path_text:
-        weighted.append(path_text)
-    if weighted:
-        lines.append("検索用重要語: " + " / ".join(weighted))
-    lines.append("元データ: " + " / ".join(raw_parts))
-    return normalize_doc_text("\n".join(lines))
-
 def extract_xlsx_sections(file_bytes: bytes, filename: str) -> list[dict[str, Any]]:
     wb = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
     results: list[dict[str, Any]] = []
     for ws in wb.worksheets:
         parent_context = ""
-        business_header_map: dict[int, str] = {}
         for r_idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
             cells: list[tuple[int, str]] = []
             for c_idx, value in enumerate(row, start=1):
@@ -484,55 +402,27 @@ def extract_xlsx_sections(file_bytes: bytes, filename: str) -> list[dict[str, An
                     cells.append((c_idx, cell_text))
             if not cells:
                 continue
-            # 業務一覧表（概要/シート名/申請項目など）のヘッダーを検出。
-            detected_header = _detect_business_header_map(cells)
-            if detected_header:
-                business_header_map = detected_header
-                continue
             # 連番だけの空行テンプレートは検索ノイズになるため除外する。
             if len(cells) == 1 and _is_short_number_like(cells[0][1]):
                 continue
-
-            business_values = _business_value_map(cells, business_header_map) if business_header_map else {}
-            if business_values and (business_values.get("application_item") or business_values.get("sheet") or business_values.get("overview")):
-                text = _format_business_excel_row_text(ws.title, r_idx, cells, business_values)
-                source_meta = {
-                    "business_overview": business_values.get("overview", ""),
-                    "business_sheet": business_values.get("sheet", ""),
-                    "business_application_item": business_values.get("application_item", ""),
-                    "business_path": business_values.get("path", ""),
-                }
-                search_text = normalize_doc_text("\n".join([
-                    " ".join([business_values.get("application_item", "")] * 8),
-                    " ".join([business_values.get("sheet", "")] * 6),
-                    " ".join([business_values.get("overview", "")] * 4),
-                    business_values.get("path", ""),
-                    text,
-                ]))
-            else:
-                # 親設問行の文言を保持し、直後の①②③などの明細行に付与する。
-                # これにより「不正アクセスの復旧対策はありますか？」の回答で
-                # 「障害発生時の技術的対応・復旧手続の整備」の配下であることを示せる。
-                row_parent_context = parent_context if _should_apply_parent_context(cells, parent_context) else ""
-                text = _format_excel_row_text(ws.title, r_idx, cells, parent_context=row_parent_context)
-                source_meta = {}
-                search_text = text
-
+            # 親設問行の文言を保持し、直後の①②③などの明細行に付与する。
+            # これにより「不正アクセスの復旧対策はありますか？」の回答で
+            # 「障害発生時の技術的対応・復旧手続の整備」の配下であることを示せる。
+            row_parent_context = parent_context if _should_apply_parent_context(cells, parent_context) else ""
+            text = _format_excel_row_text(ws.title, r_idx, cells, parent_context=row_parent_context)
             if text:
-                row_payload = {
+                results.append({
                     "source_name": filename,
                     "source_type": "xlsx",
                     "location": f"sheet {ws.title} row {r_idx}",
                     "chunk_label": f"row {r_idx}",
                     "text": text,
-                    "search_text": search_text,
                     "no_split": True,
-                }
-                row_payload.update(source_meta)
-                results.append(row_payload)
+                })
             if _is_parent_context_row(cells, text):
                 parent_context = _best_parent_context(cells) or parent_context
     return results
+
 
 def extract_text_sections(file_bytes: bytes, filename: str, source_type: str) -> list[dict[str, str]]:
     text = normalize_doc_text(_decode_text_bytes(file_bytes))
@@ -571,18 +461,13 @@ def build_chunks_from_sections(sections: list[dict[str, Any]], *, chunk_size: in
         if bool(sec.get("no_split")) or source_type in {"xlsx", "xlsm"}:
             piece = normalize_doc_text(sec.get("text", ""))
             if piece:
-                payload = {
+                chunks.append({
                     "source_name": sec.get("source_name", "document"),
                     "source_type": sec.get("source_type", "text"),
                     "location": sec.get("location", "document"),
                     "chunk_label": str(sec.get("chunk_label") or "row"),
                     "text": piece,
-                    "search_text": normalize_doc_text(sec.get("search_text", "") or piece),
-                }
-                for key in ("business_overview", "business_sheet", "business_application_item", "business_path"):
-                    if sec.get(key):
-                        payload[key] = normalize_doc_text(sec.get(key, ""))
-                chunks.append(payload)
+                })
             continue
 
         pieces = list(iter_text_chunks(sec.get("text", ""), chunk_size=chunk_size, overlap=overlap))
@@ -593,7 +478,6 @@ def build_chunks_from_sections(sections: list[dict[str, Any]], *, chunk_size: in
                 "location": sec.get("location", "document"),
                 "chunk_label": f"chunk {i}",
                 "text": piece,
-                "search_text": piece,
             })
     return chunks
 

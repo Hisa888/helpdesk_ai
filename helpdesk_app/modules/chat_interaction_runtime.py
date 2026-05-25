@@ -13,8 +13,35 @@ def build_suggest_answer_for_runtime(*, user_q: str, hits, build_suggest_answer_
 
 
 
+def _has_last_assistant_answer(st) -> bool:
+    """
+    回答後の「追加情報を記録（任意）」を安定して表示するための保険。
+
+    以前は pending_nohit_active が True の時だけフォームを表示していたため、
+    FAQ/RAGで「該当あり」と判定された通常回答ではフォームが消えることがありました。
+    ここではチャット履歴の最後に assistant 回答が存在する場合も、
+    ユーザーが「回答は違う/補足したい」と記録できるようフォームを表示します。
+    """
+    try:
+        for message in reversed(list(st.session_state.get("messages", []) or [])):
+            if str(message.get("role", "")) != "assistant":
+                continue
+            content = str(message.get("content", "") or "").strip()
+            if not content:
+                return False
+            if "情シス問い合わせAI" in content and "起動確認OK" in content:
+                return False
+            return True
+    except Exception:
+        return False
+    return False
+
+
 def render_input_support_sections(*, st, show_welcome: bool, render_nohit_extra_form, render_quick_start_compact) -> None:
-    if st.session_state.get("pending_nohit_active"):
+    # 該当なしだけでなく、FAQ回答・社内ドキュメントRAG回答・候補選択後でも、
+    # 回答が違う場合/補足がある場合に備えて追加情報フォームを常時表示する。
+    should_show_extra_form = bool(st.session_state.get("pending_nohit_active")) or _has_last_assistant_answer(st)
+    if should_show_extra_form:
         render_nohit_extra_form(expanded=False)
     if not show_welcome:
         render_quick_start_compact(st=st)

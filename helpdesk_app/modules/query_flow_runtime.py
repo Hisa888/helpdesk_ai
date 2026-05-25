@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
+import unicodedata
 
 from helpdesk_app.modules.clarification_llm import generate_clarification_prompt
 from helpdesk_app.modules.clarification_rules import should_request_clarification
@@ -8,53 +10,65 @@ from helpdesk_app.modules.clarification_state import clear_clarification, get_cl
 from helpdesk_app.modules.faq_answer_renderer import get_row_answer_format
 
 
-def _normalize_context_text(value: str) -> str:
-    return str(value or "").replace(" ", "").replace("　", "").lower()
+def _classify_non_inquiry_message(user_q: str) -> str | None:
+    """FAQ/RAG検索に回さない短い挨拶・お礼・相づちを判定する。
 
-
-def _is_document_lookup_intent(question: str) -> bool:
-    """FAQ暗記回答ではなく、資料・申請書・手続き一覧から該当項目を探す質問かを判定する。
-
-    固定語だけでRAG優先にすると別用途で誤爆するため、
-    「探している聞き方」＋「業務対象語」の組み合わせで判定する。
+    「ありがとうございます。」のような会話文までRAG検索すると、Excel内の無関係な
+    文章に低スコアで当たり、誤回答に見える。業務問い合わせではない短文はここで
+    先に通常応答へ分岐する。
     """
-    q = _normalize_context_text(question)
-    if not q:
-        return False
+    raw = str(user_q or "").strip()
+    if not raw:
+        return None
 
-    lookup_phrases = (
-        "どれ", "どの", "どちら", "どこ", "何を", "何の", "なにを", "なにの",
-        "どれですか", "どのような", "何になります", "教えて", "使う", "使用",
+    norm = unicodedata.normalize("NFKC", raw).lower()
+    compact = re.sub(r"[\s\u3000、。,.!！?？…・･~〜ー\-＿_（）()「」『』【】\[\]♪]+", "", norm)
+    if not compact:
+        return None
+
+    # 長文やITキーワードを含む文は通常検索に回す。
+    # 例: 「ありがとうございます。VPNがつながりません」は検索対象にする。
+    inquiry_keywords = (
+        "pc", "パソコン", "パスワード", "vpn", "wi-fi", "wifi", "メール", "excel", "エクセル",
+        "word", "teams", "共有", "プリンタ", "印刷", "ログイン", "アカウント", "申請", "権限",
+        "入室", "不正アクセス", "復旧", "対策", "制限", "できない", "エラー", "故障", "接続",
+        "どう", "どのよう", "ありますか", "できますか", "してください", "教えて",
     )
-    business_targets = (
-        "書式", "様式", "申請書", "申請", "依頼", "手続", "届出", "帳票",
-        "資料", "マニュアル", "ファイル", "台帳", "一覧", "項目",
-    )
-    system_work = ("改修", "開発", "導入", "作成", "変更", "更新", "権限", "登録")
+    if len(compact) > 24 or any(k in norm for k in inquiry_keywords):
+        return None
 
-    has_lookup = any(x in q for x in lookup_phrases)
-    has_target = any(x in q for x in business_targets)
-    has_system_work = "システム" in q and any(x in q for x in system_work)
+    thanks_exact = {
+        "ありがとう", "ありがとうございます", "ありがとうございました", "ありがと", "ありがとございます",
+        "サンキュー", "さんきゅー", "助かりました", "助かった", "感謝", "感謝です",
+    }
+    if compact in thanks_exact:
+        return "thanks"
+    if len(compact) <= 18 and any(x in compact for x in ("ありがとう", "助かりました", "助かった", "感謝")):
+        return "thanks"
 
-    return bool((has_lookup and (has_target or has_system_work)) or ("申請書" in q and has_system_work))
+    greet_exact = {
+        "おはよう", "おはようございます", "こんにちは", "こんばんは", "お疲れ様", "お疲れ様です",
+        "おつかれ", "おつかれさま", "おつかれさまです",
+    }
+    if compact in greet_exact:
+        return "greeting"
+
+    ack_exact = {
+        "ok", "okay", "了解", "了解です", "承知しました", "承知です", "わかりました", "分かりました",
+        "なるほど", "はい", "はい了解", "了解しました", "確認しました", "確認済み",
+    }
+    if compact in ack_exact:
+        return "ack"
+
+    return None
 
 
-def _doc_hit_has_structured_business_context(hit: dict) -> bool:
-    text = _normalize_context_text(" ".join([
-        str(hit.get("text", "")),
-        str(hit.get("search_text", "")),
-        str(hit.get("business_sheet", "")),
-        str(hit.get("business_application_item", "")),
-        str(hit.get("business_overview", "")),
-        str(hit.get("location", "")),
-    ]))
-    source_type = str(hit.get("source_type", "") or "").lower()
-    if source_type not in {"xlsx", "xlsm", "xls"}:
-        return False
-    has_form = any(x in text for x in ("書式", "様式", "申請項目", "使用書式", "申請書"))
-    has_item = any(x in text for x in ("既存システム改修", "システム開発", "システム導入", "エクセル", "excel", "改修", "開発", "導入"))
-    return bool(has_form and has_item)
-
+def _non_inquiry_response(kind: str) -> str:
+    if kind == "thanks":
+        return "どういたしまして。引き続き、社内IT問い合わせがあれば入力してください。"
+    if kind == "greeting":
+        return "こんにちは。社内IT問い合わせがあれば、そのまま入力してください。"
+    return "承知しました。続けて確認したい内容があれば入力してください。"
 
 
 def process_user_query(
@@ -83,12 +97,29 @@ def process_user_query(
     llm_chat,
     skip_clarification: bool = False,
 ):
-    document_lookup_intent = _is_document_lookup_intent(user_q)
+    non_inquiry_kind = _classify_non_inquiry_message(user_q)
+    if non_inquiry_kind:
+        return {
+            "answer": _non_inquiry_response(non_inquiry_kind),
+            "best_score": 0.0,
+            "answer_threshold": float(current_search_threshold()),
+            "suggest_threshold": float(current_suggest_threshold()),
+            "used_hits": [],
+            "doc_hits": [],
+            "used_doc_rag": False,
+            "doc_best_score": 0.0,
+            "was_nohit": False,
+            "was_suggest": False,
+            "was_clarification": False,
+            "answer_format": "markdown",
+            "suggestion_candidates": [],
+            "suppress_extra_info": True,
+            "suppress_evidence": True,
+            "suppress_contact_cta": True,
+            "non_inquiry_kind": non_inquiry_kind,
+        }
 
-    # 「どの申請書/どの書式/どの資料か」を探す質問は、FAQの高スコア誤爆が起きやすい。
-    # 例: 「システムの改修依頼は書式のどれですか？」に対し、FAQの「第1条 改廃」が90%で採用される事故。
-    # このタイプでは ultrafast FAQ を使わず、FAQとRAGを必ず比較する。
-    ultrafast = None if document_lookup_intent else try_ultrafast_answer(user_q)
+    ultrafast = try_ultrafast_answer(user_q)
     if ultrafast:
         hits = ultrafast.get("hits", [])
         best_score = float(ultrafast.get("best_score", 0.0))
@@ -226,8 +257,7 @@ def process_user_query(
         # FAQが弱い、またはFAQ側が曖昧な場合だけRAG検索する。
         # 管理画面で doc_rag_always_compare=true にすると従来通り比較検索も可能。
         should_search_doc = (
-            document_lookup_intent
-            or bool(search_cfg.get("always_compare_doc_rag", search_cfg.get("doc_rag_always_compare", False)))
+            bool(search_cfg.get("always_compare_doc_rag", search_cfg.get("doc_rag_always_compare", False)))
             or (not faq_auto_ok)
             or ambiguous_auto
         )
@@ -235,17 +265,7 @@ def process_user_query(
             doc_hits, doc_best_score = _lazy_search_document_rag()
             effective_doc_threshold = _effective_doc_threshold(doc_hits)
             doc_auto_ok = bool(doc_hits) and doc_best_score >= effective_doc_threshold
-            structured_doc_context = bool(doc_hits) and _doc_hit_has_structured_business_context(doc_hits[0])
-
-            if document_lookup_intent and doc_auto_ok and structured_doc_context:
-                # 人が見て自然な方を優先する。
-                # 「どの書式/申請書？」系は、FAQの条文説明より、Excel/RAGの構造化された
-                # 書式・申請項目行の方が回答意図に合うため、FAQスコアが高くてもRAGを採用する。
-                prefer_doc = True
-                ambiguous_auto = False
-                faq_auto_ok = False
-            else:
-                prefer_doc = doc_auto_ok and (not faq_auto_ok or ambiguous_auto or doc_best_score >= (float(best_score) + doc_compare_margin))
+            prefer_doc = doc_auto_ok and (not faq_auto_ok or ambiguous_auto or doc_best_score >= (float(best_score) + doc_compare_margin))
 
         if hits:
             faq_label = "FAQ一致度（採用）" if (faq_auto_ok and not prefer_doc and not ambiguous_auto) else "FAQ一致度（参考候補）"
@@ -385,6 +405,23 @@ def finalize_answer_cycle(
 ) -> None:
     st.session_state.used_hits = result.get("used_hits", [])
     st.session_state["last_user_q_for_learning"] = str(user_q or "").strip()
+
+    # 回答後は、該当あり/該当なしを問わず「追加情報を記録（任意）」を表示する。
+    # FAQやRAGで回答できた場合でも、ユーザーが「回答が違う」「状況を補足したい」
+    # と感じるケースがあるため、改善ログへ追記できる導線を残す。
+    try:
+        from datetime import datetime
+        answered = bool(str(result.get("answer", "") or "").strip())
+        if answered and not bool(result.get("suppress_extra_info", False)):
+            st.session_state["pending_nohit_active"] = True
+            st.session_state["pending_nohit"] = {
+                "day": datetime.now().strftime("%Y%m%d"),
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "question": str(user_q or "").strip(),
+            }
+    except Exception:
+        pass
+
     if not bool(result.get("was_clarification", False)):
         clear_clarification(st=st, reset_count=True)
     render_answer_message(
@@ -400,6 +437,8 @@ def finalize_answer_cycle(
         was_clarification=bool(result.get("was_clarification", False)),
         suggestion_candidates=result.get("suggestion_candidates", []),
         user_q=str(user_q or "").strip(),
+        suppress_extra_info=bool(result.get("suppress_extra_info", False)),
+        suppress_contact_cta=bool(result.get("suppress_contact_cta", False)),
     )
     # 候補表示中は、候補ボタンを3件出すだけにする。
     # ここで used_hits をそのまま根拠表示すると、候補3件すべてのFAQ本文が展開され、
@@ -409,6 +448,7 @@ def finalize_answer_cycle(
         callable(render_used_hits_expander)
         and not bool(result.get("was_clarification", False))
         and not bool(result.get("was_suggest", False))
+        and not bool(result.get("suppress_evidence", False))
     )
     if should_show_evidence:
         render_used_hits_expander(
@@ -440,4 +480,8 @@ def finalize_answer_cycle(
         "doc_hits": result.get("doc_hits", []),
         "doc_best_score": float(result.get("doc_best_score", 0.0) or 0.0),
         "user_q": str(user_q or "").strip(),
+        "suppress_extra_info": bool(result.get("suppress_extra_info", False)),
+        "suppress_evidence": bool(result.get("suppress_evidence", False)),
+        "suppress_contact_cta": bool(result.get("suppress_contact_cta", False)),
+        "non_inquiry_kind": str(result.get("non_inquiry_kind", "")),
     })

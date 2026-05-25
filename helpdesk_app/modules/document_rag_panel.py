@@ -95,8 +95,6 @@ def render_document_rag_panel(
 
         if callable(list_document_rag_documents):
             documents = list_document_rag_documents()
-            if not documents:
-                documents = _fallback_documents_from_manifest(manifest)
         else:
             documents = _fallback_documents_from_manifest(manifest)
 

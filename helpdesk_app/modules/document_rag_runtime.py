@@ -365,7 +365,7 @@ def create_document_rag_runtime(
         取込時に一度だけ作り、質問時は保存済みindexを読み込む。
         """
         try:
-            texts = [str(x.get("search_text") or x.get("text", "")) for x in chunks]
+            texts = [str(x.get("text", "")) for x in chunks]
             if not texts:
                 return None
             vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
@@ -406,33 +406,62 @@ def create_document_rag_runtime(
             return None
 
     def build_document_rag_index(uploaded_files: list[Any] | None, wiki_text: str = "", uploaded_by: str = "") -> dict:
+        """社内ドキュメントRAGを追加・更新する。
+
+        重要:
+        以前の実装は「この内容でRAGへ反映」を押すたびに chunks.json と
+        manifest.json を新規作成していたため、後から別資料を追加すると
+        管理一覧にも検索対象にも最後の1件しか残らなかった。
+
+        この実装では、既存のRAGデータを読み込んだうえで、
+        - 新しくアップロードされたファイルは追加
+        - 同名ファイルは差し替え
+        - アップロードしていない既存ファイルは保持
+        - Wiki本文は入力された場合だけ差し替え
+        として、複数資料を継続して保持する。
+        """
         uploaded_files = list(uploaded_files or [])
         wiki_text = normalize_doc_text(wiki_text)
-        all_sections: list[dict[str, str]] = []
-        saved_files: list[dict[str, str]] = []
         now = _now_iso()
         uploaded_by = str(uploaded_by or "不明").strip() or "不明"
 
+        if not uploaded_files and not wiki_text:
+            return {"ok": False, "message": "取り込むファイルまたはWiki本文を指定してください。", "chunk_count": 0}
+
         DOC_RAG_FILES_DIR.mkdir(parents=True, exist_ok=True)
 
-        for uploaded in uploaded_files:
-            try:
-                original_name = str(getattr(uploaded, "name", "document")).strip() or "document"
-                filename = _safe_source_filename(original_name)
-                source_type = Path(filename).suffix.lower().lstrip(".") or "file"
+        existing_manifest = get_document_rag_manifest()
+        existing_chunks = load_document_chunks()
+        existing_files = [x for x in (existing_manifest.get("files", []) or []) if isinstance(x, dict)]
 
+        new_sections: list[dict[str, Any]] = []
+        saved_files: list[dict[str, Any]] = []
+        replace_keys: set[tuple[str, str]] = set()
+        failed_files: list[str] = []
+
+        for uploaded in uploaded_files:
+            original_name = str(getattr(uploaded, "name", "document")).strip() or "document"
+            filename = _safe_source_filename(original_name)
+            source_type = Path(filename).suffix.lower().lstrip(".") or "file"
+            key = (filename, source_type)
+            try:
+                raw_bytes = uploaded.getvalue() if hasattr(uploaded, "getvalue") else uploaded.read()
+
+                # Streamlit UploadedFile は getvalue() で繰り返し読めるが、
+                # 念のため抽出関数側でも読めるようそのまま渡す。
                 sections = extract_sections_from_uploaded_file(uploaded)
                 if not sections:
+                    failed_files.append(filename)
                     continue
-                # 一覧削除のキーと検索時の根拠名を揃える。
+
                 for section in sections:
                     section["source_name"] = filename
                     section["source_type"] = str(section.get("source_type") or source_type).lower()
-                all_sections.extend(sections)
+                new_sections.extend(sections)
 
-                raw_bytes = uploaded.getvalue() if hasattr(uploaded, "getvalue") else uploaded.read()
                 save_path = DOC_RAG_FILES_DIR / filename
                 save_path.write_bytes(raw_bytes)
+                replace_keys.add(key)
                 saved_files.append({
                     "name": filename,
                     "type": source_type,
@@ -442,26 +471,76 @@ def create_document_rag_runtime(
                     "chunk_count": 0,
                 })
             except Exception as exc:
-                st.warning(f"ドキュメント取込に失敗しました: {getattr(uploaded, 'name', 'document')} / {exc}")
+                failed_files.append(filename)
+                try:
+                    st.warning(f"ドキュメント取込に失敗しました: {filename} / {exc}")
+                except Exception:
+                    pass
 
+        replace_wiki = bool(wiki_text)
         if wiki_text:
-            all_sections.append({
+            new_sections.append({
                 "source_name": "wiki_input.txt",
                 "source_type": "wiki",
                 "location": "wiki",
+                "chunk_label": "wiki",
                 "text": wiki_text,
             })
 
-        chunks = build_chunks_from_sections(all_sections)
-        for row in chunks:
+        new_chunks = build_chunks_from_sections(new_sections)
+        for row in new_chunks:
             row["chunk_id"] = _hash_chunk(row)
 
-        if not chunks:
-            return {"ok": False, "message": "取り込める本文がありませんでした。", "chunk_count": 0}
+        if not new_chunks:
+            msg = "取り込める本文がありませんでした。"
+            if failed_files:
+                msg += " 失敗: " + ", ".join(failed_files[:5])
+            return {"ok": False, "message": msg, "chunk_count": 0}
 
-        # ファイル別チャンク数をmanifestへ保存する。
-        for item in saved_files:
-            item["chunk_count"] = _chunk_count_for(chunks, item["name"], item["type"])
+        def _is_replaced_chunk(row: dict[str, Any]) -> bool:
+            name = str(row.get("source_name", "") or "").strip()
+            source_type = str(row.get("source_type", "") or Path(name).suffix.lower().lstrip(".") or "file").strip().lower()
+            if replace_wiki and (source_type == "wiki" or name == "wiki_input.txt"):
+                return True
+            return (name, source_type) in replace_keys
+
+        kept_chunks = [row for row in existing_chunks if isinstance(row, dict) and not _is_replaced_chunk(row)]
+        chunks = kept_chunks + new_chunks
+
+        # 同名・同種の既存manifest行は差し替え、それ以外は保持する。
+        kept_files: list[dict[str, Any]] = []
+        seen_files: set[tuple[str, str]] = set()
+        for item in existing_files:
+            name = str(item.get("name", "") or "").strip()
+            if not name:
+                continue
+            source_type = str(item.get("type", "") or Path(name).suffix.lower().lstrip(".") or "file").strip().lower()
+            key = (name, source_type)
+            if key in replace_keys or key in seen_files:
+                continue
+            seen_files.add(key)
+            # チャンク数は現在のchunksから再計算し、一覧と実データのズレを防ぐ。
+            clean_item = dict(item)
+            clean_item["name"] = name
+            clean_item["type"] = source_type
+            clean_item["chunk_count"] = _chunk_count_for(chunks, name, source_type)
+            kept_files.append(clean_item)
+
+        files = kept_files + saved_files
+        for item in files:
+            item["chunk_count"] = _chunk_count_for(chunks, item.get("name", ""), item.get("type", ""))
+
+        wiki_enabled = bool(existing_manifest.get("wiki_enabled"))
+        wiki_uploaded_at = str(existing_manifest.get("wiki_uploaded_at", "") or "")
+        wiki_uploaded_by = str(existing_manifest.get("wiki_uploaded_by", "") or "")
+        if replace_wiki:
+            wiki_enabled = True
+            wiki_uploaded_at = now
+            wiki_uploaded_by = uploaded_by
+        elif not any(str(c.get("source_type", "") or "").lower() == "wiki" or str(c.get("source_name", "") or "") == "wiki_input.txt" for c in chunks):
+            wiki_enabled = False
+            wiki_uploaded_at = ""
+            wiki_uploaded_by = ""
 
         embeddings = None
         if SENTENCE_TRANSFORMERS_AVAILABLE:
@@ -472,7 +551,10 @@ def create_document_rag_runtime(
                     emb = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
                     embeddings = np.asarray(emb, dtype=np.float32)
             except Exception as exc:
-                st.warning(f"sentence-transformers での索引化に失敗したため通常検索に切り替えます: {exc}")
+                try:
+                    st.warning(f"sentence-transformers での索引化に失敗したため通常検索に切り替えます: {exc}")
+                except Exception:
+                    pass
                 embeddings = None
 
         _safe_write_json(DOC_RAG_CHUNKS_PATH, chunks)
@@ -483,14 +565,21 @@ def create_document_rag_runtime(
             DOC_RAG_EMBEDDINGS_PATH.unlink()
 
         manifest = {
-            "enabled": True,
-            "doc_count": len(saved_files) + (1 if wiki_text else 0),
+            "enabled": bool(files or wiki_enabled or chunks),
+            "doc_count": len(files) + (1 if wiki_enabled else 0),
             "chunk_count": len(chunks),
-            "files": saved_files,
-            "wiki_enabled": bool(wiki_text),
-            "wiki_uploaded_at": now if wiki_text else "",
-            "wiki_uploaded_by": uploaded_by if wiki_text else "",
+            "files": files,
+            "wiki_enabled": wiki_enabled,
+            "wiki_uploaded_at": wiki_uploaded_at,
+            "wiki_uploaded_by": wiki_uploaded_by,
             "updated_at": now,
+            "last_import": {
+                "uploaded_by": uploaded_by,
+                "uploaded_at": now,
+                "added_or_updated_files": [f.get("name", "") for f in saved_files],
+                "failed_files": failed_files,
+                "new_chunk_count": len(new_chunks),
+            },
         }
         _safe_write_json(DOC_RAG_MANIFEST_PATH, manifest)
         _persist_doc_paths(DOC_RAG_CHUNKS_PATH, DOC_RAG_MANIFEST_PATH)
@@ -501,7 +590,11 @@ def create_document_rag_runtime(
         for item in saved_files:
             _persist_doc_paths(Path(item["path"]))
 
-        return {"ok": True, "message": f"{manifest['doc_count']}件の資料を取り込みました。", "chunk_count": len(chunks), "manifest": manifest}
+        action = "追加・更新しました"
+        message = f"{len(saved_files) + (1 if replace_wiki else 0)}件の資料を{action}。登録資料: {manifest['doc_count']}件 / 総チャンク数: {len(chunks)}"
+        if failed_files:
+            message += " / 取込失敗: " + ", ".join(failed_files[:5])
+        return {"ok": True, "message": message, "chunk_count": len(chunks), "manifest": manifest}
 
     def _expand_document_search_query(query: str) -> str:
         """検索用に質問文を少しだけ展開する。
@@ -526,8 +619,6 @@ def create_document_rag_runtime(
             additions.append("障害発生時 技術的対応 復旧手続 復旧手順 整備 不正アクセス 発生 対応 対策 コンピュータウイルス 被害時 リカバリ機能")
         if any(token in clean for token in ("持出", "持ち出", "持ち込み", "持込", "私有", "USB")):
             additions.append("持出し管理 持ち込む機器 私有機器 情報記憶媒体 USB 許可 禁止")
-        if any(token in clean for token in ("申請書", "書式", "申請", "どの", "改修", "開発", "導入", "エクセル", "Excel")):
-            additions.append("申請書 書式 使用書式 シート名 申請項目 概要 既存システム改修 システム開発 システム導入 エクセル 作成 改修")
         return normalize_doc_text(" ".join([core, clean, *additions]))
 
     def _search_with_embeddings(query: str, chunks: list[dict[str, Any]], top_k: int = 5) -> list[dict[str, Any]]:
@@ -578,72 +669,6 @@ def create_document_rag_runtime(
         except Exception:
             return []
 
-    def _is_document_lookup_query(query: str) -> bool:
-        q = normalize_doc_text(query).replace(" ", "").replace("　", "")
-        if not q:
-            return False
-        lookup = any(x in q for x in ("どれ", "どの", "どちら", "どこ", "何を", "何の", "なにを", "なにの", "使う", "使用", "教えて"))
-        target = any(x in q for x in ("書式", "様式", "申請書", "申請", "依頼", "手続", "帳票", "資料", "マニュアル", "項目"))
-        system_work = "システム" in q and any(x in q for x in ("改修", "開発", "導入", "作成", "変更", "更新"))
-        return bool((lookup and (target or system_work)) or ("申請書" in q and system_work))
-
-    def _business_form_rerank_bonus(query: str, hit: dict[str, Any]) -> float:
-        """申請書・書式探索系の質問で、人が見て文脈が合うExcel行を上げる。
-
-        単純な固定キーワード優先ではなく、質問の業務語とExcel行の構造化情報が
-        両方そろった場合だけ加点する。
-        """
-        if not _is_document_lookup_query(query):
-            return 0.0
-        source_type = str(hit.get("source_type", "") or "").lower()
-        if source_type not in {"xlsx", "xlsm", "xls"}:
-            return 0.0
-        q = normalize_doc_text(query).replace(" ", "").replace("　", "")
-        t = normalize_doc_text(" ".join([
-            str(hit.get("text", "")),
-            str(hit.get("search_text", "")),
-            str(hit.get("business_sheet", "")),
-            str(hit.get("business_application_item", "")),
-            str(hit.get("business_overview", "")),
-            str(hit.get("location", "")),
-        ])).replace(" ", "").replace("　", "")
-
-        bonus = 0.0
-        if any(x in t for x in ("書式", "様式", "申請項目", "使用書式", "申請書")):
-            bonus += 0.16
-        if "システム" in q and "システム" in t:
-            bonus += 0.08
-        pairs = [
-            ("改修", ("改修", "既存システム改修")),
-            ("開発", ("開発", "システム開発")),
-            ("導入", ("導入", "システム導入")),
-            ("エクセル", ("エクセル", "excel")),
-            ("excel", ("エクセル", "excel")),
-            ("作成", ("作成",)),
-        ]
-        for qtok, ttoks in pairs:
-            if qtok in q and any(tt in t for tt in ttoks):
-                bonus += 0.12
-        # 「改廃」や規程条文など、書式探索の回答として不自然な行は上げない。
-        if "改廃" in t and not any(x in t for x in ("書式", "申請項目", "申請書")):
-            bonus -= 0.25
-        return bonus
-
-    def _rerank_document_hits_for_context(query: str, hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if not hits:
-            return []
-        reranked = []
-        for h in hits:
-            item = dict(h)
-            base = float(item.get("score", 0.0) or 0.0)
-            bonus = _business_form_rerank_bonus(query, item)
-            item["base_score"] = base
-            item["context_bonus"] = bonus
-            item["score"] = max(0.0, min(1.0, base + bonus))
-            reranked.append(item)
-        reranked.sort(key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
-        return reranked
-
     def search_document_rag(query: str, top_k: int = 5) -> list[dict[str, Any]]:
         query = normalize_doc_text(query)
         if not query:
@@ -656,14 +681,11 @@ def create_document_rag_runtime(
             return []
         # Excelは行単位の明示語一致が重要なため、TF-IDF結果を優先する。
         # PDF/Word等はsentence-transformersが使える場合のみ意味検索を優先する。
-        # 申請書・書式探索系は、候補外に正解行が埋もれないよう少し多めに取得して再ランキングする。
-        candidate_k = max(top_k, 20) if _is_document_lookup_query(query) else top_k
-        tfidf_hits = _search_with_tfidf(query, chunks, top_k=candidate_k)
-        embedding_hits = _search_with_embeddings(query, chunks, top_k=candidate_k)
+        tfidf_hits = _search_with_tfidf(query, chunks, top_k=top_k)
+        embedding_hits = _search_with_embeddings(query, chunks, top_k=top_k)
         if tfidf_hits and str(tfidf_hits[0].get("source_type", "") or "").lower() in {"xlsx", "xlsm"}:
-            return _rerank_document_hits_for_context(query, tfidf_hits)[:top_k]
-        merged = embedding_hits or tfidf_hits
-        return _rerank_document_hits_for_context(query, merged)[:top_k]
+            return tfidf_hits
+        return embedding_hits or tfidf_hits
 
     def _select_hits_for_answer(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not hits:
@@ -948,208 +970,7 @@ def create_document_rag_runtime(
             return "いいえ、未対応です。" if yes_no else "資料上の判定は「未対応」です。"
         return f"資料上の判定は「{j}」です。"
 
-    def _is_application_form_question(user_q: str, hit: dict[str, Any] | None = None) -> bool:
-        q = normalize_doc_text(user_q)
-        if any(token in q for token in ("申請書", "書式", "どの申請", "どの書式", "何の申請", "どれ", "どの")):
-            return True
-        if any(token in q for token in ("改修", "開発", "導入", "エクセル", "Excel")) and any(token in q for token in ("申請", "申請書", "書式")):
-            return True
-        if hit:
-            return bool(hit.get("business_sheet") or hit.get("business_application_item"))
-        return False
-
-    def _extract_business_excel_fields_from_text(text: str) -> dict[str, str]:
-        """Excel行テキストから、ユーザー向け回答に必要な業務項目だけを抽出する。
-
-        旧形式チャンクでは「使用書式」「申請項目」ラベルがなく、
-        「分類・補助項目: 書式1-2 / 既存システム改修」や
-        「元データ: B: 概要 / C: 書式1-2 / D: 既存システム改修」
-        の形で保存されていることがあるため、そこからも復元する。
-        """
-        clean = normalize_doc_text(text)
-
-        sheet = (
-            _extract_labeled_line(clean, "使用書式")
-            or _extract_labeled_line(clean, "シート名")
-            or _extract_labeled_line(clean, "書式")
-        )
-        application_item = _extract_labeled_line(clean, "申請項目")
-        overview = (
-            _extract_labeled_line(clean, "概要")
-            or _extract_labeled_line(clean, "確認事項")
-            or _extract_labeled_line(clean, "該当項目")
-        )
-        path = _extract_labeled_line(clean, "申請書パス") or _extract_labeled_line(clean, "申請書")
-
-        def _strip_col(v: str) -> str:
-            return normalize_doc_text(re.sub(r"^[A-Z]{1,3}\s*[:：]\s*", "", str(v or "")))
-
-        # 例: 分類・補助項目: 書式1-2 / 既存システム改修
-        topic_line = _extract_labeled_line(clean, "分類・補助項目") or _extract_labeled_line(clean, "項目")
-        topic_parts = [_strip_col(x) for x in re.split(r"\s*/\s*", topic_line or "") if _strip_col(x)]
-        GENERIC_WORDS = {
-            # 検索には使ってよいが、ユーザー回答の「申請書名・申請項目」としては出さない語。
-            "社内", "社外", "システム", "システム課", "アプリケーション", "対象", "分類",
-            "補助", "補助項目", "項目", "カテゴリ", "情報", "申請", "書類", "書式",
-            "顧客影響", "部門共通", "部門", "共通", "運用", "管理", "業務", "その他",
-        }
-        BUSINESS_ACTION_TOKENS = (
-            "改修", "開発", "導入", "作成", "変更", "更新", "修正", "連携",
-            "トライアル", "利用", "権限", "申請", "承認", "登録", "削除",
-        )
-
-        def _is_business_answer_candidate(v: str) -> bool:
-            value = normalize_doc_text(v)
-            if not value:
-                return False
-            compact = value.replace(" ", "").replace("　", "")
-            if value in GENERIC_WORDS or compact in GENERIC_WORDS:
-                return False
-            if len(compact) <= 2:
-                return False
-            if re.fullmatch(r"[0-9０-９]+[-－][0-9０-９]+", compact):
-                return False
-            # 部署名・分類名だけの値は、回答用ではなく検索用メタ情報として扱う。
-            if compact.endswith("課") or compact.endswith("部") or compact.endswith("係"):
-                return False
-            return True
-
-        def _business_value_score(v: str) -> int:
-            value = normalize_doc_text(v)
-            if not _is_business_answer_candidate(value):
-                return -10_000
-            compact = value.replace(" ", "").replace("　", "")
-            score = 0
-            # 「既存システム改修」「システム導入」など、利用者が知りたい申請項目を最優先。
-            if any(tok in compact for tok in BUSINESS_ACTION_TOKENS):
-                score += 120
-            if "システム" in compact:
-                score += 40
-            if re.search(r"書式\s*\d|書式[0-9０-９]|様式\s*\d|申請書", compact):
-                score += 70
-            # 長すぎる説明文より、申請項目らしい短めの名詞句を優先。
-            if 4 <= len(compact) <= 24:
-                score += 30
-            if len(compact) > 60:
-                score -= 30
-            return score
-
-        def _best_business_value(parts: list[str], *, exclude: str = "") -> str:
-            candidates = [p for p in parts if p != exclude and _is_business_answer_candidate(p)]
-            if not candidates:
-                return ""
-            candidates.sort(key=_business_value_score, reverse=True)
-            return candidates[0] if _business_value_score(candidates[0]) > -10_000 else ""
-
-        if topic_parts:
-            if not sheet:
-                for part in topic_parts:
-                    if re.search(r"書式\s*\d|書式[0-9０-９]|様式\s*\d|申請書", part):
-                        sheet = part
-                        break
-            if not application_item:
-                application_item = _best_business_value(topic_parts, exclude=sheet)
-
-        # 例: 元データ: B: システム課で... / C: 書式1-2 / D: 既存システム改修
-        raw_line = _extract_labeled_line(clean, "元データ")
-        raw_parts = [_strip_col(x) for x in re.split(r"\s*/\s*", raw_line or "") if _strip_col(x)]
-        if raw_parts:
-            if not sheet:
-                for part in raw_parts:
-                    if re.search(r"書式\s*\d|書式[0-9０-９]|様式\s*\d", part):
-                        sheet = part
-                        break
-            # 回答用の申請項目は、書式の右隣だけに決め打ちしない。
-            # Excelによっては「社内 / システム課 / 顧客影響 / 既存システム改修」のように
-            # 分類列が先に並ぶため、申請項目らしい値をスコアで選ぶ。
-            if not application_item:
-                right_side = []
-                if sheet:
-                    try:
-                        idx = raw_parts.index(sheet)
-                        right_side = raw_parts[idx + 1:]
-                    except ValueError:
-                        right_side = []
-                application_item = _best_business_value(right_side or raw_parts, exclude=sheet)
-            if not overview:
-                overview_candidates = []
-                for part in raw_parts:
-                    if (
-                        part != sheet
-                        and part != application_item
-                        and _is_business_answer_candidate(part)
-                        and len(part) >= 8
-                    ):
-                        overview_candidates.append(part)
-                if overview_candidates:
-                    # 概要は説明文らしい長めの値を優先。
-                    overview_candidates.sort(key=lambda x: (len(x), _business_value_score(x)), reverse=True)
-                    overview = overview_candidates[0]
-
-        return {
-            "sheet": normalize_doc_text(sheet),
-            "application_item": normalize_doc_text(application_item),
-            "overview": normalize_doc_text(overview),
-            "path": normalize_doc_text(path),
-        }
-
-    def _format_business_excel_answer(user_q: str, hit: dict[str, Any]) -> str:
-        text = str(hit.get("text", "") or "")
-        fields = _extract_business_excel_fields_from_text(text)
-
-        def _is_bad_answer_field(v: str) -> bool:
-            value = normalize_doc_text(v)
-            compact = value.replace(" ", "").replace("　", "")
-            if not compact:
-                return True
-            bad_values = {
-                "社内", "社外", "システム", "システム課", "アプリケーション", "顧客影響",
-                "分類", "補助", "補助項目", "対象", "部門共通", "運用", "管理", "業務",
-            }
-            if compact in bad_values:
-                return True
-            if compact.endswith("課") or compact.endswith("部") or compact.endswith("係"):
-                return True
-            return False
-
-        form_sheet = normalize_doc_text(str(hit.get("business_sheet") or fields.get("sheet") or ""))
-        application_item_from_hit = normalize_doc_text(str(hit.get("business_application_item") or ""))
-        application_item_from_text = normalize_doc_text(str(fields.get("application_item") or ""))
-        application_item = application_item_from_text if _is_bad_answer_field(application_item_from_hit) else application_item_from_hit
-        if not application_item:
-            application_item = application_item_from_text
-
-        overview_from_hit = normalize_doc_text(str(hit.get("business_overview") or ""))
-        overview_from_text = normalize_doc_text(str(fields.get("overview") or ""))
-        overview = overview_from_hit or overview_from_text
-        # 概要欄に分類名だけが入っている場合は表示しない。
-        if _is_bad_answer_field(overview) and len(overview) <= 12:
-            overview = overview_from_text if overview_from_text != overview else ""
-
-        path_text = normalize_doc_text(str(hit.get("business_path") or fields.get("path") or ""))
-        source_name = str(hit.get("source_name", "") or "")
-        location = str(hit.get("location", "") or hit.get("chunk_label", "") or "")
-
-        lines = ["社内資料から該当箇所が見つかりました。", "", "【回答】"]
-        if form_sheet and application_item:
-            lines.append(f"{form_sheet} の「{application_item}」を使用します。")
-        elif application_item:
-            lines.append(f"「{application_item}」を使用します。")
-        elif form_sheet:
-            lines.append(f"使用書式は {form_sheet} です。")
-        elif overview:
-            lines.append(overview)
-        else:
-            excerpt = normalize_doc_text(text)
-            lines.append(excerpt[:360].rstrip() + ("…" if len(excerpt) > 360 else ""))
-
-        # ユーザー向け回答では内部分類・保存場所・概要などは表示しない。
-        # 詳細情報は「回答の根拠を見る」側のみで表示する。
-        return "\n".join(lines).strip()
-
     def _format_excel_row_answer(user_q: str, hit: dict[str, Any]) -> str:
-        if _is_application_form_question(user_q, hit):
-            return _format_business_excel_answer(user_q, hit)
         parsed = _parse_excel_raw_parts(str(hit.get("text", "") or ""))
         saved = _extract_saved_excel_row(hit)
         # 保存済みExcel本体から読み取れた場合は、それを最優先にする。
@@ -1198,7 +1019,7 @@ def create_document_rag_runtime(
             if topic and topic != item:
                 lines.append(topic)
 
-        # 参照元・シート名・行番号などの内部情報は「回答の根拠を見る」側に表示する。
+        lines.extend(["", "【参照元】", f"- {source_name} / {location}".strip()])
         return "\n".join(lines).strip()
 
     def build_document_rag_prompt(user_q: str, hits: list[dict[str, Any]]) -> str:
