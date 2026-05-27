@@ -1,2 +1,3 @@
 timestamp,question,matched,best_score,category
 2026-05-27T22:37:19,担当役員とは？ 社内の担当役員とはどんな事を行いますか？,1,0.868793785572052,doc_rag:pdf
+2026-05-27T22:41:27,機密保持契約はありますか？,1,0.3004511856390098,doc_rag:xlsx
