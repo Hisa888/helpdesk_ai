@@ -147,6 +147,39 @@ def _iter_docx_table_text(doc: Document) -> list[str]:
     return blocks
 
 
+
+
+def _split_docx_text_by_articles(text: str, filename: str) -> list[dict[str, str]]:
+    """Wordのスタイルに見出しが付いていない規程文書を、第◯条単位に分割する。
+
+    規程・手順書・マニュアルでは、Word上はすべて通常段落でも、本文には
+    「第10条 個人IDとパスワードの管理」のような構造がある。
+    これを大きな1文書チャンクのままにすると、検索時にMicrosoft 365等のFAQへ
+    負けたり、別条文が混ざった回答になりやすい。
+    """
+    clean = normalize_doc_text(text)
+    if not clean:
+        return []
+    # 目次行も含まれるが、本文側の条文を優先するため、十分な長さのブロックだけ採用する。
+    pattern = re.compile(r"(?ms)(^第\s*[0-9０-９]+\s*条[^\n]*\n.*?)(?=^第\s*[0-9０-９]+\s*条|\Z)")
+    results: list[dict[str, str]] = []
+    for m in pattern.finditer(clean):
+        block = normalize_doc_text(m.group(1))
+        if len(block) < 40:
+            continue
+        first_line = block.split("\n", 1)[0].strip()[:100] or "article"
+        # 目次だけのブロックを除外
+        if "目次" in block[:80] and len(block) < 180:
+            continue
+        results.append({
+            "source_name": filename,
+            "source_type": "docx",
+            "location": first_line,
+            "text": block,
+        })
+    return results
+
+
 def extract_docx_sections(file_bytes: bytes, filename: str) -> list[dict[str, str]]:
     """Word(docx)を見出し・段落・表まで含めて抽出。"""
     try:
@@ -183,6 +216,13 @@ def extract_docx_sections(file_bytes: bytes, filename: str) -> list[dict[str, st
         else:
             current_lines.append(raw)
     flush()
+
+    # スタイル見出しが無い規程文書は、条文単位に再分割する。
+    # 例: 「第10条 個人IDとパスワードの管理」だけを1根拠として拾えるようにする。
+    combined_text = normalize_doc_text("\n".join(str(r.get("text", "")) for r in results))
+    article_sections = _split_docx_text_by_articles(combined_text, filename)
+    if len(article_sections) >= 3:
+        results = article_sections
 
     # Word内の表もFAQ生成では重要なので別セクションとして追加
     for idx, table_text in enumerate(_iter_docx_table_text(doc), start=1):

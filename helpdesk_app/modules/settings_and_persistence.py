@@ -445,6 +445,8 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
             "doc_rag_threshold": 0.55,
             # Excel/チェックシートRAGは1行単位の短い本文なので、通常Docより低めで採用する。
             "excel_doc_rag_threshold": 0.18,
+            # 規程・協定・就業規則など、FAQより社内資料を優先する質問用。
+            "business_doc_rag_threshold": 0.12,
             "doc_compare_margin": 0.05,
             # FAQ項目別の検索重み。question/intent/keywordsを強め、answer/categoryは補助にする。
             "question_weight": 3.00,
@@ -500,6 +502,7 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
         top_k = int(round(_safe_float_range(src.get("top_k", base["top_k"]), base["top_k"], 1, 5)))
         doc_rag_threshold = _safe_float_range(src.get("doc_rag_threshold", base["doc_rag_threshold"]), base["doc_rag_threshold"], 0.10, 1.20)
         excel_doc_rag_threshold = _safe_float_range(src.get("excel_doc_rag_threshold", base["excel_doc_rag_threshold"]), base["excel_doc_rag_threshold"], 0.05, 0.80)
+        business_doc_rag_threshold = _safe_float_range(src.get("business_doc_rag_threshold", base["business_doc_rag_threshold"]), base["business_doc_rag_threshold"], 0.05, 0.80)
         doc_compare_margin = _safe_float_range(src.get("doc_compare_margin", base["doc_compare_margin"]), base["doc_compare_margin"], 0.00, 0.50)
         question_weight = _safe_float_range(src.get("question_weight", base["question_weight"]), base["question_weight"], 0.0, 5.0)
         answer_weight = _safe_float_range(src.get("answer_weight", base["answer_weight"]), base["answer_weight"], 0.0, 5.0)
@@ -538,6 +541,7 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
             "top_k": top_k,
             "doc_rag_threshold": round(doc_rag_threshold, 2),
             "excel_doc_rag_threshold": round(excel_doc_rag_threshold, 2),
+            "business_doc_rag_threshold": round(business_doc_rag_threshold, 2),
             "doc_compare_margin": round(doc_compare_margin, 2),
             "question_weight": round(question_weight, 2),
             "answer_weight": round(answer_weight, 2),

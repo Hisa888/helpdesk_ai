@@ -15,6 +15,7 @@ def render_search_settings_panel(
             f"現在値：FAQ自動回答 {current_cfg['answer_threshold']:.2f} / 候補表示 {current_cfg['suggest_threshold']:.2f} / "
             f"Doc採用しきい値 {float(current_cfg.get('doc_rag_threshold', 0.55)):.2f} / "
             f"Excel行採用 {float(current_cfg.get('excel_doc_rag_threshold', 0.18)):.2f} / "
+            f"業務資料優先 {float(current_cfg.get('business_doc_rag_threshold', 0.12)):.2f} / "
             f"DocがFAQを上回る差分 {float(current_cfg.get('doc_compare_margin', 0.05)):.2f} / "
             f"単語重視 {int(current_cfg['word_weight'] * 100)}% / 文字重視 {int(current_cfg['char_weight'] * 100)}%"
         )
@@ -86,6 +87,15 @@ def render_search_settings_panel(
             step=0.01,
             key="admin_excel_doc_rag_threshold_slider",
             help="Excelチェックシートは1行単位の短い本文として検索するため、通常Docより低めのしきい値で採用します。",
+        )
+        business_doc_rag_threshold = st.slider(
+            "業務資料優先しきい値",
+            min_value=0.05,
+            max_value=0.80,
+            value=float(current_cfg.get("business_doc_rag_threshold", 0.12)),
+            step=0.01,
+            key="admin_business_doc_rag_threshold_slider",
+            help="36協定・就業規則・社内規程など、FAQより社内資料を優先する質問で使うDoc採用しきい値です。",
         )
         doc_compare_margin = st.slider(
             "DocがFAQを上回る差分",
@@ -172,6 +182,7 @@ def render_search_settings_panel(
                         "top_k": top_k,
                         "doc_rag_threshold": doc_rag_threshold,
                         "excel_doc_rag_threshold": excel_doc_rag_threshold,
+                        "business_doc_rag_threshold": business_doc_rag_threshold,
                         "doc_compare_margin": doc_compare_margin,
                         "question_weight": question_weight,
                         "answer_weight": answer_weight,

@@ -71,6 +71,93 @@ def _non_inquiry_response(kind: str) -> str:
     return "承知しました。続けて確認したい内容があれば入力してください。"
 
 
+def _is_business_document_priority_query(user_q: str) -> bool:
+    """FAQより社内ドキュメントRAGを優先すべき業務資料系の質問を判定する。
+
+    例: 36協定、就業規則、社内規程、契約、法令、労務、組織規程など。
+    これらはMicrosoft 365などのFAQ候補が低〜中スコアで出ても、
+    カテゴリ違いの誤候補に見えやすいため、まず社内資料を探す。
+    """
+    raw = str(user_q or "").strip()
+    if not raw:
+        return False
+    q = unicodedata.normalize("NFKC", raw).lower()
+    q_compact = re.sub(r"[\s\u3000、。,.!！?？…・･~〜ー\-＿_（）()「」『』【】\[\]]+", "", q)
+
+    # パスワード忘れ/再設定のような個別操作はFAQでよいが、
+    # パスワードのルール・基準・管理要領は社内規程を優先する。
+    password_terms = ("パスワード", "password", "個人id", "id")
+    password_rule_terms = ("ルール", "規程", "規定", "基準", "要件", "何桁", "文字数", "桁以上", "管理", "要領", "取り扱", "取扱", "決まり", "ポリシー")
+    password_operation_terms = ("忘れ", "期限切れ", "再設定", "リセット", "再発行", "ロック", "解除", "表示名", "削除")
+    if any(t in q for t in password_terms) and any(t in q for t in password_rule_terms) and not any(t in q for t in password_operation_terms):
+        return True
+
+    # 社内規程・労務・法務・制度・申請書系はRAG優先。
+    business_terms = (
+        "36協定", "三六協定", "サブロク協定", "労使協定", "時間外労働", "休日労働",
+        "就業規則", "服務規程", "賃金規程", "退職金規程", "育児介護", "有給休暇",
+        "労務", "勤怠", "残業", "休暇", "休職", "復職", "雇用", "採用", "退職",
+        "規程", "規定", "規則", "規約", "社内ルール", "社内規程", "組織規程",
+        "管理規程", "情報システム管理", "個人情報", "秘密保持", "機密情報",
+        "法令", "法令順守", "コンプライアンス", "契約", "契約書", "協定",
+        "申請書", "届出", "届出先", "様式", "書式", "社内資料", "マニュアル",
+        "顧客指定システム", "顧客指定システム利用", "顧客領域作成", "顧客環境作成", "顧客の領域", "顧客の環境", "領域作成", "環境作成",
+    )
+    if any(t.lower() in q for t in business_terms) or any(t.lower() in q_compact for t in business_terms):
+        return True
+
+    # 「○○について教えて/とは」かつITトラブル語が薄い場合も、社内文書説明の可能性が高い。
+    explain_terms = ("について教えて", "について教えてください", "とは", "意味", "概要", "説明")
+    it_terms = ("microsoft", "office", "365", "teams", "outlook", "excel", "word", "onedrive", "sharepoint", "vpn", "wi-fi", "wifi", "pc", "パソコン", "プリンタ", "印刷", "ログイン", "パスワード", "アカウント")
+    return any(t in q for t in explain_terms) and not any(t in q for t in it_terms) and len(q_compact) >= 4
+
+
+def _business_doc_hit_is_relevant(user_q: str, doc_hits: list, score: float, threshold: float) -> bool:
+    """業務資料系質問で、Doc RAGの低めスコアを採用してよいか判定する。
+
+    PDF/Wordの短いチャンクではTF-IDFスコアが低く出ることがあるため、
+    スコアだけでなく、質問中の重要語が資料名/場所/本文に含まれるかも見る。
+    """
+    if not doc_hits:
+        return False
+    try:
+        if float(score) >= max(float(threshold), 0.22):
+            return True
+    except Exception:
+        pass
+
+    top = doc_hits[0] if doc_hits else {}
+    text = unicodedata.normalize("NFKC", " ".join([
+        str(top.get("source_name", "") or ""),
+        str(top.get("location", "") or ""),
+        str(top.get("chunk_label", "") or ""),
+        str(top.get("text", "") or ""),
+    ])).lower()
+    q = unicodedata.normalize("NFKC", str(user_q or "")).lower()
+
+    explicit_terms = (
+        "36協定", "三六協定", "サブロク協定", "就業規則", "組織規程", "情報システム管理規程",
+        "有給休暇", "時間外労働", "休日労働", "労使協定", "秘密保持", "個人情報",
+        "顧客指定システム", "顧客領域作成", "顧客環境作成", "システム作業申請書",
+    )
+    if any(t.lower() in q and t.lower() in text for t in explicit_terms):
+        return True
+
+    # 重要語を粗く抽出。一般語は除外する。
+    tokens = re.findall(r"[0-9a-zA-Z一-龥ぁ-んァ-ン]{2,}", q)
+    stop = {
+        "について", "教えて", "ください", "下さい", "とは", "ですか", "ますか", "ありますか",
+        "場合", "対応", "方法", "内容", "社内", "資料", "どの", "よう", "どんな",
+    }
+    important = [t for t in tokens if t not in stop and len(t) >= 2]
+    if important and any(t in text for t in important):
+        try:
+            return float(score) >= float(threshold)
+        except Exception:
+            return True
+    return False
+
+
 def process_user_query(
     *,
     st,
@@ -136,6 +223,7 @@ def process_user_query(
         best_score = hits[0][1] if hits else 0.0
 
     search_cfg = current_search_settings() if callable(current_search_settings) else {}
+    business_doc_priority = _is_business_document_priority_query(user_q)
 
     # 低一致度の候補表示ガード。
     # 0.30以下の候補は「腹減った」のような業務外/雑談にも無理やりFAQ候補を出してしまい、
@@ -258,14 +346,27 @@ def process_user_query(
         # 管理画面で doc_rag_always_compare=true にすると従来通り比較検索も可能。
         should_search_doc = (
             bool(search_cfg.get("always_compare_doc_rag", search_cfg.get("doc_rag_always_compare", False)))
+            or business_doc_priority
             or (not faq_auto_ok)
             or ambiguous_auto
         )
         if should_search_doc:
             doc_hits, doc_best_score = _lazy_search_document_rag()
             effective_doc_threshold = _effective_doc_threshold(doc_hits)
-            doc_auto_ok = bool(doc_hits) and doc_best_score >= effective_doc_threshold
-            prefer_doc = doc_auto_ok and (not faq_auto_ok or ambiguous_auto or doc_best_score >= (float(best_score) + doc_compare_margin))
+            if business_doc_priority:
+                # 社内規程・労務・契約などの業務資料系質問では、
+                # FAQ候補より社内ドキュメントを優先する。
+                # PDF/Wordの短いチャンクはスコアが低めに出るため、専用の下限値を使う。
+                try:
+                    business_doc_threshold = float(search_cfg.get("business_doc_rag_threshold", 0.12))
+                except Exception:
+                    business_doc_threshold = 0.12
+                effective_doc_threshold = min(float(effective_doc_threshold), business_doc_threshold)
+                doc_auto_ok = _business_doc_hit_is_relevant(user_q, doc_hits, doc_best_score, effective_doc_threshold)
+                prefer_doc = bool(doc_auto_ok)
+            else:
+                doc_auto_ok = bool(doc_hits) and doc_best_score >= effective_doc_threshold
+                prefer_doc = doc_auto_ok and (not faq_auto_ok or ambiguous_auto or doc_best_score >= (float(best_score) + doc_compare_margin))
 
         if hits:
             faq_label = "FAQ一致度（採用）" if (faq_auto_ok and not prefer_doc and not ambiguous_auto) else "FAQ一致度（参考候補）"
@@ -323,6 +424,20 @@ def process_user_query(
             was_nohit = False
             was_suggest = False
             used_doc_rag = True
+        elif business_doc_priority:
+            # 業務資料系の質問で社内資料に明確な該当がない場合、
+            # Microsoft 365などカテゴリ違いのFAQ候補を出すと誤案内に見える。
+            # そのためFAQ候補は抑止し、社内資料側の不足として安全に返す。
+            used_hits = []
+            answer = (
+                "社内資料内に、この質問へ回答できる明確な該当箇所は見つかりませんでした。\n\n"
+                "資料名・規程名・申請書名などを少し具体的に入力するか、関連資料を追加アップロードしてください。"
+            )
+            answer_format = "markdown"
+            ts_nohit = log_nohit(user_q)
+            st.session_state["last_nohit"] = {"day": datetime.now().strftime("%Y%m%d"), "timestamp": ts_nohit, "question": user_q}
+            was_nohit = True
+            was_suggest = False
         elif ambiguous_auto and _candidate_display_allowed(float(best_score)):
             maybe_count = max(1, int(search_cfg.get("maybe_candidate_count", 3)))
             used_hits = hits[:maybe_count]

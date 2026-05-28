@@ -406,62 +406,33 @@ def create_document_rag_runtime(
             return None
 
     def build_document_rag_index(uploaded_files: list[Any] | None, wiki_text: str = "", uploaded_by: str = "") -> dict:
-        """社内ドキュメントRAGを追加・更新する。
-
-        重要:
-        以前の実装は「この内容でRAGへ反映」を押すたびに chunks.json と
-        manifest.json を新規作成していたため、後から別資料を追加すると
-        管理一覧にも検索対象にも最後の1件しか残らなかった。
-
-        この実装では、既存のRAGデータを読み込んだうえで、
-        - 新しくアップロードされたファイルは追加
-        - 同名ファイルは差し替え
-        - アップロードしていない既存ファイルは保持
-        - Wiki本文は入力された場合だけ差し替え
-        として、複数資料を継続して保持する。
-        """
         uploaded_files = list(uploaded_files or [])
         wiki_text = normalize_doc_text(wiki_text)
+        all_sections: list[dict[str, str]] = []
+        saved_files: list[dict[str, str]] = []
         now = _now_iso()
         uploaded_by = str(uploaded_by or "不明").strip() or "不明"
 
-        if not uploaded_files and not wiki_text:
-            return {"ok": False, "message": "取り込むファイルまたはWiki本文を指定してください。", "chunk_count": 0}
-
         DOC_RAG_FILES_DIR.mkdir(parents=True, exist_ok=True)
 
-        existing_manifest = get_document_rag_manifest()
-        existing_chunks = load_document_chunks()
-        existing_files = [x for x in (existing_manifest.get("files", []) or []) if isinstance(x, dict)]
-
-        new_sections: list[dict[str, Any]] = []
-        saved_files: list[dict[str, Any]] = []
-        replace_keys: set[tuple[str, str]] = set()
-        failed_files: list[str] = []
-
         for uploaded in uploaded_files:
-            original_name = str(getattr(uploaded, "name", "document")).strip() or "document"
-            filename = _safe_source_filename(original_name)
-            source_type = Path(filename).suffix.lower().lstrip(".") or "file"
-            key = (filename, source_type)
             try:
-                raw_bytes = uploaded.getvalue() if hasattr(uploaded, "getvalue") else uploaded.read()
+                original_name = str(getattr(uploaded, "name", "document")).strip() or "document"
+                filename = _safe_source_filename(original_name)
+                source_type = Path(filename).suffix.lower().lstrip(".") or "file"
 
-                # Streamlit UploadedFile は getvalue() で繰り返し読めるが、
-                # 念のため抽出関数側でも読めるようそのまま渡す。
                 sections = extract_sections_from_uploaded_file(uploaded)
                 if not sections:
-                    failed_files.append(filename)
                     continue
-
+                # 一覧削除のキーと検索時の根拠名を揃える。
                 for section in sections:
                     section["source_name"] = filename
                     section["source_type"] = str(section.get("source_type") or source_type).lower()
-                new_sections.extend(sections)
+                all_sections.extend(sections)
 
+                raw_bytes = uploaded.getvalue() if hasattr(uploaded, "getvalue") else uploaded.read()
                 save_path = DOC_RAG_FILES_DIR / filename
                 save_path.write_bytes(raw_bytes)
-                replace_keys.add(key)
                 saved_files.append({
                     "name": filename,
                     "type": source_type,
@@ -471,76 +442,58 @@ def create_document_rag_runtime(
                     "chunk_count": 0,
                 })
             except Exception as exc:
-                failed_files.append(filename)
-                try:
-                    st.warning(f"ドキュメント取込に失敗しました: {filename} / {exc}")
-                except Exception:
-                    pass
+                st.warning(f"ドキュメント取込に失敗しました: {getattr(uploaded, 'name', 'document')} / {exc}")
 
-        replace_wiki = bool(wiki_text)
         if wiki_text:
-            new_sections.append({
+            all_sections.append({
                 "source_name": "wiki_input.txt",
                 "source_type": "wiki",
                 "location": "wiki",
-                "chunk_label": "wiki",
                 "text": wiki_text,
             })
 
-        new_chunks = build_chunks_from_sections(new_sections)
+        new_chunks = build_chunks_from_sections(all_sections)
         for row in new_chunks:
             row["chunk_id"] = _hash_chunk(row)
 
         if not new_chunks:
-            msg = "取り込める本文がありませんでした。"
-            if failed_files:
-                msg += " 失敗: " + ", ".join(failed_files[:5])
-            return {"ok": False, "message": msg, "chunk_count": 0}
+            return {"ok": False, "message": "取り込める本文がありませんでした。", "chunk_count": 0}
 
-        def _is_replaced_chunk(row: dict[str, Any]) -> bool:
-            name = str(row.get("source_name", "") or "").strip()
-            source_type = str(row.get("source_type", "") or Path(name).suffix.lower().lstrip(".") or "file").strip().lower()
-            if replace_wiki and (source_type == "wiki" or name == "wiki_input.txt"):
-                return True
-            return (name, source_type) in replace_keys
+        # 既存資料を保持し、新規アップロード分だけ追加/同名差し替えする。
+        # ここで全上書きすると、複数資料を入れたのに最後の1件だけ表示される。
+        existing_manifest = get_document_rag_manifest()
+        existing_chunks = load_document_chunks()
+        replaced_keys = {
+            (str(item.get("name", "") or ""), str(item.get("type", "") or "").lower())
+            for item in saved_files
+        }
+        if wiki_text:
+            replaced_keys.add(("wiki_input.txt", "wiki"))
 
-        kept_chunks = [row for row in existing_chunks if isinstance(row, dict) and not _is_replaced_chunk(row)]
+        kept_chunks: list[dict[str, Any]] = []
+        for row in existing_chunks:
+            name = str(row.get("source_name", "") or "")
+            typ = str(row.get("source_type", "") or "").lower()
+            if (name, typ) in replaced_keys:
+                continue
+            kept_chunks.append(row)
         chunks = kept_chunks + new_chunks
 
-        # 同名・同種の既存manifest行は差し替え、それ以外は保持する。
+        existing_files = existing_manifest.get("files", []) if isinstance(existing_manifest.get("files"), list) else []
         kept_files: list[dict[str, Any]] = []
-        seen_files: set[tuple[str, str]] = set()
         for item in existing_files:
-            name = str(item.get("name", "") or "").strip()
-            if not name:
+            if not isinstance(item, dict):
                 continue
-            source_type = str(item.get("type", "") or Path(name).suffix.lower().lstrip(".") or "file").strip().lower()
-            key = (name, source_type)
-            if key in replace_keys or key in seen_files:
+            name = str(item.get("name", "") or "")
+            typ = str(item.get("type", "") or Path(name).suffix.lower().lstrip(".")).lower()
+            if (name, typ) in replaced_keys:
                 continue
-            seen_files.add(key)
-            # チャンク数は現在のchunksから再計算し、一覧と実データのズレを防ぐ。
-            clean_item = dict(item)
-            clean_item["name"] = name
-            clean_item["type"] = source_type
-            clean_item["chunk_count"] = _chunk_count_for(chunks, name, source_type)
-            kept_files.append(clean_item)
+            kept_files.append(item)
+        manifest_files = kept_files + saved_files
 
-        files = kept_files + saved_files
-        for item in files:
-            item["chunk_count"] = _chunk_count_for(chunks, item.get("name", ""), item.get("type", ""))
-
-        wiki_enabled = bool(existing_manifest.get("wiki_enabled"))
-        wiki_uploaded_at = str(existing_manifest.get("wiki_uploaded_at", "") or "")
-        wiki_uploaded_by = str(existing_manifest.get("wiki_uploaded_by", "") or "")
-        if replace_wiki:
-            wiki_enabled = True
-            wiki_uploaded_at = now
-            wiki_uploaded_by = uploaded_by
-        elif not any(str(c.get("source_type", "") or "").lower() == "wiki" or str(c.get("source_name", "") or "") == "wiki_input.txt" for c in chunks):
-            wiki_enabled = False
-            wiki_uploaded_at = ""
-            wiki_uploaded_by = ""
+        # ファイル別チャンク数をmanifestへ保存する。
+        for item in manifest_files:
+            item["chunk_count"] = _chunk_count_for(chunks, item["name"], item["type"])
 
         embeddings = None
         if SENTENCE_TRANSFORMERS_AVAILABLE:
@@ -551,10 +504,7 @@ def create_document_rag_runtime(
                     emb = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
                     embeddings = np.asarray(emb, dtype=np.float32)
             except Exception as exc:
-                try:
-                    st.warning(f"sentence-transformers での索引化に失敗したため通常検索に切り替えます: {exc}")
-                except Exception:
-                    pass
+                st.warning(f"sentence-transformers での索引化に失敗したため通常検索に切り替えます: {exc}")
                 embeddings = None
 
         _safe_write_json(DOC_RAG_CHUNKS_PATH, chunks)
@@ -564,22 +514,19 @@ def create_document_rag_runtime(
         elif DOC_RAG_EMBEDDINGS_PATH.exists():
             DOC_RAG_EMBEDDINGS_PATH.unlink()
 
+        wiki_still_enabled = bool(wiki_text) or any(
+            str(row.get("source_type", "") or "").lower() == "wiki" or str(row.get("source_name", "") or "") == "wiki_input.txt"
+            for row in chunks
+        )
         manifest = {
-            "enabled": bool(files or wiki_enabled or chunks),
-            "doc_count": len(files) + (1 if wiki_enabled else 0),
+            "enabled": True,
+            "doc_count": len(manifest_files) + (1 if wiki_still_enabled else 0),
             "chunk_count": len(chunks),
-            "files": files,
-            "wiki_enabled": wiki_enabled,
-            "wiki_uploaded_at": wiki_uploaded_at,
-            "wiki_uploaded_by": wiki_uploaded_by,
+            "files": manifest_files,
+            "wiki_enabled": wiki_still_enabled,
+            "wiki_uploaded_at": now if wiki_text else str(existing_manifest.get("wiki_uploaded_at", "") or ""),
+            "wiki_uploaded_by": uploaded_by if wiki_text else str(existing_manifest.get("wiki_uploaded_by", "") or ""),
             "updated_at": now,
-            "last_import": {
-                "uploaded_by": uploaded_by,
-                "uploaded_at": now,
-                "added_or_updated_files": [f.get("name", "") for f in saved_files],
-                "failed_files": failed_files,
-                "new_chunk_count": len(new_chunks),
-            },
         }
         _safe_write_json(DOC_RAG_MANIFEST_PATH, manifest)
         _persist_doc_paths(DOC_RAG_CHUNKS_PATH, DOC_RAG_MANIFEST_PATH)
@@ -590,11 +537,7 @@ def create_document_rag_runtime(
         for item in saved_files:
             _persist_doc_paths(Path(item["path"]))
 
-        action = "追加・更新しました"
-        message = f"{len(saved_files) + (1 if replace_wiki else 0)}件の資料を{action}。登録資料: {manifest['doc_count']}件 / 総チャンク数: {len(chunks)}"
-        if failed_files:
-            message += " / 取込失敗: " + ", ".join(failed_files[:5])
-        return {"ok": True, "message": message, "chunk_count": len(chunks), "manifest": manifest}
+        return {"ok": True, "message": f"{manifest['doc_count']}件の資料を取り込みました。", "chunk_count": len(chunks), "manifest": manifest}
 
     def _expand_document_search_query(query: str) -> str:
         """検索用に質問文を少しだけ展開する。
@@ -609,10 +552,16 @@ def create_document_rag_runtime(
         core = clean
         core = re.sub(r"(について|に関して|とは|ですか|ますか|でしょうか|どのように|どのような|どうなっていますか|どうなってますか|教えてください|教えて)", " ", core)
         additions: list[str] = []
+        if _detect_rag_intent(clean) == "explain":
+            additions.append("とは 概要 定義 目的 趣旨 説明 基本方針 適用範囲 意味")
+        if "36協定" in clean or "三六協定" in clean or "サブロク協定" in clean:
+            additions.append("36協定 三六協定 時間外労働 休日労働 労使協定 労働基準監督署 届出 残業 協定")
         if any(token in clean for token in ("入室", "入退室", "入室制限", "入室者")):
             additions.append("入退室管理 入室可能者 入室者 制限 管理台帳 監視カメラ セキュリティカード 持ち込む機器 管理区域")
+        if any(token in clean for token in ("パスワード", "password")):
+            additions.append("パスワード 個人ID 管理 ルール 要領 基準 文字数 7桁 数字 アルファベット 推測されやすい 個人に関連する情報 秘密")
         if any(token in clean for token in ("アカウント", "ID", "ログイン", "アクセス権")):
-            additions.append("アクセス制御 アカウント管理 発行 登録 削除 棚卸 権限")
+            additions.append("アクセス制御 アカウント管理 発行 登録 削除 棚卸 権限 個人ID パスワード")
         if any(token in clean for token in ("廃棄", "消去", "破棄")):
             additions.append("機密情報の消去 廃棄 データ消去 物理的に破壊 廃棄証明 産業廃棄物業者")
         if any(token in clean for token in ("不正アクセス", "復旧", "復旧手順", "復旧手続", "被害時", "リカバリ", "障害発生")):
@@ -669,6 +618,36 @@ def create_document_rag_runtime(
         except Exception:
             return []
 
+    def _is_customer_area_form_query(query: str) -> bool:
+        q = normalize_doc_text(query).lower()
+        q_compact = re.sub(r"[\s\u3000、。,.!！?？…・･~〜ー\-＿_（）()「」『』【】\[\]]+", "", q)
+        customer = ("顧客" in q or "お客様" in q or "客先" in q or "取引先" in q)
+        area = any(t in q for t in ("領域", "環境", "スペース", "テナント", "エリア", "指定システム", "顧客システム"))
+        action = any(t in q for t in ("作成", "作る", "利用", "申請", "申請書", "書式", "様式", "どれ", "どの"))
+        compact_hit = any(t in q_compact for t in ("顧客領域作成", "顧客環境作成", "顧客指定システム", "顧客システム利用"))
+        return bool((customer and area and action) or compact_hit)
+
+    def _expand_document_rag_query(query: str) -> str:
+        """自然文の言い換えを社内資料・申請書名に寄せる。
+
+        例: 「顧客の領域作成の申請書はどれですか？」
+        → 顧客指定システム利用申請 / システム作業申請書 / 書式3 も検索語に加える。
+        これにより、資料側の表現とユーザーの言い方が違っても拾いやすくする。
+        """
+        q = normalize_doc_text(query)
+        additions: list[str] = []
+        if _is_customer_area_form_query(q):
+            additions.append(
+                "顧客指定システム利用申請 顧客指定システム利用 顧客指定システム "
+                "顧客システム利用 顧客領域作成 顧客環境作成 顧客用領域 領域作成 環境作成 "
+                "システム作業申請書 書式3 書式3_システム作業申請書_責任者承認まで 申請書 書式 様式"
+            )
+        if any(t in q for t in ("申請書", "書式", "様式", "フォーム", "テンプレート", "どれですか", "どの申請書")):
+            additions.append("申請書 書式 様式 フォーム テンプレート ファイル名 資料名")
+        if not additions:
+            return q
+        return normalize_doc_text(q + " " + " ".join(additions))
+
     def search_document_rag(query: str, top_k: int = 5) -> list[dict[str, Any]]:
         query = normalize_doc_text(query)
         if not query:
@@ -679,24 +658,181 @@ def create_document_rag_runtime(
         chunks = load_document_chunks()
         if not chunks:
             return []
+        search_query = _expand_document_rag_query(query)
         # Excelは行単位の明示語一致が重要なため、TF-IDF結果を優先する。
         # PDF/Word等はsentence-transformersが使える場合のみ意味検索を優先する。
-        tfidf_hits = _search_with_tfidf(query, chunks, top_k=top_k)
-        embedding_hits = _search_with_embeddings(query, chunks, top_k=top_k)
-        if tfidf_hits and str(tfidf_hits[0].get("source_type", "") or "").lower() in {"xlsx", "xlsm"}:
-            return tfidf_hits
-        return embedding_hits or tfidf_hits
+        # 意図判定後に並べ替えられるよう、候補は少し多めに取得する。
+        # 以前はTF-IDFの1位がExcelの場合にExcelだけを優先していたため、
+        # 「マルウェア対策について教えて」のような説明要求でも
+        # チェックシートの○/×行が回答になっていた。
+        # ここではTF-IDFと意味検索の候補を統合し、後段の意図別rerankに渡す。
+        fetch_k = max(top_k * 3, 12)
+        tfidf_hits = _search_with_tfidf(search_query, chunks, top_k=fetch_k)
+        embedding_hits = _search_with_embeddings(search_query, chunks, top_k=fetch_k)
 
-    def _select_hits_for_answer(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for hit in list(tfidf_hits or []) + list(embedding_hits or []):
+            key = (
+                str(hit.get("source_name", "") or ""),
+                str(hit.get("location", "") or ""),
+                str(hit.get("chunk_label", "") or ""),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(hit)
+        return merged[:fetch_k] or tfidf_hits or embedding_hits
+
+    def _detect_rag_intent(user_q: str) -> str:
+        """質問の意図をざっくり分類する。
+
+        RAGで「一番近い文字列」をそのまま答えにすると、
+        例: 「36協定について教えて」に対して申請書の
+        「下記1から17の項目を記入してください」を返してしまう。
+        そのため、質問意図ごとに優先する根拠を変える。
+        """
+        q = normalize_doc_text(user_q)
+        if _is_customer_area_form_query(q) or any(t in q for t in ("どの申請書", "申請書はどれ", "申請書はどの", "どの書式", "書式はどれ", "様式はどれ", "様式", "テンプレート", "フォーマット", "書式", "用紙")):
+            return "form"
+        if any(t in q for t in ("とは", "意味", "概要", "説明", "教えて", "について", "どんなもの", "何ですか", "なにですか")):
+            return "explain"
+        if any(t in q for t in ("手順", "方法", "やり方", "申請", "提出", "登録", "入力", "記入", "どうすれば", "どうやって")):
+            return "procedure"
+        # 「パスワードのルールはありますか？」のような質問は、単純な可否ではなく
+        # 規程・基準・要件の説明を求めているため、ルール抽出として扱う。
+        if any(t in q for t in ("ルール", "規程", "規定", "基準", "要件", "決まり", "ポリシー", "取扱", "取り扱", "管理要領", "何桁", "文字数", "桁以上")):
+            return "rule"
+        if any(t in q for t in ("ありますか", "できますか", "されていますか", "していますか", "可能", "可否", "必要ですか")):
+            return "yes_no"
+        if any(t in q for t in ("期限", "いつまで", "期間", "何日", "何時間", "締切")):
+            return "deadline"
+        if any(t in q for t in ("誰", "担当", "責任者", "窓口", "部署")):
+            return "owner"
+        if any(t in q for t in ("様式", "テンプレート", "フォーマット", "書式", "用紙")):
+            return "form"
+        return "general"
+
+    def _looks_like_form_instruction(text: str) -> bool:
+        """説明回答としては不適切な、入力案内・申請書の指示文を検出する。"""
+        t = normalize_doc_text(text)
+        if not t:
+            return False
+        patterns = (
+            "下記", "以下の項目", "項目を記入", "記入してください", "入力してください",
+            "必要事項", "再作成を依頼", "申請してください", "提出してください",
+            "添付してください", "チェックしてください", "選択してください", "クリックしてください",
+        )
+        if any(p in t for p in patterns):
+            return True
+        if re.search(r"(1|１)\s*から\s*(17|１７)", t):
+            return True
+        return False
+
+    def _looks_like_definition_text(text: str) -> bool:
+        t = normalize_doc_text(text)
+        if not t:
+            return False
+        return any(p in t for p in (
+            "とは", "定義", "概要", "目的", "趣旨", "は、", "とは、", "をいう", "について",
+            "対象", "適用範囲", "基本方針", "目的とする",
+        ))
+
+    def _rag_hit_intent_score(user_q: str, hit: dict[str, Any]) -> float:
+        intent = _detect_rag_intent(user_q)
+        text = normalize_doc_text(str(hit.get("text", "") or ""))
+        location = normalize_doc_text(str(hit.get("location", "") or ""))
+        source_name = normalize_doc_text(str(hit.get("source_name", "") or ""))
+        source_type = str(hit.get("source_type", "") or "").lower()
+        base = float(hit.get("score", 0.0) or 0.0)
+        score = base
+
+        if intent == "explain":
+            if _looks_like_definition_text(text) or _looks_like_definition_text(location):
+                score += 0.18
+            # 規程・手順書・Word/PDFの本文は、説明要求ではExcelチェック表より優先しやすくする。
+            if source_type in {"docx", "doc", "pdf", "txt", "md"}:
+                score += 0.16
+            # Excelチェックシートの「○/×判定」は、ありますか系では有効だが、
+            # 「教えてください」「について」の説明要求では詳細説明として弱い。
+            if source_type in {"xlsx", "xlsm"}:
+                if any(p in text for p in ("○", "〇", "×", "講じていますか", "確認事項", "判定")):
+                    score -= 0.28
+            if any(p in text for p in ("申請", "届出", "様式", "フォーム", "チェックリスト")) and not _looks_like_definition_text(text):
+                score -= 0.08
+            if _looks_like_form_instruction(text):
+                score -= 0.25
+            if len(text) < 40:
+                score -= 0.05
+        elif intent == "procedure":
+            if any(p in text for p in ("手順", "方法", "申請", "提出", "記入", "入力", "届出", "流れ", "フォーム")):
+                score += 0.12
+        elif intent == "rule":
+            if any(p in text + location for p in ("第", "条", "規程", "規定", "ルール", "要領", "基準", "管理", "取り扱", "取扱", "設定", "してはならない", "しなければならない")):
+                score += 0.18
+            if any(p in text for p in ("7桁", "文字数", "数字", "アルファベット", "推測", "個人に関連", "他人に知られない", "非表示")):
+                score += 0.18
+            if _looks_like_form_instruction(text):
+                score -= 0.10
+        elif intent == "yes_no":
+            if any(p in text for p in ("○", "〇", "×", "可", "不可", "必要", "不要", "できます", "できません", "対応済", "未対応")):
+                score += 0.10
+        elif intent == "deadline":
+            if any(p in text for p in ("期限", "期間", "日以内", "日前", "時間", "締切", "まで")):
+                score += 0.14
+        elif intent == "owner":
+            if any(p in text for p in ("担当", "責任者", "部署", "部門", "窓口", "管理者")):
+                score += 0.14
+        elif intent == "form":
+            form_zone = text + source_name + location
+            if any(p in form_zone for p in ("様式", "テンプレート", "書式", "フォーム", "申請書", "届", "作業申請書")):
+                score += 0.22
+            if _is_customer_area_form_query(user_q):
+                if any(p in form_zone for p in ("顧客指定システム", "顧客システム", "顧客領域", "顧客環境", "領域作成", "環境作成")):
+                    score += 0.38
+                if any(p in form_zone for p in ("システム作業申請書", "書式3", "責任者承認")):
+                    score += 0.34
+                # Microsoft 365等の一般FAQ/一般資料へ流れないように弱める。
+                if any(p in form_zone.lower() for p in ("microsoft", "office 365", "teams", "outlook")) and not any(p in form_zone for p in ("顧客指定システム", "システム作業申請書")):
+                    score -= 0.35
+
+        return score
+
+    def _rerank_hits_by_intent(user_q: str, hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not hits:
             return []
-        top = hits[0]
+        intent = _detect_rag_intent(user_q)
+        # Excelチェックシートは「ありますか」「できていますか」の判定質問では強いが、
+        # 説明要求・規程確認ではWord/PDFの条文や本文を優先できるよう必ずrerankする。
+        ranked = []
+        for i, hit in enumerate(hits):
+            h = dict(hit)
+            h["intent_score"] = _rag_hit_intent_score(user_q, h)
+            h["original_rank"] = i
+            ranked.append(h)
+        ranked.sort(key=lambda x: (float(x.get("intent_score", 0.0)), -int(x.get("original_rank", 0))), reverse=True)
+        return ranked
+
+    def _select_hits_for_answer(hits: list[dict[str, Any]], user_q: str = "") -> list[dict[str, Any]]:
+        if not hits:
+            return []
+        ranked_hits = _rerank_hits_by_intent(user_q, hits) if user_q else hits
+        intent = _detect_rag_intent(user_q) if user_q else "general"
+
+        # 説明要求・規程確認では、Excelチェックシートの○/×行だけでなく、
+        # Word/PDFの条文・本文を候補に残す。
+        if intent in {"explain", "rule", "procedure"}:
+            non_excel = [h for h in ranked_hits if str(h.get("source_type", "") or "").lower() not in {"xlsx", "xlsm"}]
+            if non_excel:
+                return non_excel[:4]
+
+        top = ranked_hits[0]
         top_type = str(top.get("source_type", "") or "").lower()
         # Excelは1行が1つの答えになりやすい。複数行をLLMへ渡すと、
         # 近くの行（例: 廃棄行）まで混ざるため、最上位1行だけを使う。
         if top_type in {"xlsx", "xlsm"}:
             return [top]
-        return hits[:4]
+        return ranked_hits[:4]
 
     def _extract_labeled_line(text: str, label: str) -> str:
         pattern = re.compile(rf"(?m)^{re.escape(label)}\s*:\s*(.*?)(?=\n[^\n:：]{{1,30}}[:：]|\Z)", re.S)
@@ -1022,8 +1158,270 @@ def create_document_rag_runtime(
         lines.extend(["", "【参照元】", f"- {source_name} / {location}".strip()])
         return "\n".join(lines).strip()
 
+
+    def _query_content_tokens(user_q: str) -> list[str]:
+        q = normalize_doc_text(user_q)
+        # 一般的な質問語を除き、資料本文と照合しやすい語を残す。
+        stop = {
+            "について", "教えて", "ください", "下さい", "とは", "ですか", "ますか", "ありますか",
+            "ルール", "規程", "規定", "基準", "要件", "決まり", "ポリシー", "方法", "手順",
+            "どの", "よう", "どんな", "内容", "社内", "資料", "ください。",
+        }
+        tokens = re.findall(r"[0-9a-zA-Z一-龥ぁ-んァ-ン]{2,}", q)
+        return [t for t in tokens if t not in stop]
+
+    def _clean_policy_line(line: str) -> str:
+        line = normalize_doc_text(line)
+        line = re.sub(r"^(?:[0-9０-９]+[.．、)]?|[①-⑳]|\([0-9０-９]+\))\s*", "", line).strip()
+        return line
+
+    def _try_format_policy_rule_answer(user_q: str, hits: list[dict[str, Any]]) -> str:
+        """規程・手順書の『ルール/基準/要件』質問は、LLM任せにせず根拠行を抽出する。
+
+        例: 「パスワードのルールはありますか？」では、FAQの再設定手順ではなく、
+        Word規程の『第10条 個人IDとパスワードの管理』にある
+        7桁以上・英数字組み合わせ等を直接回答に出す。
+        """
+        if not hits:
+            return ""
+        intent = _detect_rag_intent(user_q)
+        if intent not in {"rule", "explain", "yes_no"}:
+            return ""
+        q = normalize_doc_text(user_q)
+        q_tokens = _query_content_tokens(q)
+        top = hits[0]
+        source_type = str(top.get("source_type", "") or "").lower()
+        if source_type in {"xlsx", "xlsm"}:
+            return ""
+        text = normalize_doc_text(str(top.get("text", "") or ""))
+        if not text:
+            return ""
+
+        # ルール質問では、質問の主要語が本文/見出しにある場合だけ抽出回答にする。
+        hay = normalize_doc_text(" ".join([str(top.get("source_name", "")), str(top.get("location", "")), text]))
+        if q_tokens and not any(t in hay for t in q_tokens):
+            return ""
+
+        password_rule = any(t in q for t in ("パスワード", "password")) and any(t in q for t in ("ルール", "規程", "規定", "基準", "要件", "何桁", "文字数", "管理", "取扱", "取り扱"))
+
+        lines = [ln.strip() for ln in text.split("\n") if normalize_doc_text(ln)]
+        # 見出しは第◯条などを優先。
+        heading = str(top.get("location", "") or "").strip()
+        for ln in lines[:4]:
+            if re.match(r"^第\s*[0-9０-９]+\s*条", ln):
+                heading = ln
+                break
+
+        selected: list[str] = []
+        if password_rule:
+            capture = False
+            for ln in lines:
+                c = _clean_policy_line(ln)
+                if not c:
+                    continue
+                if "パスワード" in c and any(k in c for k in ("取り扱", "要領", "管理", "設定", "運営")):
+                    capture = True
+                    continue
+                if capture:
+                    # 次条に入ったら終了
+                    if re.match(r"^第\s*[0-9０-９]+\s*条", c):
+                        break
+                    if any(k in c for k in ("7桁", "文字数", "数字", "アルファベット", "個人に関連", "推測", "各個人", "他人", "非表示")):
+                        selected.append(c)
+                elif any(k in c for k in ("7桁", "文字数", "数字", "アルファベット", "個人に関連", "推測", "各個人", "他人", "非表示")):
+                    selected.append(c)
+        else:
+            for ln in lines:
+                c = _clean_policy_line(ln)
+                if not c or _looks_like_form_instruction(c):
+                    continue
+                if any(t in c for t in q_tokens) or any(k in c for k in ("しなければならない", "してはならない", "講じる", "設定する", "管理する", "承認")):
+                    selected.append(c)
+
+        # 重複除去・多すぎる場合は上位だけ
+        unique: list[str] = []
+        for item in selected:
+            if item and item not in unique:
+                unique.append(item)
+        unique = unique[:8]
+        if not unique:
+            return ""
+
+        if password_rule:
+            intro = "はい、社内資料にパスワードのルールが記載されています。"
+        elif _is_yes_no_question(user_q):
+            intro = "はい、社内資料に関連する記載があります。"
+        else:
+            intro = "社内資料の該当箇所は以下です。"
+
+        bullet_text = "\n".join(f"- {x}" for x in unique)
+        refs = f"- {top.get('source_name', '')} / {top.get('location', '')}".strip()
+        parts = [intro, "", "【回答】", bullet_text]
+        if heading:
+            parts.extend(["", "【該当箇所】", heading])
+        parts.extend(["", "参照資料:", refs])
+        return "\n".join(parts).strip()
+
+    def _clean_application_form_name(name: str) -> str:
+        """申請書名候補をユーザーに見せやすい形へ整える。
+
+        Excelのセルには //svfl.../【試運転中】 システム作業申請書_責任者承認まで.xlsx
+        のようなフルパスが入ることがある。回答ではファイル名だけを見せる。
+        """
+        n = normalize_doc_text(name)
+        if not n:
+            return ""
+        n = n.replace("\\", "/")
+        # パスを含む場合は末尾のファイル名だけ残す。
+        if "/" in n:
+            n = n.split("/")[-1]
+        n = re.sub(r"^[・\-\s]+", "", n).strip()
+        # 行テキストや列名の混入を除去。
+        n = re.sub(r"^(?:資料名|元データ|回答|該当項目|補足|根拠)\s*[:：]\s*", "", n).strip()
+        n = re.sub(r"^row\s*\d+\s*[:：]\s*", "", n, flags=re.I).strip()
+        # 申請書ファイル名の後ろに説明文が続く場合は拡張子までで止める。
+        m = re.search(r"([^\s、。/]+(?:システム作業申請書|申請書|書式)[^\s、。/]*?\.(?:xlsx|xlsm|xls|docx|doc|pdf))", n, flags=re.I)
+        if m:
+            n = m.group(1)
+        return n.strip(" /、。")
+
+    def _is_reference_form_catalog_name(name: str) -> bool:
+        """申請書そのものではなく、申請書の説明資料・一覧表らしい名前を判定する。
+
+        例: 「書式別システム作業申請書の説明.xlsx」は参照資料であり、
+        ユーザーへ「使用する申請書」として出してはいけない。
+        """
+        n = normalize_doc_text(name).lower()
+        if not n:
+            return False
+        if any(k in n for k in ("説明", "一覧", "対応表", "リスト", "台帳", "項目一覧", "マスタ", "早見表")):
+            # ただし、実際の申請書ファイル名に近いものは除外しない。
+            if "責任者承認" in n or "申請書_" in n or "申請書-" in n:
+                return False
+            return True
+        return False
+
+    def _extract_form_names_from_text(text: str, *, include_reference_materials: bool = False) -> list[str]:
+        clean = normalize_doc_text(text)
+        found: list[str] = []
+
+        def _append_candidate(raw: str) -> None:
+            name = _clean_application_form_name(raw)
+            if not (3 <= len(name) <= 120):
+                return
+            if not include_reference_materials and _is_reference_form_catalog_name(name):
+                return
+            if name not in found:
+                found.append(name)
+
+        # まずファイル名らしい候補を優先して拾う。
+        file_patterns = [
+            r"[^\\/\s、。\n\r]*システム作業申請書[^\\/\s、。\n\r]*\.(?:xlsx|xlsm|xls|docx|doc|pdf)",
+            r"[^\\/\s、。\n\r]*申請書[^\\/\s、。\n\r]*\.(?:xlsx|xlsm|xls|docx|doc|pdf)",
+            r"[^\\/\s、。\n\r]*書式[^\\/\s、。\n\r]*\.(?:xlsx|xlsm|xls|docx|doc|pdf)",
+        ]
+        for pat in file_patterns:
+            for m in re.finditer(pat, clean, flags=re.I):
+                _append_candidate(m.group(0))
+
+        # 次に申請名・書式名の候補を拾う。
+        patterns = [
+            r"書式\s*[0-9０-９A-Za-z_-]*[^\n\r、。]{0,80}?(?:申請書|承認|届|様式)[^\n\r、。]{0,80}?(?:\.xlsx|\.xlsm|\.xls|\.docx|\.doc|\.pdf)?",
+            r"[^\n\r、。\s]{0,40}?(?:システム作業申請書|顧客指定システム利用申請|顧客指定システム利用|申請書|書式)[^\n\r、。\s]{0,80}?(?:\.xlsx|\.xlsm|\.xls|\.docx|\.doc|\.pdf)?",
+        ]
+        for pat in patterns:
+            for m in re.finditer(pat, clean):
+                _append_candidate(m.group(0))
+        return found[:5]
+
+    def _try_format_application_form_answer(user_q: str, hits: list[dict[str, Any]]) -> str:
+        """申請書・書式探しは、本文要約より『どの申請書か』を先に答える。"""
+        if not hits:
+            return ""
+        if _detect_rag_intent(user_q) != "form":
+            return ""
+        answer_hits = _rerank_hits_by_intent(user_q, hits)
+        top = answer_hits[0]
+        # 回答候補の抽出では、参照資料名（例: 「書式別...説明.xlsx」）を
+        # 「使用する申請書」と誤認しないよう、まず本文・行データだけを見る。
+        combined_body = "\n".join(
+            " ".join([
+                str(h.get("chunk_label", "") or ""),
+                str(h.get("text", "") or ""),
+            ])
+            for h in answer_hits[:4]
+        )
+        combined_refs = "\n".join(
+            " ".join([
+                str(h.get("source_name", "") or ""),
+                str(h.get("location", "") or ""),
+            ])
+            for h in answer_hits[:4]
+        )
+        combined = combined_body + "\n" + combined_refs
+        names = _extract_form_names_from_text(combined_body)
+        # 本文側にファイル名が無い場合のみ、参照資料名も補助的に見る。
+        # ただし「説明.xlsx」「一覧.xlsx」等は _extract_form_names_from_text 側で除外する。
+        if not names:
+            names = _extract_form_names_from_text(combined_refs)
+        is_customer_area = _is_customer_area_form_query(user_q)
+
+        # 顧客領域/顧客環境の作成は、資料上の表現が「顧客指定システム利用申請」に寄りやすい。
+        likely_application = ""
+        if is_customer_area:
+            if "顧客指定システム利用申請" in combined:
+                likely_application = "顧客指定システム利用申請"
+            elif "顧客指定システム利用" in combined or "顧客指定システム" in combined:
+                likely_application = "顧客指定システム利用申請"
+
+        preferred_file = ""
+        real_names = [n for n in names if not _is_reference_form_catalog_name(n)]
+        for n in real_names:
+            if "システム作業申請書" in n or "書式3" in n or "責任者承認" in n:
+                preferred_file = n
+                break
+        if not preferred_file and real_names:
+            preferred_file = real_names[0]
+
+        # 顧客領域/顧客環境作成は「顧客指定システム利用申請」＋
+        # 「システム作業申請書」へ寄せる。参照資料名しか拾えない場合でも、
+        # 「説明.xlsx」を使用申請書として出さず、実際に使う書式名を回答する。
+        if is_customer_area and not preferred_file and likely_application:
+            if "書式3" in combined or "3_" in combined:
+                preferred_file = "書式3_システム作業申請書_責任者承認まで.xlsx"
+            else:
+                preferred_file = "システム作業申請書_責任者承認まで.xlsx"
+
+        if not likely_application and not preferred_file and not names:
+            return ""
+
+        lines = ["社内資料から該当する申請書・書式が見つかりました。", "", "【回答】"]
+        if likely_application:
+            
+            # 申請書名まで特定できている場合は、ユーザー向けには弱い表現にせず
+            # 「該当します」と明確に回答する。
+            # ただし、申請書名が取れていない場合だけ安全側で「可能性が高い」を使う。
+            if preferred_file:
+                lines.append(f"顧客の領域作成は「{likely_application}」に該当します。")
+            else:
+                lines.append(f"顧客の領域作成は、資料上では「{likely_application}」に該当する可能性が高いです。")
+        if preferred_file:
+            lines.append(f"使用する申請書は「{preferred_file}」です。")
+        elif real_names:
+            lines.append("関連する申請書・書式候補は以下です。")
+            lines.extend(f"- {n}" for n in real_names)
+        if is_customer_area:
+            lines.extend(["", "【補足】", "「顧客領域作成」「顧客環境作成」「顧客指定システム利用」「顧客システム利用」は、同じ申請に寄せて検索しています。"])
+        refs = "\n".join(
+            f"- {h.get('source_name', '')} / {h.get('location', '')}".strip()
+            for h in answer_hits[:3]
+        )
+        lines.extend(["", "参照資料:", refs])
+        return "\n".join(lines).strip()
+
+
     def build_document_rag_prompt(user_q: str, hits: list[dict[str, Any]]) -> str:
-        answer_hits = _select_hits_for_answer(hits)
+        answer_hits = _select_hits_for_answer(hits, user_q)
         contexts: list[str] = []
         for i, hit in enumerate(answer_hits, start=1):
             contexts.append(
@@ -1041,20 +1439,57 @@ def create_document_rag_runtime(
             "根拠に書かれていないことは断定しないでください。"
             "複数の根拠がある場合でも、質問に最も近い根拠1を最優先し、別項目の内容を混ぜないでください。"
             "Excel資料の場合は、提示されたExcel行だけを回答根拠にしてください。"
+            "『〇〇について教えて』『〇〇とは』のような説明要求では、定義・概要・目的を優先し、申請書の入力案内だけを回答本文にしないでください。"
+            "『下記を記入してください』『以下の項目を入力してください』などは、質問が入力方法を尋ねている場合を除き、関連資料の案内として扱ってください。"
+            "資料内に定義や概要が見つからない場合は、無理に説明を作らず『詳しい説明は見つかりませんでした。ただし関連する記入案内があります』と明示してください。"
             "回答の最後に '参照資料:' を付けて、資料名と場所を箇条書きで並べてください。\n\n"
             f"[質問]\n{user_q}\n\n"
             f"[社内資料]\n{context_text}"
         )
 
     def answer_with_document_rag(user_q: str, hits: list[dict[str, Any]]) -> str:
-        answer_hits = _select_hits_for_answer(hits)
+        answer_hits = _select_hits_for_answer(hits, user_q)
         top = answer_hits[0] if answer_hits else {}
         top_type = str(top.get("source_type", "") or "").lower()
 
+        # 申請書・書式探しの質問では、Excelの○/×判定よりも
+        # 「どの申請書・書式を使うか」を最優先にする。
+        # 例: 「顧客の領域作成の申請書はどれですか？」では、
+        # row上の判定「○」ではなく「顧客指定システム利用申請」や
+        # 「システム作業申請書_責任者承認まで.xlsx」を回答する。
+        if _detect_rag_intent(user_q) == "form":
+            form_answer = _try_format_application_form_answer(user_q, hits or answer_hits)
+            if form_answer:
+                return form_answer
+
+        # 規程・マニュアルの説明要求では、Excelの○/×判定よりも
+        # Word/PDF本文から条文・箇条書きを抽出した回答を優先する。
+        policy_answer = _try_format_policy_rule_answer(user_q, answer_hits)
+        if policy_answer:
+            return policy_answer
+
         # Excelチェックシートは、LLMに複数行を渡すよりも、
         # 最上位1行から決定的に整形した方が混入事故が起きにくい。
+        # ただし上の form / policy 分岐に該当しない場合だけ判定優先にする。
         if top_type in {"xlsx", "xlsm"}:
             return _format_excel_row_answer(user_q, top)
+
+        intent = _detect_rag_intent(user_q)
+        top_text = normalize_doc_text(str(top.get("text", "") or ""))
+        # 説明要求に対して、申請書の入力案内しかヒットしていない場合は、
+        # その案内文を「説明」として断定しない。
+        if intent == "explain" and _looks_like_form_instruction(top_text) and not _looks_like_definition_text(top_text):
+            refs = "\n".join(
+                f"- {x.get('source_name', '')} / {x.get('location', '')}".strip()
+                for x in answer_hits[:3]
+            )
+            excerpt = top_text[:220].rstrip() + ("…" if len(top_text) > 220 else "")
+            return (
+                "社内資料内には、この用語の詳しい定義・概要説明は見つかりませんでした。\n\n"
+                "ただし、関連する申請・記入案内として以下の記載が見つかりました。\n\n"
+                f"【関連記載】\n{excerpt}\n\n"
+                f"参照資料:\n{refs}"
+            ).strip()
 
         prompt = build_document_rag_prompt(user_q, answer_hits)
         try:

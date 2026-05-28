@@ -72,7 +72,7 @@ def create_search_runtime(
             "起案書", "念書", "承諾書", "管理簿", "アクセスログ", "ログ確認管理簿",
             "テレワーク", "テレワーク勤務", "テレワーク機器受領書",
             "情報システム責任者", "情報システム権限者", "受諾書",
-            "セキュリティチェックシート", "顧客指定システム",
+            "セキュリティチェックシート", "顧客指定システム", "顧客指定システム利用", "顧客領域作成", "顧客環境作成", "領域作成", "環境作成",
             "マイナンバー室", "サーバルーム", "サイトアクセス許可",
         ]
         for phrase in split_hints:
@@ -127,7 +127,9 @@ def create_search_runtime(
         "アクセスログ", "ログ確認管理簿",
         "テレワーク勤務許可申請書", "テレワーク機器受領書", "テレワーク",
         "情報システム責任者", "情報システム権限者", "受諾書",
-        "セキュリティチェックシート", "顧客指定システム",
+        "セキュリティチェックシート", "顧客指定システム", "顧客指定システム利用",
+        "顧客領域作成", "顧客環境作成", "顧客用領域", "顧客システム利用", "領域作成", "環境作成",
+        "システム作業申請書", "書式3",
         "マイナンバー室", "サーバルーム", "アプリインストール",
         "機器貸与", "tel", "回線", "回線機器",
     ]
@@ -147,7 +149,7 @@ def create_search_runtime(
         "回線機器": ["回線", "回線機器", "ネットワーク機器", "ルーター", "スイッチ"],
         "pc設置": ["pc/tel", "pc設置", "pc移動", "pc撤去", "電話", "電話機", "tel"],
         "セキュリティチェックシート": ["セキュリティチェックシート", "チェックシート"],
-        "顧客指定システム": ["顧客指定システム", "顧客システム", "指定システム"],
+        "顧客指定システム": ["顧客指定システム", "顧客指定システム利用", "顧客指定システム利用申請", "顧客システム", "指定システム", "顧客領域作成", "顧客環境作成", "顧客用領域", "顧客用環境", "顧客の領域", "顧客の環境", "領域作成", "環境作成", "顧客システム利用", "システム作業申請書", "書式3"],
         "情報システム責任者": ["情報システム責任者", "責任者指名"],
         "情報システム権限者": ["情報システム権限者", "権限者指名", "受諾書"],
         "アクセスログ": ["アクセスログ", "ログ確認管理簿", "ログ台帳"],
@@ -212,6 +214,33 @@ def create_search_runtime(
             if any(alias and alias in s for alias in aliases_norm):
                 found.add(canonical_norm)
         return found
+
+    def _is_customer_area_form_query_norm(text: str) -> bool:
+        s = normalize_search_text(text)
+        compact = re.sub(r"\s+", "", s)
+        if not s:
+            return False
+        customer = any(t in s for t in ("顧客", "お客様", "客先", "取引先"))
+        area = any(t in s for t in ("領域", "環境", "スペース", "テナント", "エリア", "指定システム", "顧客システム"))
+        action = any(t in s for t in ("作成", "作る", "利用", "申請", "申請書", "書式", "様式"))
+        compact_hit = any(t in compact for t in ("顧客領域作成", "顧客環境作成", "顧客指定システム", "顧客システム利用"))
+        return bool((customer and area and action) or compact_hit)
+
+    def _expand_application_form_query_norm(query_norm: str) -> str:
+        """申請書・書式探しの言い換えをFAQ検索語に追加する。"""
+        s = normalize_search_text(query_norm)
+        additions: list[str] = []
+        if _is_customer_area_form_query_norm(s):
+            additions.append(
+                "顧客指定システム 顧客指定システム利用 顧客指定システム利用申請 "
+                "顧客システム 顧客システム利用 顧客領域作成 顧客環境作成 顧客用領域 領域作成 環境作成 "
+                "システム作業申請書 書式3 申請書 書式 様式"
+            )
+        if any(t in s for t in ("申請書", "書式", "様式", "テンプレート")):
+            additions.append("申請書 書式 様式 テンプレート フォーム")
+        if additions:
+            return normalize_search_text(s + " " + " ".join(additions))
+        return s
 
 
     # FAQ精度改善 2026-05:
@@ -965,6 +994,7 @@ def create_search_runtime(
             return []
         try:
             query_norm = normalize_search_text(query)
+            query_norm = _expand_application_form_query_norm(query_norm)
             if not query_norm:
                 return []
 
@@ -1032,7 +1062,19 @@ def create_search_runtime(
                 if "application_form" in q_tmp_concepts:
                     for j, row in local_df.iterrows():
                         row_text = str(row.get("search_text_norm", ""))
-                        if any(w in row_text for w in ["申請書", "書式", "申請方法"]):
+                        if any(w in row_text for w in ["申請書", "書式", "申請方法", "様式", "システム作業申請書"]):
+                            candidate_idxs.add(int(j))
+                if _is_customer_area_form_query_norm(query_norm):
+                    for j, row in local_df.iterrows():
+                        row_text = " ".join([
+                            str(row.get("question_norm", "")),
+                            str(row.get("intent_norm", "")),
+                            str(row.get("keywords_norm", "")),
+                            str(row.get("category_norm", "")),
+                            str(row.get("answer_norm", "")),
+                            str(row.get("search_text_norm", "")),
+                        ])
+                        if any(w in row_text for w in ["顧客指定システム", "顧客システム", "顧客領域", "顧客環境", "領域作成", "環境作成", "システム作業申請書", "書式3"]):
                             candidate_idxs.add(int(j))
                 if "system_introduction" in q_tmp_concepts:
                     for j, row in local_df.iterrows():
@@ -1100,8 +1142,13 @@ def create_search_runtime(
                 # 申請書・書式系は、一般的な自然文だとTF-IDFだけでは低スコアになりやすい。
                 # 業務語（システム導入＋申請書）を明示的に後押しする。
                 try:
-                    if any(k in query_norm for k in ["申請書", "書式"]) and any(k in stxt for k in ["申請書", "書式"]):
+                    if any(k in query_norm for k in ["申請書", "書式", "様式"]) and any(k in stxt for k in ["申請書", "書式", "様式", "システム作業申請書"]):
                         sims[i] += float(search_cfg.get("application_form_bonus", 0.24))
+                    if _is_customer_area_form_query_norm(query_norm):
+                        if any(k in stxt for k in ["顧客指定システム", "顧客システム", "顧客領域", "顧客環境", "領域作成", "環境作成"]):
+                            sims[i] += float(search_cfg.get("customer_area_form_bonus", 0.48))
+                        if any(k in stxt for k in ["システム作業申請書", "書式3", "責任者承認"]):
+                            sims[i] += float(search_cfg.get("customer_area_form_file_bonus", 0.36))
                     if "システム導入" in query_norm and "システム導入" in stxt:
                         sims[i] += float(search_cfg.get("system_intro_bonus", 0.34))
                     if "system_introduction" in q_concepts and "system_introduction" in row_concepts:
