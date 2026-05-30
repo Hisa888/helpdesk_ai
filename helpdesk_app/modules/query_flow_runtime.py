@@ -71,6 +71,33 @@ def _non_inquiry_response(kind: str) -> str:
     return "承知しました。続けて確認したい内容があれば入力してください。"
 
 
+
+
+def _compact_match_text(text: str) -> str:
+    t = unicodedata.normalize("NFKC", str(text or "")).lower()
+    return re.sub(r"[\s\u3000、。,.!！?？…・･~〜ー\-＿_（）()「」『』【】\[\]\/\\]+", "", t)
+
+
+def _find_exact_faq_hit(user_q: str, local_df) -> tuple | None:
+    """FAQ質問文の完全一致を最優先で採用する。
+
+    RAGやLLMより先に、FAQの質問そのものと一致する行を返す。
+    これにより、登録済みFAQがあるのに似たRAG候補へ流れる事故を防ぐ。
+    """
+    if local_df is None:
+        return None
+    q_compact = _compact_match_text(user_q)
+    if not q_compact:
+        return None
+    try:
+        for _, row in local_df.iterrows():
+            row_q = str(row.get("question", "") or "")
+            if _compact_match_text(row_q) == q_compact:
+                return row, 1.0
+    except Exception:
+        return None
+    return None
+
 def _is_business_document_priority_query(user_q: str) -> bool:
     """FAQより社内ドキュメントRAGを優先すべき業務資料系の質問を判定する。
 
@@ -90,6 +117,12 @@ def _is_business_document_priority_query(user_q: str) -> bool:
     password_rule_terms = ("ルール", "規程", "規定", "基準", "要件", "何桁", "文字数", "桁以上", "管理", "要領", "取り扱", "取扱", "決まり", "ポリシー")
     password_operation_terms = ("忘れ", "期限切れ", "再設定", "リセット", "再発行", "ロック", "解除", "表示名", "削除")
     if any(t in q for t in password_terms) and any(t in q for t in password_rule_terms) and not any(t in q for t in password_operation_terms):
+        return True
+
+    # 条番号指定・役割/責務質問は、FAQではなく社内資料の条文構造を優先する。
+    if re.search(r"第\s*[0-9０-９]+\s*条", q):
+        return True
+    if any(t in q for t in ("どのようなこと", "何を行", "なにを行", "役割", "職務", "責務", "権限", "任務")):
         return True
 
     # 社内規程・労務・法務・制度・申請書系はRAG優先。
@@ -206,6 +239,37 @@ def process_user_query(
             "non_inquiry_kind": non_inquiry_kind,
         }
 
+    # 1. FAQ完全一致: RAG/LLMより先に採用する。
+    try:
+        local_df_for_exact, *_ = ensure_faq_index_loaded()
+        exact_faq_hit = _find_exact_faq_hit(user_q, local_df_for_exact)
+    except Exception:
+        exact_faq_hit = None
+    if exact_faq_hit is not None:
+        row, exact_score = exact_faq_hit
+        try:
+            render_match_bar(float(exact_score), label="FAQ完全一致（採用）")
+        except Exception:
+            pass
+        faq_answer = str(row.get("answer", "") or "").strip()
+        answer_format = get_row_answer_format(row)
+        log_interaction(user_q, matched=True, best_score=1.0, category=str(row.get("category", "") or ""))
+        return {
+            "answer": faq_answer or "FAQに一致しましたが、回答本文が空です。",
+            "best_score": 1.0,
+            "answer_threshold": float(current_search_threshold()),
+            "suggest_threshold": float(current_suggest_threshold()),
+            "used_hits": [(row, 1.0)],
+            "doc_hits": [],
+            "used_doc_rag": False,
+            "doc_best_score": 0.0,
+            "was_nohit": False,
+            "was_suggest": False,
+            "was_clarification": False,
+            "answer_format": answer_format,
+            "suggestion_candidates": [],
+        }
+
     ultrafast = try_ultrafast_answer(user_q)
     if ultrafast:
         hits = ultrafast.get("hits", [])
@@ -292,7 +356,7 @@ def process_user_query(
         if not callable(search_document_rag):
             return [], 0.0
         try:
-            lazy_hits = search_document_rag(user_q, top_k=5) or []
+            lazy_hits = search_document_rag(user_q, top_k=20) or []
             lazy_score = float(lazy_hits[0].get("score", 0.0)) if lazy_hits else 0.0
             return lazy_hits, lazy_score
         except Exception:

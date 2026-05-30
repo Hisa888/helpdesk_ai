@@ -103,7 +103,8 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
 
     def default_llm_settings() -> dict:
         return {
-            "provider": "groq",
+            "provider": "gemini",
+            "gemini_model": "gemini-2.5-flash-lite",
             "groq_model": "llama-3.1-8b-instant",
             "ollama_model": "qwen2.5:7b",
             "ollama_base_url": "http://localhost:11434",
@@ -113,10 +114,11 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
         base = default_llm_settings()
         src = data or {}
         provider = str(src.get("provider", base["provider"])).strip().lower()
-        if provider not in ("groq", "ollama"):
+        if provider not in ("gemini", "groq", "ollama"):
             provider = base["provider"]
         return {
             "provider": provider,
+            "gemini_model": str(src.get("gemini_model", base["gemini_model"])).strip() or base["gemini_model"],
             "groq_model": str(src.get("groq_model", base["groq_model"])).strip() or base["groq_model"],
             "ollama_model": str(src.get("ollama_model", base["ollama_model"])).strip() or base["ollama_model"],
             "ollama_base_url": str(src.get("ollama_base_url", base["ollama_base_url"])).strip() or base["ollama_base_url"],
@@ -367,11 +369,42 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
         return sanitize_llm_settings(base if isinstance(base, dict) else {})
 
     def current_llm_provider() -> str:
-        return current_llm_settings().get("provider", "groq")
+        return current_llm_settings().get("provider", "gemini")
 
     def save_llm_settings(settings: dict) -> tuple[bool, dict]:
         clean = sanitize_llm_settings(settings)
         return save_json_settings(LLM_SETTINGS_PATH, clean, "llm_settings")
+
+    def _llm_message_text(messages) -> str:
+        parts: list[str] = []
+        for msg in messages or []:
+            if not isinstance(msg, dict):
+                continue
+            role = str(msg.get("role", "user"))
+            content = str(msg.get("content", ""))
+            if content.strip():
+                parts.append(f"[{role}]\n{content}")
+        return "\n\n".join(parts).strip()
+
+    def _gemini_chat(messages, model: str) -> str:
+        api_key = _get_setting("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY が未設定です")
+        model_name = str(model or "gemini-2.5-flash-lite").strip() or "gemini-2.5-flash-lite"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": _llm_message_text(messages)}]}],
+            "generationConfig": {"temperature": 0.1, "topP": 0.8, "maxOutputTokens": 1024},
+        }
+        resp = requests.post(url, json=payload, timeout=(5, 60))
+        resp.raise_for_status()
+        data = resp.json()
+        candidates = data.get("candidates") or []
+        if not candidates:
+            return ""
+        content = candidates[0].get("content") or {}
+        parts = content.get("parts") or []
+        return "".join(str(part.get("text", "")) for part in parts if isinstance(part, dict)).strip()
 
     def _ollama_chat(messages, model: str, base_url: str) -> str:
         url = str(base_url or "http://localhost:11434").rstrip("/") + "/api/chat"
@@ -389,12 +422,19 @@ def create_runtime_context(st, requests, base_llm_chat, root_dir: Path | str = "
 
     def llm_chat(messages):
         cfg = current_llm_settings()
-        provider = cfg.get("provider", "groq")
+        provider = str(cfg.get("provider", "gemini")).strip().lower() or "gemini"
+        if provider == "gemini":
+            try:
+                return _gemini_chat(messages=messages, model=cfg.get("gemini_model", "gemini-2.5-flash-lite"))
+            except Exception as e:
+                st.warning(f"Gemini接続に失敗したため、既存LLMに切り替えます: {e}")
+                return base_llm_chat(messages)
         if provider == "ollama":
             try:
                 return _ollama_chat(messages=messages, model=cfg.get("ollama_model", "qwen2.5:7b"), base_url=cfg.get("ollama_base_url", "http://localhost:11434"))
             except Exception as e:
-                st.warning(f"Ollama接続に失敗したためGroqに切り替えます: {e}")
+                st.warning(f"Ollama接続に失敗したため、既存LLMに切り替えます: {e}")
+                return base_llm_chat(messages)
         return base_llm_chat(messages)
 
     DEFAULT_SEARCH_THRESHOLD = 0.42

@@ -130,8 +130,42 @@ def extract_pdf_sections(file_bytes: bytes, filename: str) -> list[dict[str, str
             "location": f"page {idx}",
             "text": text,
         })
+    combined_for_articles = normalize_doc_text("\n".join(str(r.get("text", "")) for r in results))
+    article_sections = _split_text_by_articles(combined_for_articles, filename, "pdf")
+    if len(article_sections) >= 2:
+        return article_sections
     return results
 
+
+
+def _split_text_by_articles(text: str, filename: str, source_type: str) -> list[dict[str, str]]:
+    """規程・規約・マニュアルを「第◯条」単位に分割する汎用処理。
+
+    PDF/Word/TXT の通常チャンク分割だけでは、質問が「第13条」や
+    「取締役は何を行うか」のような場合に、近くの別条文や目次が混ざりやすい。
+    条文構造がある文書は条文単位を最小回答単位にする。
+    """
+    clean = normalize_doc_text(text)
+    if not clean:
+        return []
+    pattern = re.compile(r"(?ms)(^第\s*[0-9０-９]+\s*条[^\n]*\n.*?)(?=^第\s*[0-9０-９]+\s*条|\Z)")
+    results: list[dict[str, str]] = []
+    for m in pattern.finditer(clean):
+        block = normalize_doc_text(m.group(1))
+        if len(block) < 35:
+            continue
+        first_line = block.split("\n", 1)[0].strip()[:120] or "article"
+        if "目次" in block[:100] and len(block) < 220:
+            continue
+        results.append({
+            "source_name": filename,
+            "source_type": source_type,
+            "location": first_line,
+            "chunk_label": "article",
+            "text": block,
+            "no_split": True,
+        })
+    return results
 
 def _iter_docx_table_text(doc: Document) -> list[str]:
     blocks: list[str] = []
@@ -175,7 +209,9 @@ def _split_docx_text_by_articles(text: str, filename: str) -> list[dict[str, str
             "source_name": filename,
             "source_type": "docx",
             "location": first_line,
+            "chunk_label": "article",
             "text": block,
+            "no_split": True,
         })
     return results
 
@@ -468,6 +504,9 @@ def extract_text_sections(file_bytes: bytes, filename: str, source_type: str) ->
     text = normalize_doc_text(_decode_text_bytes(file_bytes))
     if not text:
         return []
+    article_sections = _split_text_by_articles(text, filename, source_type)
+    if len(article_sections) >= 2:
+        return article_sections
     return [{
         "source_name": filename,
         "source_type": source_type,

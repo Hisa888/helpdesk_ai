@@ -12,4 +12,3 @@ openpyxl>=3.1
 pypdf
 python-docx
 numpy
-google-genai>=1.0.0

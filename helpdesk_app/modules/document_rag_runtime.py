@@ -5,6 +5,7 @@ import json
 import pickle
 import re
 import shutil
+import unicodedata
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -627,6 +628,200 @@ def create_document_rag_runtime(
         compact_hit = any(t in q_compact for t in ("顧客領域作成", "顧客環境作成", "顧客指定システム", "顧客システム利用"))
         return bool((customer and area and action) or compact_hit)
 
+
+    def _compact_for_match(text: str) -> str:
+        """資料名・質問文の比較用に空白/記号を落とす。"""
+        t = normalize_doc_text(text).lower()
+        return re.sub(r"[\s\u3000、。,.!！?？…・･~〜ー\-＿_（）()「」『』【】\[\]\\/]+", "", t)
+
+    def _extract_requested_document_keywords(user_q: str) -> list[str]:
+        """質問に含まれる文書名らしい語を抽出する。
+
+        固定の文言ではなく、「○○規程」「○○規定」「○○規則」「○○マニュアル」
+        「○○申請書」などの構造から取得する。
+        """
+        q = normalize_doc_text(user_q)
+        found: list[str] = []
+        patterns = [
+            r"[一-龥ぁ-んァ-ンA-Za-z0-9０-９]{2,}(?:規程|規定|規則|規約|要領|マニュアル|手順書|申請書|様式|書式)",
+            r"[一-龥ぁ-んァ-ンA-Za-z0-9０-９]{2,}(?:pdf|docx|xlsx|xlsm)",
+        ]
+        for pat in patterns:
+            for m in re.finditer(pat, q, flags=re.I):
+                kw = normalize_doc_text(m.group(0))
+                if kw and kw not in found:
+                    found.append(kw)
+        # 「情報システム管理規定」のような表記揺れは規程にも寄せる。
+        more: list[str] = []
+        for kw in found:
+            if kw.endswith("規定"):
+                more.append(kw[:-2] + "規程")
+            if kw.endswith("規程"):
+                more.append(kw[:-2] + "規定")
+        for kw in more:
+            if kw and kw not in found:
+                found.append(kw)
+        return found
+
+    def _document_keyword_match_score(user_q: str, hit: dict[str, Any]) -> float:
+        keywords = _extract_requested_document_keywords(user_q)
+        if not keywords:
+            return 0.0
+        source = _compact_for_match(str(hit.get("source_name", "") or ""))
+        loc = _compact_for_match(str(hit.get("location", "") or ""))
+        text_head = _compact_for_match(str(hit.get("text", "") or "")[:500])
+        score = 0.0
+        for kw in keywords:
+            ckw = _compact_for_match(kw)
+            if not ckw:
+                continue
+            # 質問で指定された文書名が資料名に入る場合は最重要。
+            if ckw in source:
+                score += 1.0
+            elif source and (source in ckw or ckw in source):
+                score += 0.7
+            elif ckw in loc:
+                score += 0.35
+            elif ckw in text_head:
+                score += 0.20
+        return score
+
+    def _extract_article_block_from_text(text: str, article_no: str) -> tuple[str, str]:
+        """本文から指定された条文ブロックだけを抜き出す。
+
+        RAGの意味スコアではなく、文書構造としての「第◯条」を直接探す。
+        目次の短い行は避け、本文らしい長さのブロックを優先する。
+        """
+        clean = normalize_doc_text(text)
+        if not clean or not article_no:
+            return "", ""
+        num_pat = re.escape(str(article_no))
+        # 第 13 条 / 第13条 / 13条 の表記揺れに対応
+        pat = re.compile(rf"(?ms)(^\s*第\s*{num_pat}\s*条[^\n]*\n?.*?)(?=^\s*第\s*[0-9０-９]+\s*条|\Z)")
+        candidates: list[str] = []
+        for m in pat.finditer(clean):
+            block = normalize_doc_text(m.group(1))
+            if block:
+                candidates.append(block)
+        if not candidates:
+            # 1行内に「第13条 保管場所 重要データ...」のように続く場合
+            pat2 = re.compile(rf"(?s)(第\s*{num_pat}\s*条[^\n]{{0,120}}(?:\n|.){{0,900}}?)(?=第\s*[0-9０-９]+\s*条|\Z)")
+            for m in pat2.finditer(clean):
+                block = normalize_doc_text(m.group(1))
+                if block:
+                    candidates.append(block)
+        if not candidates:
+            return "", ""
+        # 目次より本文を優先。本文は長めで句点や箇条書きを含みやすい。
+        def rank_block(b: str) -> tuple[int, int]:
+            is_toc = 1 if ("目次" in b[:120] or len(b) < 30) else 0
+            content_score = len(re.findall(r"[。．\n]|しなければならない|ものとする|次の", b))
+            return (-is_toc, content_score + min(len(b), 1200)//80)
+        best = sorted(candidates, key=rank_block, reverse=True)[0]
+        first = best.split("\n", 1)[0].strip()
+        return first, best
+
+    def _find_direct_article_hits(user_q: str, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """第◯条などの明確指定は、RAGスコアではなく条文構造で直接取得する。"""
+        article_no = _extract_article_number(user_q)
+        if not article_no:
+            return []
+        direct: list[dict[str, Any]] = []
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                continue
+            stype = str(chunk.get("source_type", "") or "").lower()
+            if stype in {"xlsx", "xlsm"}:
+                continue
+            location = str(chunk.get("location", "") or "")
+            text = str(chunk.get("text", "") or "")
+            heading, block = _extract_article_block_from_text("\n".join([location, text]), article_no)
+            if not block:
+                continue
+            new_hit = dict(chunk)
+            new_hit["location"] = heading or location or f"第{article_no}条"
+            new_hit["chunk_label"] = "article_direct"
+            new_hit["text"] = block
+            new_hit["score"] = 1.0 + _document_keyword_match_score(user_q, new_hit)
+            new_hit["direct_match"] = "article"
+            direct.append(new_hit)
+        if not direct:
+            return []
+        # 質問内に文書名がある場合は、その文書名に合う資料を最優先。
+        direct.sort(key=lambda h: (float(h.get("score", 0.0)), _document_keyword_match_score(user_q, h), len(str(h.get("text", "")))), reverse=True)
+        return direct[:5]
+
+    def _hit_contradiction_reason(user_q: str, hit: dict[str, Any]) -> str:
+        """質問と候補が明確に矛盾している場合に理由を返す。"""
+        q_article = _extract_article_number(user_q)
+        if q_article:
+            hay = normalize_doc_text("\n".join([
+                str(hit.get("location", "") or ""),
+                str(hit.get("chunk_label", "") or ""),
+                str(hit.get("text", "") or "")[:500],
+            ]))
+            h_article = _extract_article_number(hay)
+            if h_article and h_article != q_article:
+                return f"質問は第{q_article}条ですが、候補は第{h_article}条です。"
+            if not re.search(rf"第\s*{re.escape(q_article)}\s*条", hay):
+                return f"質問は第{q_article}条ですが、候補内に第{q_article}条が確認できません。"
+        intent = _detect_rag_intent(user_q)
+        stype = str(hit.get("source_type", "") or "").lower()
+        text = normalize_doc_text(str(hit.get("text", "") or ""))
+        if intent == "form":
+            hay_all = normalize_doc_text("\n".join([
+                str(hit.get("source_name", "") or ""),
+                str(hit.get("location", "") or ""),
+                str(hit.get("chunk_label", "") or ""),
+                str(hit.get("text", "") or ""),
+            ]))
+            if _is_customer_area_form_query(user_q) and _contains_customer_area_creation(user_q):
+                # 「顧客の領域作成」の質問に、単なる「顧客指定システム利用」だけで答えない。
+                if ("顧客指定システム利用申請" in hay_all
+                    and not _contains_customer_area_creation(hay_all)
+                    and not any(t in hay_all for t in ("システム作業申請書", "書式3", "責任者承認"))):
+                    return "質問は顧客の領域作成ですが、候補は顧客指定システム利用申請のみで、領域作成または使用する申請書名が確認できません。"
+            if stype in {"xlsx", "xlsm"}:
+                # 申請書探しなのに判定だけの候補は回答にしない。
+                if not any(t in text for t in ("申請書", "書式", "様式", "フォーム", "システム作業申請書", ".xlsx", ".docx", ".pdf")):
+                    return "申請書・書式を尋ねていますが、候補内に申請書名や書式名が確認できません。"
+        if intent in {"explain", "rule", "role"} and stype in {"xlsx", "xlsm"}:
+            if re.search(r"判定結果\s*[:：]\s*[○〇×\-－ー]", text) and len(text) < 250:
+                return "説明・規程内容を尋ねていますが、候補はExcelの判定行だけです。"
+        return ""
+
+    def _filter_contradictory_hits(user_q: str, hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not hits:
+            return []
+        good: list[dict[str, Any]] = []
+        for h in hits:
+            reason = _hit_contradiction_reason(user_q, h)
+            if reason:
+                h = dict(h)
+                h["contradiction_reason"] = reason
+                continue
+            good.append(h)
+        return good
+
+    def _safe_no_confident_answer(user_q: str, hits: list[dict[str, Any]], reason: str = "") -> str:
+        """怪しい候補で無理に回答せず、候補表示に留める安全回答。"""
+        lines = [
+            "社内資料内に関連しそうな候補は見つかりましたが、質問内容と根拠が完全には一致しないため、断定回答は控えます。",
+        ]
+        if reason:
+            lines.extend(["", f"理由: {reason}"])
+        if hits:
+            lines.extend(["", "【参考候補】"])
+            for h in hits[:3]:
+                title = normalize_doc_text(str(h.get("location", "") or h.get("chunk_label", "") or ""))
+                src = normalize_doc_text(str(h.get("source_name", "") or ""))
+                excerpt = normalize_doc_text(str(h.get("text", "") or ""))[:140]
+                lines.append(f"- {src} / {title}")
+                if excerpt:
+                    lines.append(f"  {excerpt}…")
+        lines.extend(["", "資料名・条番号・申請書名などをもう少し具体的に入力するか、管理者に資料内容の確認を依頼してください。"])
+        return "\n".join(lines).strip()
+
     def _expand_document_rag_query(query: str) -> str:
         """自然文の言い換えを社内資料・申請書名に寄せる。
 
@@ -644,9 +839,101 @@ def create_document_rag_runtime(
             )
         if any(t in q for t in ("申請書", "書式", "様式", "フォーム", "テンプレート", "どれですか", "どの申請書")):
             additions.append("申請書 書式 様式 フォーム テンプレート ファイル名 資料名")
+        # 条番号・役割質問は、意味検索ではなく文書構造を強く使う。
+        m_article = re.search(r"第\s*([0-9０-９]+)\s*条", q)
+        if m_article:
+            additions.append(f"第{m_article.group(1)}条 条文 見出し 本文")
+        if any(t in q for t in ("どのようなこと", "何を行", "なにを行", "役割", "職務", "責務", "権限", "任務")):
+            additions.append("役割 職務 責務 任務 権限 補佐 参画 遂行 責任")
         if not additions:
             return q
         return normalize_doc_text(q + " " + " ".join(additions))
+
+    def _contains_customer_area_creation(text: str) -> bool:
+        """顧客の領域/環境作成そのものを指す語があるかを見る。"""
+        t = normalize_doc_text(text).lower()
+        c = re.sub(r"[\s\u3000、。,.!！?？…・･~〜ー\-＿_（）()「」『』【】\[\]\\/]+", "", t)
+        return any(x in c for x in (
+            "顧客領域作成", "顧客の領域作成", "顧客環境作成", "顧客の環境作成",
+            "顧客用領域", "顧客用環境", "領域作成", "環境作成",
+        ))
+
+    def _hit_text_for_exact_match(hit: dict[str, Any]) -> str:
+        return normalize_doc_text("\n".join([
+            str(hit.get("source_name", "") or ""),
+            str(hit.get("location", "") or ""),
+            str(hit.get("chunk_label", "") or ""),
+            str(hit.get("text", "") or ""),
+        ]))
+
+    def _extract_exact_form_file_terms(user_q: str) -> list[str]:
+        """書式名・申請書名・ファイル名らしい語を質問から抽出する。"""
+        q = normalize_doc_text(user_q)
+        terms: list[str] = []
+        def add(term: str) -> None:
+            term = normalize_doc_text(term).strip(" 　。．、,，:：;；「」『』【】[]()（）")
+            if len(term) >= 2 and term not in terms:
+                terms.append(term)
+        for pat in (
+            r"[A-Za-z0-9０-９_\-一-龥ぁ-んァ-ン ]{2,}\.(?:xlsx|xlsm|xls|docx|doc|pdf)",
+            r"[A-Za-z0-9０-９_\-一-龥ぁ-んァ-ン ]{2,}(?:申請書|書式|様式|フォーム|テンプレート)",
+            r"書式\s*[0-9０-９A-Za-z_-]+",
+        ):
+            for m in re.finditer(pat, q, flags=re.I):
+                add(m.group(0))
+        # 自然文の重要語。完全一致ではなく、後段の直接候補抽出用。
+        if _is_customer_area_form_query(q):
+            if _contains_customer_area_creation(q):
+                add("領域作成")
+                add("環境作成")
+            add("システム作業申請書")
+            add("書式3")
+        return terms[:8]
+
+    def _find_direct_form_or_file_hits(query: str, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """書式名・ファイル名・明確な申請語はRAGスコアより先に直接一致で拾う。"""
+        terms = _extract_exact_form_file_terms(query)
+        if not terms:
+            return []
+        q_customer_area = _is_customer_area_form_query(query)
+        q_area_creation = _contains_customer_area_creation(query)
+        direct: list[dict[str, Any]] = []
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                continue
+            hay = _hit_text_for_exact_match(chunk)
+            hay_compact = _compact_for_match(hay)
+            score = 0.0
+            matched: list[str] = []
+            for term in terms:
+                cterm = _compact_for_match(term)
+                if not cterm:
+                    continue
+                if cterm in hay_compact:
+                    matched.append(term)
+                    # ファイル名/書式名/申請書名の一致は強く見る。
+                    if "." in term or "申請書" in term or "書式" in term or "様式" in term:
+                        score += 1.2
+                    else:
+                        score += 0.7
+            if q_customer_area:
+                # 「顧客の領域作成」を尋ねている時は、単なる「顧客指定システム利用申請」だけでは確定にしない。
+                # 領域/環境/作成 または実際の作業申請書・書式3がある候補を優先する。
+                if any(x in hay for x in ("システム作業申請書", "書式3", "責任者承認")):
+                    score += 1.0
+                if _contains_customer_area_creation(hay):
+                    score += 1.0
+                if q_area_creation and "顧客指定システム利用申請" in hay and not (_contains_customer_area_creation(hay) or "システム作業申請書" in hay or "書式3" in hay):
+                    score -= 1.3
+            if score <= 0:
+                continue
+            h = dict(chunk)
+            h["score"] = max(float(h.get("score", 0.0) or 0.0), min(score, 3.0))
+            h["direct_match"] = "form_or_file"
+            h["matched_terms"] = matched
+            direct.append(h)
+        direct.sort(key=lambda h: (float(h.get("score", 0.0)), len(str(h.get("text", "") or ""))), reverse=True)
+        return direct[:8]
 
     def search_document_rag(query: str, top_k: int = 5) -> list[dict[str, Any]]:
         query = normalize_doc_text(query)
@@ -658,6 +945,11 @@ def create_document_rag_runtime(
         chunks = load_document_chunks()
         if not chunks:
             return []
+
+        # 第◯条のように明確な構造指定がある質問は、意味検索スコアで順位を決めず、
+        # 条文インデックスとして直接探す。これにより「第13条」なのに「第6条」を返す事故を止める。
+        direct_article_hits = _find_direct_article_hits(query, chunks)
+        direct_form_file_hits = _find_direct_form_or_file_hits(query, chunks)
         search_query = _expand_document_rag_query(query)
         # Excelは行単位の明示語一致が重要なため、TF-IDF結果を優先する。
         # PDF/Word等はsentence-transformersが使える場合のみ意味検索を優先する。
@@ -672,7 +964,7 @@ def create_document_rag_runtime(
 
         merged: list[dict[str, Any]] = []
         seen: set[tuple[str, str, str]] = set()
-        for hit in list(tfidf_hits or []) + list(embedding_hits or []):
+        for hit in list(direct_article_hits or []) + list(direct_form_file_hits or []) + list(tfidf_hits or []) + list(embedding_hits or []):
             key = (
                 str(hit.get("source_name", "") or ""),
                 str(hit.get("location", "") or ""),
@@ -682,7 +974,100 @@ def create_document_rag_runtime(
                 continue
             seen.add(key)
             merged.append(hit)
-        return merged[:fetch_k] or tfidf_hits or embedding_hits
+        # 明確指定の直接ヒットは必ず先頭に残す。以降の回答側で矛盾チェックも行う。
+        # 回答前の矛盾チェックで、明確に質問語と合わない候補は落とす。
+        merged = _filter_contradictory_hits(query, merged) or merged
+        return merged[:fetch_k] or direct_article_hits or direct_form_file_hits or tfidf_hits or embedding_hits
+
+
+    def _to_half_digits(text: str) -> str:
+        return unicodedata.normalize("NFKC", str(text or ""))
+
+    def _extract_article_number(text: str) -> str:
+        m = re.search(r"(?:第\s*)?([0-9０-９]+)\s*条", normalize_doc_text(text))
+        return _to_half_digits(m.group(1)) if m else ""
+
+    def _canonical_article_no(text: str) -> str:
+        n = _extract_article_number(text)
+        return n
+
+    def _first_line(text: str) -> str:
+        clean = normalize_doc_text(text)
+        return clean.split("\n", 1)[0].strip() if clean else ""
+
+    def _looks_like_article_hit(hit: dict[str, Any]) -> bool:
+        hay = normalize_doc_text(" ".join([
+            str(hit.get("location", "") or ""),
+            str(hit.get("chunk_label", "") or ""),
+            str(hit.get("text", "") or "")[:200],
+        ]))
+        return bool(re.search(r"第\s*[0-9０-９]+\s*条", hay))
+
+    def _strip_article_heading(line: str) -> str:
+        return normalize_doc_text(re.sub(r"^第\s*[0-9０-９]+\s*条\s*", "", normalize_doc_text(line))).strip()
+
+    def _extract_query_subject(user_q: str) -> str:
+        """質問の主語らしい語を抽出する。固定辞書ではなく、助詞・質問語で切る。"""
+        q = normalize_doc_text(user_q)
+        if not q:
+            return ""
+        # 条番号指定の場合は主語より条番号を優先するため、ここでは文書名を除く。
+        q2 = re.sub(r".*?第\s*[0-9０-９]+\s*条", "", q)
+        q2 = re.sub(r"(について|とは|はどのようなことを行いますか|はどのようなことを行う|は何を行いますか|はなにを行いますか|は何を行う|はなにを行う|の役割|の職務|の責務|の権限|を教えてください|を教えて|ですか|ますか|ください|下さい|何ですか|なにですか)", " ", q2)
+        q2 = re.sub(r"(情報システム管理規程|組織規程|規程|規定|社内資料|資料)", " ", q2)
+        tokens = re.findall(r"[0-9A-Za-z一-龥ぁ-んァ-ン]{2,}", q2)
+        stop = {"どのよう", "どんな", "こと", "行い", "行う", "行います", "内容", "場合", "対応", "方法", "ルール", "管理"}
+        tokens = [t for t in tokens if t not in stop]
+        if not tokens:
+            return ""
+        # 役職・条文見出しでは短めの名詞が主語になりやすい。
+        return max(tokens, key=len)[:40]
+
+    def _source_matches_query_document(user_q: str, hit: dict[str, Any]) -> float:
+        q = normalize_doc_text(user_q)
+        src = normalize_doc_text(str(hit.get("source_name", "") or ""))
+        if not q or not src:
+            return 0.0
+        score = 0.0
+        # 「情報システム管理規程第13条」のように文書名が入っている場合は、その資料を強く優先する。
+        for key in re.findall(r"[一-龥ぁ-んァ-ンA-Za-z0-9]{2,}規程", q):
+            if key and key in src:
+                score += 0.45
+        for key in re.findall(r"[一-龥ぁ-んァ-ンA-Za-z0-9]{2,}規則", q):
+            if key and key in src:
+                score += 0.35
+        if "情報システム管理" in q and "情報システム管理" in src:
+            score += 0.45
+        if "組織" in q and "組織" in src:
+            score += 0.35
+        return score
+
+    def _article_or_subject_structural_score(user_q: str, hit: dict[str, Any]) -> float:
+        """条番号・見出し一致を強く評価し、本文中の偶然一致を弱くする。"""
+        location = normalize_doc_text(str(hit.get("location", "") or ""))
+        text = normalize_doc_text(str(hit.get("text", "") or ""))
+        first = _first_line(text) or location
+        score = 0.0
+        q_article = _extract_article_number(user_q)
+        h_article = _extract_article_number(location) or _extract_article_number(first)
+        if q_article:
+            if h_article == q_article:
+                score += 1.20
+            elif h_article:
+                score -= 0.50
+        subject = _extract_query_subject(user_q)
+        if subject:
+            title = normalize_doc_text(location + " " + first)
+            title_no_article = _strip_article_heading(title)
+            # 見出し名そのものが主語に一致する場合だけ強く上げる。
+            if title_no_article == subject or re.fullmatch(rf".*第\s*[0-9０-９]+\s*条\s*{re.escape(subject)}(?:\s|$).*", title):
+                score += 0.75
+            elif subject in title:
+                score += 0.35
+            elif subject in text[:260]:
+                score += 0.12
+        score += _source_matches_query_document(user_q, hit)
+        return score
 
     def _detect_rag_intent(user_q: str) -> str:
         """質問の意図をざっくり分類する。
@@ -695,6 +1080,10 @@ def create_document_rag_runtime(
         q = normalize_doc_text(user_q)
         if _is_customer_area_form_query(q) or any(t in q for t in ("どの申請書", "申請書はどれ", "申請書はどの", "どの書式", "書式はどれ", "様式はどれ", "様式", "テンプレート", "フォーマット", "書式", "用紙")):
             return "form"
+        if _extract_article_number(q):
+            return "article"
+        if any(t in q for t in ("どのようなこと", "何を行", "なにを行", "役割", "職務", "責務", "権限", "任務")):
+            return "role"
         if any(t in q for t in ("とは", "意味", "概要", "説明", "教えて", "について", "どんなもの", "何ですか", "なにですか")):
             return "explain"
         if any(t in q for t in ("手順", "方法", "やり方", "申請", "提出", "登録", "入力", "記入", "どうすれば", "どうやって")):
@@ -746,6 +1135,15 @@ def create_document_rag_runtime(
         source_type = str(hit.get("source_type", "") or "").lower()
         base = float(hit.get("score", 0.0) or 0.0)
         score = base
+        score += _article_or_subject_structural_score(user_q, hit)
+
+        if intent in {"article", "role"}:
+            if _looks_like_article_hit(hit):
+                score += 0.25
+            if source_type in {"pdf", "docx", "doc", "txt", "md"}:
+                score += 0.12
+            if source_type in {"xlsx", "xlsm"}:
+                score -= 0.30
 
         if intent == "explain":
             if _looks_like_definition_text(text) or _looks_like_definition_text(location):
@@ -788,10 +1186,20 @@ def create_document_rag_runtime(
             if any(p in form_zone for p in ("様式", "テンプレート", "書式", "フォーム", "申請書", "届", "作業申請書")):
                 score += 0.22
             if _is_customer_area_form_query(user_q):
-                if any(p in form_zone for p in ("顧客指定システム", "顧客システム", "顧客領域", "顧客環境", "領域作成", "環境作成")):
-                    score += 0.38
-                if any(p in form_zone for p in ("システム作業申請書", "書式3", "責任者承認")):
-                    score += 0.34
+                if _contains_customer_area_creation(user_q):
+                    # 領域/環境作成の質問では、実際の作成語または作業申請書・書式3を強く優先。
+                    if _contains_customer_area_creation(form_zone):
+                        score += 0.55
+                    if any(p in form_zone for p in ("システム作業申請書", "書式3", "責任者承認")):
+                        score += 0.55
+                    # 単なる「顧客指定システム利用申請」だけの候補は、領域作成の答えとしては弱める。
+                    if "顧客指定システム利用申請" in form_zone and not (_contains_customer_area_creation(form_zone) or any(p in form_zone for p in ("システム作業申請書", "書式3", "責任者承認"))):
+                        score -= 0.45
+                else:
+                    if any(p in form_zone for p in ("顧客指定システム", "顧客システム", "顧客領域", "顧客環境", "領域作成", "環境作成")):
+                        score += 0.38
+                    if any(p in form_zone for p in ("システム作業申請書", "書式3", "責任者承認")):
+                        score += 0.34
                 # Microsoft 365等の一般FAQ/一般資料へ流れないように弱める。
                 if any(p in form_zone.lower() for p in ("microsoft", "office 365", "teams", "outlook")) and not any(p in form_zone for p in ("顧客指定システム", "システム作業申請書")):
                     score -= 0.35
@@ -819,9 +1227,16 @@ def create_document_rag_runtime(
         ranked_hits = _rerank_hits_by_intent(user_q, hits) if user_q else hits
         intent = _detect_rag_intent(user_q) if user_q else "general"
 
+        # 最終回答に使う前に、質問と明確に矛盾する候補を捨てる。
+        # RAGスコアは「候補集め」にだけ使い、回答決定権は持たせない。
+        filtered_hits = _filter_contradictory_hits(user_q, ranked_hits) if user_q else ranked_hits
+        if not filtered_hits:
+            return []
+        ranked_hits = filtered_hits
+
         # 説明要求・規程確認では、Excelチェックシートの○/×行だけでなく、
         # Word/PDFの条文・本文を候補に残す。
-        if intent in {"explain", "rule", "procedure"}:
+        if intent in {"article", "role", "explain", "rule", "procedure"}:
             non_excel = [h for h in ranked_hits if str(h.get("source_type", "") or "").lower() not in {"xlsx", "xlsm"}]
             if non_excel:
                 return non_excel[:4]
@@ -1172,8 +1587,118 @@ def create_document_rag_runtime(
 
     def _clean_policy_line(line: str) -> str:
         line = normalize_doc_text(line)
-        line = re.sub(r"^(?:[0-9０-９]+[.．、)]?|[①-⑳]|\([0-9０-９]+\))\s*", "", line).strip()
+        # PDF抽出では日本語の文字間に空白が入ることがあるため、表示前に詰める。
+        line = re.sub(r"(?<=[一-龥ぁ-んァ-ン、。，．])\s+(?=[一-龥ぁ-んァ-ン、。，．])", "", line)
+        # 箇条書き番号だけを除去する。ただし「7桁」のように数値自体が意味を持つ場合は残す。
+        line = re.sub(r"^(?:[0-9０-９]+[.．、)]|[①-⑳]|\([0-9０-９]+\))\s*", "", line).strip()
         return line
+
+
+    def _clean_article_body_lines(text: str) -> tuple[str, list[str]]:
+        clean = normalize_doc_text(text)
+        lines = [ln.strip() for ln in clean.split("\n") if normalize_doc_text(ln)]
+        if not lines:
+            return "", []
+        heading = ""
+        body: list[str] = []
+        for i, ln in enumerate(lines):
+            if not heading and re.match(r"^第\s*[0-9０-９]+\s*条", ln):
+                heading = ln
+                body = lines[i + 1:]
+                break
+        if not heading:
+            heading = lines[0]
+            body = lines[1:]
+        cleaned: list[str] = []
+        for ln in body:
+            c = normalize_doc_text(ln)
+            if not c:
+                continue
+            # ヘッダー・フッター・ページ番号・目次断片を除外
+            if re.fullmatch(r"[0-9０-９]+/[0-9０-９]+|[0-9０-９]+", c):
+                continue
+            if re.search(r"^(情報|[0-9０-９]{2}-[0-9０-９]{2}-[0-9０-９]{2})", c) and len(c) < 40:
+                continue
+            if c in {"第1版", "改訂", "主管", "部門"}:
+                continue
+            cleaned.append(_clean_policy_line(c))
+        # 条文回答では、次条以降は混ぜない。
+        final: list[str] = []
+        for c in cleaned:
+            if re.match(r"^第\s*[0-9０-９]+\s*条", c):
+                break
+            if c:
+                final.append(c)
+
+        # PDF抽出で1文が改行分断される場合があるため、文末記号が無い行は次行と結合する。
+        merged: list[str] = []
+        for c in final:
+            if not merged:
+                merged.append(c)
+                continue
+            prev = merged[-1]
+            prev_ends = bool(re.search(r"[。.!！?？)]$", prev))
+            current_starts_item = bool(re.match(r"^(?:[0-9０-９]+[.．、)]|[①-⑳]|\([0-9０-９]+\)|・|-)", c))
+            if (not prev_ends) and (not current_starts_item):
+                merged[-1] = normalize_doc_text(prev + c)
+            else:
+                merged.append(c)
+
+        unique: list[str] = []
+        for c in merged:
+            if c and c not in unique:
+                unique.append(c)
+        return heading, unique
+
+    def _try_format_structured_article_answer(user_q: str, hits: list[dict[str, Any]]) -> str:
+        """第◯条・役割・規程説明は、最上位条文の本文だけで矛盾なく回答する。"""
+        if not hits:
+            return ""
+        intent = _detect_rag_intent(user_q)
+        if intent not in {"article", "role", "explain", "rule"}:
+            return ""
+        ranked = _rerank_hits_by_intent(user_q, hits)
+        # 条番号指定がある場合は、該当条番号以外を回答にしない。
+        q_article = _extract_article_number(user_q)
+        candidates: list[dict[str, Any]] = []
+        for h in ranked:
+            stype = str(h.get("source_type", "") or "").lower()
+            if stype in {"xlsx", "xlsm"}:
+                continue
+            if not _looks_like_article_hit(h):
+                continue
+            if q_article:
+                h_article = _extract_article_number(str(h.get("location", "") or "")) or _extract_article_number(str(h.get("text", "") or ""))
+                if h_article != q_article:
+                    continue
+            candidates.append(h)
+        if not candidates:
+            return ""
+        top = candidates[0]
+        heading, body_lines = _clean_article_body_lines(str(top.get("text", "") or ""))
+        if not heading or not body_lines:
+            return ""
+
+        # 役割質問では、短すぎる断片ではなく条文本文を要約風にそのまま出す。
+        intro = "社内資料の該当箇所は以下です。"
+        if intent == "article":
+            intro = f"{heading}の内容は以下です。"
+        elif intent == "role":
+            subj = _extract_query_subject(user_q)
+            intro = f"{subj}の役割・職務は以下のとおりです。" if subj else "役割・職務は以下のとおりです。"
+        elif intent in {"explain", "rule"}:
+            intro = "社内資料に、以下の内容が記載されています。"
+
+        # 条文本文は、番号付き/箇条書きを維持しつつ、長すぎる場合だけ抑える。
+        selected = body_lines[:10]
+        bullet_lines = []
+        for ln in selected:
+            if re.match(r"^(?:[0-9０-９]+[.．、)]|[①-⑳]|\([0-9０-９]+\))", ln):
+                bullet_lines.append(ln)
+            else:
+                bullet_lines.append(f"- {ln}")
+        refs = f"- {top.get('source_name', '')} / {top.get('location', '')}".strip()
+        return "\n".join([intro, "", "【回答】", *bullet_lines, "", "【該当箇所】", heading, "", "参照資料:", refs]).strip()
 
     def _try_format_policy_rule_answer(user_q: str, hits: list[dict[str, Any]]) -> str:
         """規程・手順書の『ルール/基準/要件』質問は、LLM任せにせず根拠行を抽出する。
@@ -1185,7 +1710,7 @@ def create_document_rag_runtime(
         if not hits:
             return ""
         intent = _detect_rag_intent(user_q)
-        if intent not in {"rule", "explain", "yes_no"}:
+        if intent not in {"article", "role", "rule", "explain", "yes_no"}:
             return ""
         q = normalize_doc_text(user_q)
         q_tokens = _query_content_tokens(q)
@@ -1366,9 +1891,12 @@ def create_document_rag_runtime(
             names = _extract_form_names_from_text(combined_refs)
         is_customer_area = _is_customer_area_form_query(user_q)
 
-        # 顧客領域/顧客環境の作成は、資料上の表現が「顧客指定システム利用申請」に寄りやすい。
+        # 顧客領域/顧客環境の作成では、「顧客指定システム利用申請」とだけ出すと
+        # ユーザーの質問（どの申請書/どこ）に対して不正確に見えるため、
+        # 実際の作業申請書・書式名を優先し、単なる利用申請名は補助扱いにする。
         likely_application = ""
-        if is_customer_area:
+        area_creation_query = is_customer_area and _contains_customer_area_creation(user_q)
+        if is_customer_area and not area_creation_query:
             if "顧客指定システム利用申請" in combined:
                 likely_application = "顧客指定システム利用申請"
             elif "顧客指定システム利用" in combined or "顧客指定システム" in combined:
@@ -1383,10 +1911,9 @@ def create_document_rag_runtime(
         if not preferred_file and real_names:
             preferred_file = real_names[0]
 
-        # 顧客領域/顧客環境作成は「顧客指定システム利用申請」＋
-        # 「システム作業申請書」へ寄せる。参照資料名しか拾えない場合でも、
-        # 「説明.xlsx」を使用申請書として出さず、実際に使う書式名を回答する。
-        if is_customer_area and not preferred_file and likely_application:
+        # 顧客領域/顧客環境作成は、実際に使う書式名が本文・参照にある場合のみ回答する。
+        # 見つからない場合に「顧客指定システム利用申請」と断定しない。
+        if is_customer_area and not preferred_file and ("書式3" in combined or "システム作業申請書" in combined or "責任者承認" in combined):
             if "書式3" in combined or "3_" in combined:
                 preferred_file = "書式3_システム作業申請書_責任者承認まで.xlsx"
             else:
@@ -1396,22 +1923,16 @@ def create_document_rag_runtime(
             return ""
 
         lines = ["社内資料から該当する申請書・書式が見つかりました。", "", "【回答】"]
-        if likely_application:
-            
-            # 申請書名まで特定できている場合は、ユーザー向けには弱い表現にせず
-            # 「該当します」と明確に回答する。
-            # ただし、申請書名が取れていない場合だけ安全側で「可能性が高い」を使う。
-            if preferred_file:
-                lines.append(f"顧客の領域作成は「{likely_application}」に該当します。")
-            else:
-                lines.append(f"顧客の領域作成は、資料上では「{likely_application}」に該当する可能性が高いです。")
         if preferred_file:
             lines.append(f"使用する申請書は「{preferred_file}」です。")
+        elif likely_application:
+            # 書式名が取れない場合のみ、申請区分として案内する。
+            lines.append(f"資料上では「{likely_application}」に関連する可能性がありますが、使用する申請書名まではこの候補だけでは断定できません。")
         elif real_names:
             lines.append("関連する申請書・書式候補は以下です。")
             lines.extend(f"- {n}" for n in real_names)
         if is_customer_area:
-            lines.extend(["", "【補足】", "「顧客領域作成」「顧客環境作成」「顧客指定システム利用」「顧客システム利用」は、同じ申請に寄せて検索しています。"])
+            lines.extend(["", "【補足】", "顧客領域作成/顧客環境作成の質問では、単なる『顧客指定システム利用』だけで断定せず、領域作成または使用書式名が根拠にある候補を優先しています。"])
         refs = "\n".join(
             f"- {h.get('source_name', '')} / {h.get('location', '')}".strip()
             for h in answer_hits[:3]
@@ -1449,6 +1970,14 @@ def create_document_rag_runtime(
 
     def answer_with_document_rag(user_q: str, hits: list[dict[str, Any]]) -> str:
         answer_hits = _select_hits_for_answer(hits, user_q)
+        if not answer_hits:
+            # 候補はあっても第◯条違い等で矛盾する場合は、無理に回答しない。
+            first_reason = ""
+            for h in hits or []:
+                first_reason = _hit_contradiction_reason(user_q, h)
+                if first_reason:
+                    break
+            return _safe_no_confident_answer(user_q, hits or [], first_reason)
         top = answer_hits[0] if answer_hits else {}
         top_type = str(top.get("source_type", "") or "").lower()
 
@@ -1461,6 +1990,11 @@ def create_document_rag_runtime(
             form_answer = _try_format_application_form_answer(user_q, hits or answer_hits)
             if form_answer:
                 return form_answer
+
+        # 第◯条指定・役割/責務/規程説明では、条文単位の根拠だけで回答する。
+        structured_article_answer = _try_format_structured_article_answer(user_q, answer_hits)
+        if structured_article_answer:
+            return structured_article_answer
 
         # 規程・マニュアルの説明要求では、Excelの○/×判定よりも
         # Word/PDF本文から条文・箇条書きを抽出した回答を優先する。
