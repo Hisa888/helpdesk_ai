@@ -1,0 +1,2 @@
+timestamp,question,matched,best_score,category
+2026-05-30T12:43:00,情報システム管理規定の１３条は何ですか？,1,0.9156032834234815,doc_rag:xlsx
