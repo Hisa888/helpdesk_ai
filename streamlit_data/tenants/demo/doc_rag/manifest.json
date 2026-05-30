@@ -1,16 +1,8 @@
 {
   "enabled": true,
-  "doc_count": 2,
-  "chunk_count": 293,
+  "doc_count": 1,
+  "chunk_count": 22,
   "files": [
-    {
-      "name": "TEST.xlsx",
-      "type": "xlsx",
-      "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\TEST.xlsx",
-      "uploaded_at": "2026-05-25T23:50:41",
-      "uploaded_by": "demo/demo",
-      "chunk_count": 271
-    },
     {
       "name": "情報システム管理規程案.docx",
       "type": "docx",
@@ -21,7 +13,7 @@
     }
   ],
   "wiki_enabled": false,
-  "updated_at": "2026-05-30T12:26:33",
+  "updated_at": "2026-05-30T12:29:34",
   "wiki_uploaded_at": "",
   "wiki_uploaded_by": "",
   "last_import": {
@@ -36,10 +28,10 @@
     "new_chunk_count": 572
   },
   "last_deleted": {
-    "name": "書式別システム作業申請書の説明.xlsx",
+    "name": "TEST.xlsx",
     "type": "xlsx",
     "deleted_by": "demo/demo",
-    "deleted_at": "2026-05-30T12:26:33",
-    "removed_chunks": 279
+    "deleted_at": "2026-05-30T12:29:34",
+    "removed_chunks": 271
   }
 }
