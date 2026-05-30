@@ -1,19 +1,10 @@
 {
-  "enabled": true,
-  "doc_count": 1,
-  "chunk_count": 22,
-  "files": [
-    {
-      "name": "情報システム管理規程案.docx",
-      "type": "docx",
-      "path": "runtime_data\\tenants\\demo\\doc_rag\\source_files\\情報システム管理規程案.docx",
-      "uploaded_at": "2026-05-25T23:50:41",
-      "uploaded_by": "demo/demo",
-      "chunk_count": 22
-    }
-  ],
+  "enabled": false,
+  "doc_count": 0,
+  "chunk_count": 0,
+  "files": [],
   "wiki_enabled": false,
-  "updated_at": "2026-05-30T12:29:34",
+  "updated_at": "2026-05-30T12:30:05",
   "wiki_uploaded_at": "",
   "wiki_uploaded_by": "",
   "last_import": {
@@ -28,10 +19,10 @@
     "new_chunk_count": 572
   },
   "last_deleted": {
-    "name": "TEST.xlsx",
-    "type": "xlsx",
+    "name": "情報システム管理規程案.docx",
+    "type": "docx",
     "deleted_by": "demo/demo",
-    "deleted_at": "2026-05-30T12:29:34",
-    "removed_chunks": 271
+    "deleted_at": "2026-05-30T12:30:05",
+    "removed_chunks": 22
   }
 }
